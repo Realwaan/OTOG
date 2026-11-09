@@ -1,5 +1,5 @@
 # One Team One Goal - Capstone
-E-Wallet System
+#E-Wallet System
 [
 An E-wallet system that....
 
@@ -14,9 +14,9 @@ Yes...
 
 In compliance with the Subject CSIT227 - Object Oriented Programming
 
-Members:
-Andrei Regulacion
-Kyle Nino Duran
-Matthew Dela Cruz
-Al Francin Egtic 
+Members:\
+Marc Andrei Regulacion\
+Kyle Nino Duran\
+Matthew Dela Cruz\
+Al Francin Egtic \
 Jeremy Navarro
