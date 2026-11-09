@@ -11,7 +11,6 @@ public class UserLogin extends JFrame {
     private JButton btnVerify2FA;
 
     public UserLogin() {
-        // Ensure initial state: login panel visible, 2FA panel hidden
         pnlPassword.setVisible(true);
         pnl2FA.setVisible(false);
 
@@ -20,15 +19,12 @@ public class UserLogin extends JFrame {
             String password = new String(passwordFieldPasswordInput.getPassword());
 
             if (username.equals("admin") && password.equals("password")) {
-                // Hide the login panel and show the 2FA panel
                 pnlPassword.setVisible(false);
                 pnl2FA.setVisible(true);
 
-                // Refresh the main panel layout
                 pnlMain.revalidate();
                 pnlMain.repaint();
             } else {
-                // Show error popup for wrong credentials
                 JOptionPane.showMessageDialog(
                         pnlMain,
                         "Wrong credentials! Please try again.",
@@ -39,7 +35,6 @@ public class UserLogin extends JFrame {
             }
         });
 
-        // Optional: Action listener for the 2FA Verify button
         if (btnVerify2FA != null) {
             btnVerify2FA.addActionListener(e -> {
                 String code = textField2FA.getText().trim();
