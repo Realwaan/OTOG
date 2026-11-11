@@ -1,0 +1,3 @@
+@echo off
+echo Launching OTOG E-Wallet User Login...
+java -cp "out/production/OTOG;lib/*" UserLogin

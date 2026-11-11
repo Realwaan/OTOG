@@ -1,0 +1,3 @@
+@echo off
+echo Running OTOG test suite...
+java -jar lib/junit-platform-console-standalone-1.10.2.jar execute -cp "out/production/OTOG;lib/sqlite-jdbc-3.47.0.0.jar;lib/forms_rt.jar" --scan-classpath

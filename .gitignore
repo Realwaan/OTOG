@@ -1,0 +1,17 @@
+# Build output
+out/
+bin/
+*.class
+
+# SQLite test & local databases
+data/
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+
+# IDE & OS files
+.idea/workspace.xml
+.idea/shelf/
+.DS_Store
+Thumbs.db
