@@ -18,7 +18,7 @@ import java.util.concurrent.locks.ReentrantLock;
  * Service orchestrating wallet domain logic, transaction correctness, atomic commits,
  * and concurrency protection against double-spending.
  */
-public class WalletService {
+public class WalletService implements WalletOperations {
     private final DatabaseManager databaseManager;
     private final UserRepository userRepository;
     private final WalletRepository walletRepository;
