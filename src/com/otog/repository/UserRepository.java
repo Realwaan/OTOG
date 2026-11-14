@@ -12,9 +12,6 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
 
-/**
- * Repository for managing persistent User records in SQLite.
- */
 public class UserRepository {
     private final DatabaseManager databaseManager;
 
@@ -105,6 +102,91 @@ public class UserRepository {
                 "FROM users WHERE mobile_number = ?";
         try (PreparedStatement ps = conn.prepareStatement(sql)) {
             ps.setString(1, mobileNumber);
+            try (ResultSet rs = ps.executeQuery()) {
+                if (rs.next()) {
+                    return Optional.of(mapRow(rs));
+                }
+            }
+        }
+        return Optional.empty();
+    }
+
+    public Optional<User> findByEmail(String email) {
+        try (Connection conn = databaseManager.getConnection()) {
+            return findByEmail(email, conn);
+        } catch (SQLException e) {
+            throw new OtogException("Failed to query user by email: " + e.getMessage(), e);
+        }
+    }
+
+    public Optional<User> findByEmail(String email, Connection conn) throws SQLException {
+        if (email == null || email.trim().isEmpty()) {
+            return Optional.empty();
+        }
+        String sql = "SELECT user_id, name, mobile_number, email, role, status, created_at, updated_at " +
+                "FROM users WHERE LOWER(email) = LOWER(?)";
+        try (PreparedStatement ps = conn.prepareStatement(sql)) {
+            ps.setString(1, email.trim());
+            try (ResultSet rs = ps.executeQuery()) {
+                if (rs.next()) {
+                    return Optional.of(mapRow(rs));
+                }
+            }
+        }
+        return Optional.empty();
+    }
+
+    public Optional<User> findByName(String name) {
+        try (Connection conn = databaseManager.getConnection()) {
+            return findByName(name, conn);
+        } catch (SQLException e) {
+            throw new OtogException("Failed to query user by name: " + e.getMessage(), e);
+        }
+    }
+
+    public Optional<User> findByName(String name, Connection conn) throws SQLException {
+        if (name == null || name.trim().isEmpty()) {
+            return Optional.empty();
+        }
+        String sql = "SELECT user_id, name, mobile_number, email, role, status, created_at, updated_at " +
+                "FROM users WHERE LOWER(name) = LOWER(?)";
+        try (PreparedStatement ps = conn.prepareStatement(sql)) {
+            ps.setString(1, name.trim());
+            try (ResultSet rs = ps.executeQuery()) {
+                if (rs.next()) {
+                    return Optional.of(mapRow(rs));
+                }
+            }
+        }
+        return Optional.empty();
+    }
+
+    public Optional<User> findByIdentifier(String identifier) {
+        try (Connection conn = databaseManager.getConnection()) {
+            return findByIdentifier(identifier, conn);
+        } catch (SQLException e) {
+            throw new OtogException("Failed to query user by identifier: " + e.getMessage(), e);
+        }
+    }
+
+    public Optional<User> findByIdentifier(String identifier, Connection conn) throws SQLException {
+        if (identifier == null || identifier.trim().isEmpty()) {
+            return Optional.empty();
+        }
+        String idTrimmed = identifier.trim();
+        String digitsOnly = idTrimmed.replaceAll("[^0-9]", "");
+        if (digitsOnly.startsWith("63") && digitsOnly.length() == 12) {
+            digitsOnly = "0" + digitsOnly.substring(2);
+        }
+
+        String sql = "SELECT user_id, name, mobile_number, email, role, status, created_at, updated_at " +
+                "FROM users WHERE user_id = ? OR mobile_number = ? OR mobile_number = ? OR LOWER(email) = LOWER(?) OR LOWER(name) = LOWER(?)";
+        try (PreparedStatement ps = conn.prepareStatement(sql)) {
+            ps.setString(1, idTrimmed);
+            ps.setString(2, idTrimmed);
+            ps.setString(3, digitsOnly);
+            ps.setString(4, idTrimmed);
+            ps.setString(5, idTrimmed);
             try (ResultSet rs = ps.executeQuery()) {
                 if (rs.next()) {
                     return Optional.of(mapRow(rs));
