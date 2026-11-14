@@ -18,9 +18,15 @@ import javax.swing.table.DefaultTableModel;
 import java.awt.*;
 import java.math.BigDecimal;
 import java.time.format.DateTimeFormatter;
+import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.Deque;
+import java.util.EnumMap;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
+import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
 
@@ -35,11 +41,14 @@ public class Main extends JFrame {
 
     private static final int RECENT_TRANSACTION_LIMIT = 50;
     private static final DateTimeFormatter DATE_FORMATTER = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm");
+    private static final Map<TransactionType, String> FIXED_DIRECTION_BY_TYPE = createDirectionMap();
 
     private final WalletOperations walletService;
     private final LoanService loanService;
     private final InvestmentService investmentService;
     private final DatabaseManager ownedDatabaseManager;
+    private final Map<String, Integer> tabIndexByTitle = new LinkedHashMap<>();
+    private final Deque<String> navigationHistory = new ArrayDeque<>();
 
     private JLabel lblWelcome;
     private JLabel lblBalance;
@@ -183,18 +192,25 @@ public class Main extends JFrame {
 
     private JTabbedPane buildTabsPanel() {
         tabs = new JTabbedPane();
-        tabs.addTab("Overview", buildOverviewPanel());
-        tabs.addTab("Cash In / Out", buildCashInOutPanel());
-        tabs.addTab("Send Money", buildSendMoneyPanel());
+        tabIndexByTitle.clear();
+        registerTab("Overview", buildOverviewPanel());
+        registerTab("Cash In / Out", buildCashInOutPanel());
+        registerTab("Send Money", buildSendMoneyPanel());
 
         // Hide unfinished modules unless an implementation is explicitly provided
         if (loanService != null) {
-            tabs.addTab("Loans", buildServiceReadyNotice("Loans module active"));
+            registerTab("Loans", buildServiceReadyNotice("Loans module active"));
         }
         if (investmentService != null) {
-            tabs.addTab("Investments", buildServiceReadyNotice("Investments module active"));
+            registerTab("Investments", buildServiceReadyNotice("Investments module active"));
         }
         return tabs;
+    }
+
+    private void registerTab(String title, JComponent content) {
+        int index = tabs.getTabCount();
+        tabs.addTab(title, content);
+        tabIndexByTitle.put(title.toLowerCase(Locale.ROOT), index);
     }
 
     private JPanel buildOverviewPanel() {
@@ -629,7 +645,13 @@ public class Main extends JFrame {
     }
 
     private void populateTransactionsTable(String walletId, List<Transaction> transactions) {
-        this.loadedTransactions = transactions != null ? transactions : Collections.emptyList();
+        if (transactions == null || transactions.isEmpty()) {
+            this.loadedTransactions = Collections.emptyList();
+        } else {
+            List<Transaction> sorted = new ArrayList<>(transactions);
+            Collections.sort(sorted);
+            this.loadedTransactions = Collections.unmodifiableList(sorted);
+        }
         transactionsTableModel.setRowCount(0);
         for (Transaction txn : this.loadedTransactions) {
             String date = txn.getCreatedAt() != null ? txn.getCreatedAt().format(DATE_FORMATTER) : "-";
@@ -647,12 +669,24 @@ public class Main extends JFrame {
         }
     }
 
+    private static Map<TransactionType, String> createDirectionMap() {
+        EnumMap<TransactionType, String> map = new EnumMap<>(TransactionType.class);
+        map.put(TransactionType.CASH_IN, "IN (+)");
+        map.put(TransactionType.CASH_OUT, "OUT (-)");
+        map.put(TransactionType.BILL_PAYMENT, "OUT (-)");
+        map.put(TransactionType.LOAN_DISBURSEMENT, "IN (+)");
+        map.put(TransactionType.LOAN_REPAYMENT, "OUT (-)");
+        map.put(TransactionType.INVESTMENT_BUY, "OUT (-)");
+        map.put(TransactionType.INVESTMENT_REDEEM, "IN (+)");
+        return Collections.unmodifiableMap(map);
+    }
+
     private String resolveDirection(String walletId, Transaction txn) {
-        if (txn.getType() == TransactionType.CASH_IN) {
-            return "IN (+)";
-        }
-        if (txn.getType() == TransactionType.CASH_OUT) {
-            return "OUT (-)";
+        if (txn.getType() != null) {
+            String fixedDirection = FIXED_DIRECTION_BY_TYPE.get(txn.getType());
+            if (fixedDirection != null) {
+                return fixedDirection;
+            }
         }
         if (walletId != null && walletId.equals(txn.getTargetWalletId())
                 && !walletId.equals(txn.getSourceWalletId())) {
@@ -686,13 +720,33 @@ public class Main extends JFrame {
         if (title == null || tabs == null) {
             return false;
         }
-        for (int i = 0; i < tabs.getTabCount(); i++) {
-            if (title.equalsIgnoreCase(tabs.getTitleAt(i))) {
-                tabs.setSelectedIndex(i);
-                return true;
-            }
+        Integer index = tabIndexByTitle.get(title.trim().toLowerCase(Locale.ROOT));
+        if (index == null || index < 0 || index >= tabs.getTabCount()) {
+            return false;
         }
-        return false;
+        int currentIndex = tabs.getSelectedIndex();
+        if (currentIndex >= 0 && currentIndex != index) {
+            navigationHistory.push(tabs.getTitleAt(currentIndex));
+        }
+        tabs.setSelectedIndex(index);
+        return true;
+    }
+
+    public boolean navigateBack() {
+        if (tabs == null || navigationHistory.isEmpty()) {
+            return false;
+        }
+        String previousTitle = navigationHistory.pop();
+        Integer index = tabIndexByTitle.get(previousTitle.trim().toLowerCase(Locale.ROOT));
+        if (index == null || index < 0 || index >= tabs.getTabCount()) {
+            return false;
+        }
+        tabs.setSelectedIndex(index);
+        return true;
+    }
+
+    public int getNavigationHistoryDepth() {
+        return navigationHistory.size();
     }
 
     public List<String> getVisibleTabTitles() {

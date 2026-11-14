@@ -4,6 +4,8 @@ import com.otog.database.DatabaseManager;
 import com.otog.exception.EntityNotFoundException;
 import com.otog.exception.InsufficientFundsException;
 import com.otog.exception.InvalidAmountException;
+import com.otog.model.CashInOutTransaction;
+import com.otog.model.SendMoneyTransaction;
 import com.otog.model.Transaction;
 import com.otog.model.User;
 import com.otog.model.Wallet;
@@ -105,6 +107,13 @@ public class DashboardAndNavigationTest {
         assertEquals("Send Money", activeDashboard.getTabs().getTitleAt(activeDashboard.getTabs().getSelectedIndex()));
 
         assertFalse(activeDashboard.navigateToTab("Loans"));
+
+        assertEquals(2, activeDashboard.getNavigationHistoryDepth());
+        assertTrue(activeDashboard.navigateBack());
+        assertEquals("Cash In / Out", activeDashboard.getTabs().getTitleAt(activeDashboard.getTabs().getSelectedIndex()));
+        assertTrue(activeDashboard.navigateBack());
+        assertEquals("Overview", activeDashboard.getTabs().getTitleAt(activeDashboard.getTabs().getSelectedIndex()));
+        assertFalse(activeDashboard.navigateBack());
     }
 
     @Test
@@ -118,6 +127,8 @@ public class DashboardAndNavigationTest {
         Transaction cashInTxn = activeDashboard.submitCashOperationAsync("CASH_IN", "GCash", "500.00", "Allowance")
                 .get(5, TimeUnit.SECONDS);
         assertNotNull(cashInTxn);
+        assertInstanceOf(CashInOutTransaction.class, cashInTxn,
+                "Cash-In should instantiate polymorphic CashInOutTransaction subclass");
         assertTrue(activeDashboard.isLastPaymentExecutedOffEdt(),
                 "Cash-In execution must run off the Swing EDT");
         assertEquals(new BigDecimal("500.00"), SessionManager.getInstance().getCurrentWallet().getBalance());
@@ -129,12 +140,16 @@ public class DashboardAndNavigationTest {
         Transaction cashOutTxn = activeDashboard.submitCashOperationAsync("CASH_OUT", "BPI", "125.50", "ATM")
                 .get(5, TimeUnit.SECONDS);
         assertNotNull(cashOutTxn);
+        assertInstanceOf(CashInOutTransaction.class, cashOutTxn,
+                "Cash-Out should instantiate polymorphic CashInOutTransaction subclass");
         assertTrue(activeDashboard.isLastPaymentExecutedOffEdt(),
                 "Cash-Out execution must run off the Swing EDT");
         assertEquals(new BigDecimal("374.50"), SessionManager.getInstance().getCurrentWallet().getBalance());
         assertEquals("PHP 374.50", activeDashboard.getBalanceLabel().getText());
         assertEquals(Main.DashboardState.READY, activeDashboard.getCurrentState());
         assertEquals(2, activeDashboard.getRecentTransactionsTable().getRowCount());
+        assertTrue(cashOutTxn.compareTo(cashInTxn) <= 0,
+                "Comparable<Transaction> must order newer transactions first");
     }
 
     @Test
@@ -153,6 +168,8 @@ public class DashboardAndNavigationTest {
         Transaction sendTxn = activeDashboard.submitSendMoneyAsync("09171001005", "250.00", "Dinner split")
                 .get(5, TimeUnit.SECONDS);
         assertNotNull(sendTxn);
+        assertInstanceOf(SendMoneyTransaction.class, sendTxn,
+                "Send Money should instantiate polymorphic SendMoneyTransaction subclass");
         assertTrue(activeDashboard.isLastPaymentExecutedOffEdt(),
                 "Send Money execution must run off the Swing EDT");
         assertEquals(new BigDecimal("750.00"), SessionManager.getInstance().getCurrentWallet().getBalance());

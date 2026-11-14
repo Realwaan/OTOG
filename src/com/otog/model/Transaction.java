@@ -5,13 +5,14 @@ import com.otog.util.MoneyUtil;
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
+import java.util.Comparator;
 import java.util.Objects;
 
 /**
  * Represents a financial transaction within the OTOG E-Wallet platform.
  * Supports idempotency via unique referenceNumber and maintains BigDecimal financial precision.
  */
-public class Transaction {
+public class Transaction implements Comparable<Transaction> {
     private String transactionId;
     private String referenceNumber;
     private String sourceWalletId;
@@ -205,6 +206,18 @@ public class Transaction {
         }
         sb.append("========================================\n");
         return sb.toString();
+    }
+
+    private static final Comparator<Transaction> NEWEST_FIRST = Comparator
+            .comparing(Transaction::getCreatedAt, Comparator.nullsLast(Comparator.reverseOrder()))
+            .thenComparing(Transaction::getTransactionId, Comparator.nullsLast(Comparator.reverseOrder()));
+
+    @Override
+    public int compareTo(Transaction other) {
+        if (other == null) {
+            return -1;
+        }
+        return NEWEST_FIRST.compare(this, other);
     }
 
     @Override

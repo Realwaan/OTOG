@@ -102,9 +102,9 @@ public class WalletService implements WalletOperations {
             if (validatedBalance.compareTo(BigDecimal.ZERO) > 0) {
                 String txId = IdGenerator.nextTransactionId();
                 String refNum = IdGenerator.nextReferenceNumber();
-                Transaction initTxn = new Transaction(txId, refNum, null, walletId,
-                        validatedBalance, MoneyUtil.ZERO, TransactionType.CASH_IN, "Initial wallet funding");
-                initTxn.setStatus(TransactionStatus.COMPLETED);
+                CashInOutTransaction initTxn = buildCashInOutTransaction(
+                        txId, refNum, walletId, validatedBalance, MoneyUtil.ZERO,
+                        "CASH_IN", null, "Initial wallet funding");
                 transactionRepository.save(initTxn, conn);
 
                 walletRepository.updateBalance(walletId, validatedBalance, conn);
@@ -253,17 +253,18 @@ public class WalletService implements WalletOperations {
                     }
 
                     String txnId = IdGenerator.nextTransactionId();
-                    Transaction txn = new Transaction(
+                    String txnDesc = description != null ? description : "Transfer to wallet " + targetWalletId;
+                    SendMoneyTransaction txn = new SendMoneyTransaction(
                             txnId,
                             referenceNumber,
                             sourceWalletId,
                             targetWalletId,
                             validAmount,
                             validFee,
-                            TransactionType.SEND_MONEY,
-                            description != null ? description : "Transfer to wallet " + targetWalletId
+                            targetWalletId,
+                            txnDesc
                     );
-                    txn.setStatus(TransactionStatus.COMPLETED);
+                    txn.send();
                     transactionRepository.save(txn, conn);
 
                     // Debit source wallet
@@ -347,17 +348,8 @@ public class WalletService implements WalletOperations {
                 String desc = description != null ? description :
                         (pm != null ? "Cash In via " + pm.getProviderName() : "Cash In deposit");
 
-                Transaction txn = new Transaction(
-                        txnId,
-                        referenceNumber,
-                        null,
-                        targetWalletId,
-                        validAmount,
-                        MoneyUtil.ZERO,
-                        TransactionType.CASH_IN,
-                        desc
-                );
-                txn.setStatus(TransactionStatus.COMPLETED);
+                CashInOutTransaction txn = buildCashInOutTransaction(
+                        txnId, referenceNumber, targetWalletId, validAmount, MoneyUtil.ZERO, "CASH_IN", pm, desc);
                 transactionRepository.save(txn, conn);
 
                 BigDecimal balanceBefore = wallet.getBalance();
@@ -426,17 +418,8 @@ public class WalletService implements WalletOperations {
                 String desc = description != null ? description :
                         (pm != null ? "Cash Out to " + pm.getProviderName() : "Cash Out withdrawal");
 
-                Transaction txn = new Transaction(
-                        txnId,
-                        referenceNumber,
-                        sourceWalletId,
-                        null,
-                        validAmount,
-                        validFee,
-                        TransactionType.CASH_OUT,
-                        desc
-                );
-                txn.setStatus(TransactionStatus.COMPLETED);
+                CashInOutTransaction txn = buildCashInOutTransaction(
+                        txnId, referenceNumber, sourceWalletId, validAmount, validFee, "CASH_OUT", pm, desc);
                 transactionRepository.save(txn, conn);
 
                 BigDecimal balanceAfter = balance.subtract(totalDebit)
@@ -469,6 +452,17 @@ public class WalletService implements WalletOperations {
      */
     public <T> T executeInTransaction(com.otog.database.TransactionCallback<T> action) {
         return databaseManager.executeInTransaction(action);
+    }
+
+    private CashInOutTransaction buildCashInOutTransaction(String txnId, String referenceNumber, String walletId,
+                                                             BigDecimal amount, BigDecimal fee, String opType,
+                                                             PaymentMethod pm, String desc) {
+        String channel = pm != null ? pm.getProviderName() : "Direct";
+        CashInOutTransaction txn = new CashInOutTransaction(
+                txnId, referenceNumber, walletId, amount, fee, opType, channel);
+        txn.setDescription(desc);
+        txn.execute();
+        return txn;
     }
 
     private void validateReferenceNumber(String ref) {
