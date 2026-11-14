@@ -1,13 +1,16 @@
 import com.intellij.uiDesigner.core.GridConstraints;
 import com.intellij.uiDesigner.core.GridLayoutManager;
 import com.otog.database.DatabaseManager;
+import com.otog.exception.EntityNotFoundException;
 import com.otog.model.User;
 import com.otog.model.Wallet;
 import com.otog.service.AuthService;
 import com.otog.service.AuthServiceImpl;
 import com.otog.service.SessionManager;
+import com.otog.service.WalletOperations;
 import com.otog.service.WalletService;
 import com.otog.ui.RegisterDialog;
+import com.otog.util.MoneyUtil;
 
 import javax.swing.*;
 import java.awt.*;
@@ -87,29 +90,7 @@ public class UserLogin extends JFrame {
             btnVerify2FA.addActionListener(e -> {
                 String code = textField2FA.getText().trim();
                 if (verifyTwoFactorCode(code)) {
-                    String displayName = (pendingUser != null && pendingUser.getName() != null)
-                            ? pendingUser.getName() : "User";
-                    JOptionPane.showMessageDialog(
-                            pnlMain,
-                            "Two-Factor Authentication successful! Welcome, " + displayName + ".",
-                            "Success",
-                            JOptionPane.INFORMATION_MESSAGE
-                    );
-                    SwingUtilities.invokeLater(() -> {
-                        com.otog.ui.Main dashboard = new com.otog.ui.Main();
-                        dashboard.setOnLogoutCallback(() -> {
-                            JFrame frame = new JFrame("User Login - OTOG E-Wallet");
-                            UserLogin fresh = new UserLogin();
-                            frame.setContentPane(fresh.getMainPanel());
-                            frame.setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
-                            frame.setSize(750, 420);
-                            frame.setLocationRelativeTo(null);
-                            frame.setResizable(false);
-                            frame.setVisible(true);
-                        });
-                        dashboard.setVisible(true);
-                        SwingUtilities.getWindowAncestor(pnlMain).dispose();
-                    });
+                    SwingUtilities.invokeLater(this::openDashboard);
                 } else {
                     JOptionPane.showMessageDialog(
                             pnlMain,
@@ -120,6 +101,31 @@ public class UserLogin extends JFrame {
                 }
             });
         }
+    }
+
+    public com.otog.ui.Main openDashboard() {
+        WalletOperations service = (this.walletService != null)
+                ? this.walletService
+                : new WalletService(new DatabaseManager());
+        com.otog.ui.Main dashboard = new com.otog.ui.Main(service);
+        dashboard.setOnLogoutCallback(() -> {
+            JFrame frame = new JFrame("User Login - OTOG E-Wallet");
+            UserLogin fresh = new UserLogin();
+            frame.setContentPane(fresh.getMainPanel());
+            frame.setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
+            frame.setSize(750, 420);
+            frame.setLocationRelativeTo(null);
+            frame.setResizable(false);
+            frame.setVisible(true);
+        });
+        dashboard.setVisible(true);
+        Window loginWindow = SwingUtilities.getWindowAncestor(pnlMain);
+        if (loginWindow != null) {
+            loginWindow.dispose();
+        } else {
+            dispose();
+        }
+        return dashboard;
     }
 
     public boolean attemptLogin(String username, String password) {
@@ -147,6 +153,9 @@ public class UserLogin extends JFrame {
                     if (walletService != null) {
                         try {
                             wallet = walletService.getWalletByUserId(user.getUserId());
+                        } catch (EntityNotFoundException notFound) {
+                            wallet = walletService.createWallet(
+                                    user.getUserId(), MoneyUtil.ZERO, MoneyUtil.DEFAULT_CURRENCY);
                         } catch (Exception ignored) {
                         }
                     }
