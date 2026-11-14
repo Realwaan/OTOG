@@ -35,9 +35,10 @@ In compliance with the subject CSIT227 - Object Oriented Programming.
 | **Core Wallet Operations** | `createWallet`, `transfer`, `cashIn`, `cashOut` | **Implemented** | `src/com/otog/service/WalletOperations.java`, `WalletService.java`, `MoneyUtil.java` |
 | **Shared Service Contracts** | `WalletOperations`, `AuthService`, `LoanService`, `InvestmentService` | **Implemented** | `src/com/otog/service/` (interfaces agreed for parallel module work) |
 | **Automated Domain & Baseline Tests** | JUnit 5 verification suite | **Implemented** | `test/com/otog/*.java` |
-| **Security Domain (`Password`, `Pin`, `TwoFactorAuth`)** | Persisted credential hashes, OTP expiry, PIN lockouts | **Missing** | Defined in `Class Diagram/ewallet_cd.png` and `AuthService.java`; implementation pending |
-| **Main Application Navigation Shell (`Main`)** | Dashboard switching CashInOut, SendMoney, Invest, Loan, Security | **Missing** | Defined in `Class Diagram/ewallet_cd.png`; GUI shell pending |
-| **CashInOut & SendMoney GUI Workflows** | Swing forms wired to `WalletOperations` | **Missing** | Domain models (`CashInOutTransaction`, `SendMoneyTransaction`) exist; GUI pending |
+| **Registration & Password Authentication (CAP-03)** | Salted password hashes, account registration, wallet auto-provisioning, lockout limits & SessionManager | **Implemented** | `src/com/otog/service/AuthServiceImpl.java`, `SessionManager.java`, `src/UserLogin.java`, `src/com/otog/ui/RegisterDialog.java` |
+| **Security Domain (`Pin`, `TwoFactorAuth`)** | OTP expiry and PIN lockouts | **Partial** | Defined in `Class Diagram/ewallet_cd.png` and `AuthService.java`; CAP-03 implemented salted hash auth & 2FA issuance |
+| **Main Application Navigation Shell (`Main`)** | Dashboard with balance, recent activity, logout, async worker states & navigation | **Implemented (CAP-05)** | `src/com/otog/ui/Main.java`, `SessionManager.java`, `src/UserLogin.java` (unfinished Loans/Investments tabs hidden unless services are provided) |
+| **CashInOut & SendMoney GUI Workflows** | Swing forms wired to `WalletOperations` off the UI thread | **Implemented (CAP-05)** | Integrated in `src/com/otog/ui/Main.java` (`Cash In / Out` & `Send Money` tabs with post-payment refresh) |
 | **Simulated Loans (`Loan`)** | Apply, approve, repay with wallet ledger integration | **Partial** | `LoanTransaction.java` & `LoanService.java` defined; service implementation & UI pending |
 | **Simulated Investments (`InvestMoney`)** | Invest, withdraw, calculate returns with wallet ledger integration | **Partial** | `InvestMoneyTransaction.java` & `InvestmentService.java` defined; service implementation & UI pending |
 

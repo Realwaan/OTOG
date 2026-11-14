@@ -10,7 +10,9 @@ import com.otog.util.MoneyUtil;
 import java.math.BigDecimal;
 import java.sql.Connection;
 import java.time.LocalDateTime;
+import java.util.ArrayList;
 import java.util.List;
+import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.locks.ReentrantLock;
 
@@ -100,9 +102,9 @@ public class WalletService implements WalletOperations {
             if (validatedBalance.compareTo(BigDecimal.ZERO) > 0) {
                 String txId = IdGenerator.nextTransactionId();
                 String refNum = IdGenerator.nextReferenceNumber();
-                Transaction initTxn = new Transaction(txId, refNum, null, walletId,
-                        validatedBalance, MoneyUtil.ZERO, TransactionType.CASH_IN, "Initial wallet funding");
-                initTxn.setStatus(TransactionStatus.COMPLETED);
+                CashInOutTransaction initTxn = buildCashInOutTransaction(
+                        txId, refNum, walletId, validatedBalance, MoneyUtil.ZERO,
+                        "CASH_IN", null, "Initial wallet funding");
                 transactionRepository.save(initTxn, conn);
 
                 walletRepository.updateBalance(walletId, validatedBalance, conn);
@@ -137,6 +139,60 @@ public class WalletService implements WalletOperations {
 
     public BigDecimal getBalance(String walletId) {
         return getWallet(walletId).getBalance();
+    }
+
+    @Override
+    public List<Transaction> getTransactionsByWalletId(String walletId) {
+        if (walletId == null || walletId.trim().isEmpty()) {
+            throw new IllegalArgumentException("Wallet ID must not be null or empty");
+        }
+        String cleanWalletId = walletId.trim();
+        getWallet(cleanWalletId);
+        return transactionRepository.findByWalletId(cleanWalletId);
+    }
+
+    @Override
+    public List<Transaction> getRecentTransactions(String walletId, int limit) {
+        if (limit <= 0) {
+            throw new IllegalArgumentException("Transaction limit must be greater than zero");
+        }
+        List<Transaction> transactions = getTransactionsByWalletId(walletId);
+        if (transactions.size() <= limit) {
+            return transactions;
+        }
+        return new ArrayList<>(transactions.subList(0, limit));
+    }
+
+    @Override
+    public Transaction sendMoneyToRecipient(String referenceNumber, String sourceWalletId,
+                                            String recipientIdentifier, BigDecimal amount,
+                                            BigDecimal fee, String description) {
+        if (recipientIdentifier == null || recipientIdentifier.trim().isEmpty()) {
+            throw new IllegalArgumentException("Recipient identifier must not be null or empty");
+        }
+        String cleanRecipient = recipientIdentifier.trim();
+        String targetWalletId;
+        String recipientLabel;
+
+        Optional<Wallet> directWallet = walletRepository.findById(cleanRecipient);
+        if (directWallet.isPresent()) {
+            targetWalletId = directWallet.get().getWalletId();
+            recipientLabel = cleanRecipient;
+        } else {
+            User recipientUser = userRepository.findByIdentifier(cleanRecipient)
+                    .orElseThrow(() -> new EntityNotFoundException("Recipient user", cleanRecipient));
+            Wallet recipientWallet = walletRepository.findByUserId(recipientUser.getUserId())
+                    .orElseThrow(() -> new EntityNotFoundException("Recipient wallet for user", recipientUser.getUserId()));
+            targetWalletId = recipientWallet.getWalletId();
+            recipientLabel = (recipientUser.getName() != null && !recipientUser.getName().trim().isEmpty())
+                    ? recipientUser.getName()
+                    : cleanRecipient;
+        }
+
+        String effectiveDescription = (description != null && !description.trim().isEmpty())
+                ? description.trim()
+                : "Transfer to " + recipientLabel;
+        return transfer(referenceNumber, sourceWalletId, targetWalletId, amount, fee, effectiveDescription);
     }
 
     /**
@@ -197,17 +253,18 @@ public class WalletService implements WalletOperations {
                     }
 
                     String txnId = IdGenerator.nextTransactionId();
-                    Transaction txn = new Transaction(
+                    String txnDesc = description != null ? description : "Transfer to wallet " + targetWalletId;
+                    SendMoneyTransaction txn = new SendMoneyTransaction(
                             txnId,
                             referenceNumber,
                             sourceWalletId,
                             targetWalletId,
                             validAmount,
                             validFee,
-                            TransactionType.SEND_MONEY,
-                            description != null ? description : "Transfer to wallet " + targetWalletId
+                            targetWalletId,
+                            txnDesc
                     );
-                    txn.setStatus(TransactionStatus.COMPLETED);
+                    txn.send();
                     transactionRepository.save(txn, conn);
 
                     // Debit source wallet
@@ -291,17 +348,8 @@ public class WalletService implements WalletOperations {
                 String desc = description != null ? description :
                         (pm != null ? "Cash In via " + pm.getProviderName() : "Cash In deposit");
 
-                Transaction txn = new Transaction(
-                        txnId,
-                        referenceNumber,
-                        null,
-                        targetWalletId,
-                        validAmount,
-                        MoneyUtil.ZERO,
-                        TransactionType.CASH_IN,
-                        desc
-                );
-                txn.setStatus(TransactionStatus.COMPLETED);
+                CashInOutTransaction txn = buildCashInOutTransaction(
+                        txnId, referenceNumber, targetWalletId, validAmount, MoneyUtil.ZERO, "CASH_IN", pm, desc);
                 transactionRepository.save(txn, conn);
 
                 BigDecimal balanceBefore = wallet.getBalance();
@@ -370,17 +418,8 @@ public class WalletService implements WalletOperations {
                 String desc = description != null ? description :
                         (pm != null ? "Cash Out to " + pm.getProviderName() : "Cash Out withdrawal");
 
-                Transaction txn = new Transaction(
-                        txnId,
-                        referenceNumber,
-                        sourceWalletId,
-                        null,
-                        validAmount,
-                        validFee,
-                        TransactionType.CASH_OUT,
-                        desc
-                );
-                txn.setStatus(TransactionStatus.COMPLETED);
+                CashInOutTransaction txn = buildCashInOutTransaction(
+                        txnId, referenceNumber, sourceWalletId, validAmount, validFee, "CASH_OUT", pm, desc);
                 transactionRepository.save(txn, conn);
 
                 BigDecimal balanceAfter = balance.subtract(totalDebit)
@@ -413,6 +452,17 @@ public class WalletService implements WalletOperations {
      */
     public <T> T executeInTransaction(com.otog.database.TransactionCallback<T> action) {
         return databaseManager.executeInTransaction(action);
+    }
+
+    private CashInOutTransaction buildCashInOutTransaction(String txnId, String referenceNumber, String walletId,
+                                                             BigDecimal amount, BigDecimal fee, String opType,
+                                                             PaymentMethod pm, String desc) {
+        String channel = pm != null ? pm.getProviderName() : "Direct";
+        CashInOutTransaction txn = new CashInOutTransaction(
+                txnId, referenceNumber, walletId, amount, fee, opType, channel);
+        txn.setDescription(desc);
+        txn.execute();
+        return txn;
     }
 
     private void validateReferenceNumber(String ref) {

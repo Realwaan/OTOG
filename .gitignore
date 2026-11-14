@@ -15,3 +15,11 @@ data/
 .idea/shelf/
 .DS_Store
 Thumbs.db
+
+# Local agent tooling
+.agent/
+
+# Temporary build & script artifacts
+sources.txt
+__pycache__/
+*.pyc
