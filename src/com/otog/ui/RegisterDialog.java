@@ -5,6 +5,7 @@ import com.otog.service.AuthService;
 
 import javax.swing.*;
 import java.awt.*;
+import java.util.concurrent.ExecutionException;
 
 public class RegisterDialog extends JDialog {
     private final AuthService authService;
@@ -91,19 +92,44 @@ public class RegisterDialog extends JDialog {
             return;
         }
 
-        try {
-            this.registeredUser = authService.registerUser(name, mobile, email, password);
-            JOptionPane.showMessageDialog(this,
-                    "Registration successful!\nA secure wallet has been created with 0.00 PHP balance.\nYou may now log in.",
-                    "Registration Complete",
-                    JOptionPane.INFORMATION_MESSAGE);
-            dispose();
-        } catch (Exception ex) {
-            JOptionPane.showMessageDialog(this,
-                    ex.getMessage(),
-                    "Registration Failed",
-                    JOptionPane.ERROR_MESSAGE);
-        }
+        setRegistrationBusy(true);
+        new SwingWorker<User, Void>() {
+            @Override
+            protected User doInBackground() {
+                return authService.registerUser(name, mobile, email, password);
+            }
+
+            @Override
+            protected void done() {
+                setRegistrationBusy(false);
+                try {
+                    registeredUser = get();
+                    JOptionPane.showMessageDialog(RegisterDialog.this,
+                            "Registration successful!\nA secure wallet has been created with 0.00 PHP balance.\nYou may now log in.",
+                            "Registration Complete",
+                            JOptionPane.INFORMATION_MESSAGE);
+                    dispose();
+                } catch (InterruptedException ex) {
+                    Thread.currentThread().interrupt();
+                    JOptionPane.showMessageDialog(RegisterDialog.this,
+                            "Registration was interrupted. Please try again.",
+                            "Registration Failed",
+                            JOptionPane.ERROR_MESSAGE);
+                } catch (ExecutionException ex) {
+                    Throwable cause = ex.getCause() != null ? ex.getCause() : ex;
+                    JOptionPane.showMessageDialog(RegisterDialog.this,
+                            cause.getMessage(),
+                            "Registration Failed",
+                            JOptionPane.ERROR_MESSAGE);
+                }
+            }
+        }.execute();
+    }
+
+    private void setRegistrationBusy(boolean busy) {
+        btnSubmit.setEnabled(!busy);
+        btnCancel.setEnabled(!busy);
+        setCursor(busy ? Cursor.getPredefinedCursor(Cursor.WAIT_CURSOR) : Cursor.getDefaultCursor());
     }
 
     public User getRegisteredUser() {

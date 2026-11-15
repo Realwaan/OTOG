@@ -11,6 +11,7 @@ import com.otog.repository.UserRepository;
 import com.otog.repository.WalletRepository;
 import com.otog.service.AuthServiceImpl;
 import com.otog.service.SessionManager;
+import com.otog.service.WalletOperations;
 import com.otog.service.WalletService;
 import com.otog.util.PasswordUtil;
 import org.junit.jupiter.api.AfterEach;
@@ -248,5 +249,44 @@ public class RegistrationAndAuthTest {
                 frame.dispose();
             }
         }
+    }
+
+    @Test
+    void testUserLoginFailedAttemptsAreIsolatedPerIdentifierAndSupportsWalletOperations() throws Exception {
+        authService.registerUser("Melchora Aquino", "09261234567", "tandang@otog.ph", "SoraPassword1");
+        authService.registerUser("Antonio Luna", "09269876543", "luna@otog.ph", "HeneralLuna1");
+
+        Class<?> loginClass = Class.forName("UserLogin");
+        Object loginWindow = loginClass.getConstructor(
+                com.otog.service.AuthService.class,
+                WalletOperations.class
+        ).newInstance(authService, (WalletOperations) walletService);
+
+        try {
+            java.lang.reflect.Method attemptLogin = loginClass.getMethod("attemptLogin", String.class, String.class);
+
+            // 4 failed attempts on Melchora + 2 failed attempts on unknown account (6 total in same window)
+            for (int i = 0; i < 4; i++) {
+                assertFalse((Boolean) attemptLogin.invoke(loginWindow, "09261234567", "BadPass" + i));
+            }
+            for (int i = 0; i < 2; i++) {
+                assertFalse((Boolean) attemptLogin.invoke(loginWindow, "unknown-user", "BadPass"));
+            }
+
+            // Antonio Luna's account must still succeed in the same UserLogin instance
+            assertTrue((Boolean) attemptLogin.invoke(loginWindow, "09269876543", "HeneralLuna1"),
+                    "Failed attempts on other identifiers must not lock out a different user in the UI");
+        } finally {
+            if (loginWindow instanceof javax.swing.JFrame frame) {
+                frame.dispose();
+            }
+        }
+    }
+
+    @Test
+    void testProtectedMainScreenRequiresAuthentication() {
+        SessionManager.getInstance().logout();
+        assertThrows(SecurityException.class, com.otog.ui.Main::new,
+                "Opening Main without an active session must throw SecurityException");
     }
 }

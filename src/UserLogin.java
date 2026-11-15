@@ -6,12 +6,16 @@ import com.otog.model.Wallet;
 import com.otog.service.AuthService;
 import com.otog.service.AuthServiceImpl;
 import com.otog.service.SessionManager;
+import com.otog.service.WalletOperations;
 import com.otog.service.WalletService;
 import com.otog.ui.RegisterDialog;
 
 import javax.swing.*;
 import java.awt.*;
+import java.util.HashMap;
+import java.util.Map;
 import java.util.Optional;
+import java.util.concurrent.ExecutionException;
 
 public class UserLogin extends JFrame {
     private JPanel pnlMain;
@@ -24,19 +28,47 @@ public class UserLogin extends JFrame {
     private JTextField textField2FA;
     private JButton btnVerify2FA;
 
-    private AuthService authService;
-    private WalletService walletService;
+    private final AuthService authService;
+    private final WalletOperations walletService;
     private String currentAuthenticatedUserId;
     private String lastErrorMessage;
-    private int consecutiveFailedAttempts = 0;
+    private final Map<String, Integer> failedAttemptsByIdentifier = new HashMap<>();
     private User pendingUser;
     private Wallet pendingWallet;
 
+    private static final class LoginOutcome {
+        final boolean success;
+        final User user;
+        final Wallet wallet;
+        final String errorMessage;
+        final String identifierKey;
+
+        private LoginOutcome(boolean success, User user, Wallet wallet, String errorMessage, String identifierKey) {
+            this.success = success;
+            this.user = user;
+            this.wallet = wallet;
+            this.errorMessage = errorMessage;
+            this.identifierKey = identifierKey;
+        }
+
+        static LoginOutcome success(User user, Wallet wallet, String identifierKey) {
+            return new LoginOutcome(true, user, wallet, null, identifierKey);
+        }
+
+        static LoginOutcome failure(String errorMessage) {
+            return new LoginOutcome(false, null, null, errorMessage, null);
+        }
+    }
+
     public UserLogin() {
-        this(null, null);
+        this((AuthService) null, (WalletOperations) null);
     }
 
     public UserLogin(AuthService authService, WalletService walletService) {
+        this(authService, (WalletOperations) walletService);
+    }
+
+    public UserLogin(AuthService authService, WalletOperations walletService) {
         if (authService != null) {
             this.authService = authService;
             this.walletService = walletService;
@@ -57,17 +89,38 @@ public class UserLogin extends JFrame {
             String username = textFieldUsername.getText();
             String password = new String(passwordFieldPasswordInput.getPassword());
 
-            if (!attemptLogin(username, password)) {
-                String errorMsg = (lastErrorMessage != null && !lastErrorMessage.trim().isEmpty())
-                        ? lastErrorMessage
-                        : "Wrong credentials! Please try again.";
-                JOptionPane.showMessageDialog(
-                        pnlMain,
-                        errorMsg,
-                        "Login Error",
-                        JOptionPane.ERROR_MESSAGE
-                );
+            if (username == null || username.trim().isEmpty() || password.isEmpty()) {
+                applyLoginOutcome(LoginOutcome.failure("Please enter both username and password."));
+                showLoginErrorDialog();
+                return;
             }
+
+            setLoginBusy(true);
+            new SwingWorker<LoginOutcome, Void>() {
+                @Override
+                protected LoginOutcome doInBackground() {
+                    return authenticateInBackground(username, password);
+                }
+
+                @Override
+                protected void done() {
+                    setLoginBusy(false);
+                    try {
+                        LoginOutcome outcome = get();
+                        if (!applyLoginOutcome(outcome)) {
+                            showLoginErrorDialog();
+                        }
+                    } catch (InterruptedException ex) {
+                        Thread.currentThread().interrupt();
+                        applyLoginOutcome(LoginOutcome.failure("Login was interrupted. Please try again."));
+                        showLoginErrorDialog();
+                    } catch (ExecutionException ex) {
+                        Throwable cause = ex.getCause() != null ? ex.getCause() : ex;
+                        applyLoginOutcome(LoginOutcome.failure(cause.getMessage()));
+                        showLoginErrorDialog();
+                    }
+                }
+            }.execute();
         });
 
         if (btnRegister != null) {
@@ -86,135 +139,173 @@ public class UserLogin extends JFrame {
         if (btnVerify2FA != null) {
             btnVerify2FA.addActionListener(e -> {
                 String code = textField2FA.getText().trim();
-                if (verifyTwoFactorCode(code)) {
-                    String displayName = (pendingUser != null && pendingUser.getName() != null)
-                            ? pendingUser.getName() : "User";
-                    JOptionPane.showMessageDialog(
-                            pnlMain,
-                            "Two-Factor Authentication successful! Welcome, " + displayName + ".",
-                            "Success",
-                            JOptionPane.INFORMATION_MESSAGE
-                    );
-                    SwingUtilities.invokeLater(() -> {
-                        com.otog.ui.Main dashboard = new com.otog.ui.Main();
-                        dashboard.setOnLogoutCallback(() -> {
-                            JFrame frame = new JFrame("User Login - OTOG E-Wallet");
-                            UserLogin fresh = new UserLogin();
-                            frame.setContentPane(fresh.getMainPanel());
-                            frame.setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
-                            frame.setSize(750, 420);
-                            frame.setLocationRelativeTo(null);
-                            frame.setResizable(false);
-                            frame.setVisible(true);
-                        });
-                        dashboard.setVisible(true);
-                        SwingUtilities.getWindowAncestor(pnlMain).dispose();
-                    });
-                } else {
-                    JOptionPane.showMessageDialog(
-                            pnlMain,
-                            "Please enter your 2FA verification code.",
-                            "2FA Error",
-                            JOptionPane.WARNING_MESSAGE
-                    );
-                }
+                btnVerify2FA.setEnabled(false);
+                new SwingWorker<Boolean, Void>() {
+                    @Override
+                    protected Boolean doInBackground() {
+                        return verifyTwoFactorCode(code);
+                    }
+
+                    @Override
+                    protected void done() {
+                        btnVerify2FA.setEnabled(true);
+                        try {
+                            if (get()) {
+                                String displayName = (pendingUser != null && pendingUser.getName() != null)
+                                        ? pendingUser.getName() : "User";
+                                JOptionPane.showMessageDialog(
+                                        pnlMain,
+                                        "Two-Factor Authentication successful! Welcome, " + displayName + ".",
+                                        "Success",
+                                        JOptionPane.INFORMATION_MESSAGE
+                                );
+                                SwingUtilities.invokeLater(() -> {
+                                    com.otog.ui.Main dashboard = new com.otog.ui.Main();
+                                    dashboard.setOnLogoutCallback(() -> {
+                                        JFrame frame = new JFrame("User Login - OTOG E-Wallet");
+                                        UserLogin fresh = new UserLogin();
+                                        frame.setContentPane(fresh.getMainPanel());
+                                        frame.setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
+                                        frame.setSize(750, 420);
+                                        frame.setLocationRelativeTo(null);
+                                        frame.setResizable(false);
+                                        frame.setVisible(true);
+                                    });
+                                    dashboard.setVisible(true);
+                                    Window ancestor = SwingUtilities.getWindowAncestor(pnlMain);
+                                    if (ancestor != null) {
+                                        ancestor.dispose();
+                                    }
+                                });
+                            } else {
+                                JOptionPane.showMessageDialog(
+                                        pnlMain,
+                                        "Please enter a valid 2FA verification code.",
+                                        "2FA Error",
+                                        JOptionPane.WARNING_MESSAGE
+                                );
+                            }
+                        } catch (InterruptedException ex) {
+                            Thread.currentThread().interrupt();
+                        } catch (ExecutionException ex) {
+                            Throwable cause = ex.getCause() != null ? ex.getCause() : ex;
+                            JOptionPane.showMessageDialog(
+                                    pnlMain,
+                                    cause.getMessage(),
+                                    "2FA Error",
+                                    JOptionPane.ERROR_MESSAGE
+                            );
+                        }
+                    }
+                }.execute();
             });
         }
     }
 
+    private void setLoginBusy(boolean busy) {
+        btnLogin.setEnabled(!busy);
+        if (btnRegister != null) {
+            btnRegister.setEnabled(!busy);
+        }
+        if (pnlMain != null) {
+            pnlMain.setCursor(busy ? Cursor.getPredefinedCursor(Cursor.WAIT_CURSOR) : Cursor.getDefaultCursor());
+        }
+    }
+
+    private void showLoginErrorDialog() {
+        String errorMsg = (lastErrorMessage != null && !lastErrorMessage.trim().isEmpty())
+                ? lastErrorMessage
+                : "Wrong credentials! Please try again.";
+        JOptionPane.showMessageDialog(
+                pnlMain,
+                errorMsg,
+                "Login Error",
+                JOptionPane.ERROR_MESSAGE
+        );
+    }
+
     public boolean attemptLogin(String username, String password) {
+        LoginOutcome outcome = authenticateInBackground(username, password);
+        return applyLoginOutcome(outcome);
+    }
+
+    private LoginOutcome authenticateInBackground(String username, String password) {
         if (username == null || username.trim().isEmpty() || password == null || password.isEmpty()) {
-            lastErrorMessage = "Please enter both username and password.";
-            passwordFieldPasswordInput.setText("");
-            return false;
+            return LoginOutcome.failure("Please enter both username and password.");
         }
 
-        if (consecutiveFailedAttempts >= 5) {
-            lastErrorMessage = "Account locked: maximum failed login attempts (5) reached.";
-            passwordFieldPasswordInput.setText("");
-            return false;
+        String identifier = username.trim();
+        String identifierKey = identifier.toLowerCase();
+
+        if (authService == null) {
+            return LoginOutcome.failure("Authentication service is unavailable.");
         }
 
-        if (authService != null) {
-            try {
-                Optional<User> userOpt = authService.authenticatePassword(username.trim(), password);
-                if (userOpt.isPresent()) {
-                    User user = userOpt.get();
-                    this.currentAuthenticatedUserId = user.getUserId();
-                    this.consecutiveFailedAttempts = 0;
-
-                    Wallet wallet = null;
-                    if (walletService != null) {
-                        try {
-                            wallet = walletService.getWalletByUserId(user.getUserId());
-                        } catch (Exception ignored) {
-                        }
-                    }
-
-                    this.pendingUser = user;
-                    this.pendingWallet = wallet;
-                    authService.issueTwoFactorOtp(user.getUserId());
-
-                    pnlPassword.setVisible(false);
-                    pnl2FA.setVisible(true);
-
-                    pnlMain.revalidate();
-                    pnlMain.repaint();
-                    lastErrorMessage = null;
-                    return true;
-                } else {
-                    consecutiveFailedAttempts++;
-                    if (consecutiveFailedAttempts >= 5) {
-                        lastErrorMessage = "Account locked: maximum failed login attempts (5) reached.";
-                    } else {
-                        lastErrorMessage = "Wrong credentials! Attempt " + consecutiveFailedAttempts + " of 5.";
+        try {
+            Optional<User> userOpt = authService.authenticatePassword(identifier, password);
+            if (userOpt.isPresent()) {
+                User user = userOpt.get();
+                Wallet wallet = null;
+                if (walletService != null) {
+                    try {
+                        wallet = walletService.getWalletByUserId(user.getUserId());
+                    } catch (Exception walletEx) {
+                        System.err.println("Wallet lookup failed for user " + user.getUserId() + ": " + walletEx.getMessage());
                     }
                 }
-            } catch (Exception ex) {
-                consecutiveFailedAttempts++;
-                if (consecutiveFailedAttempts >= 5 || (ex.getMessage() != null && ex.getMessage().contains("locked"))) {
-                    lastErrorMessage = "Account locked: maximum failed login attempts (5) reached.";
-                } else {
-                    lastErrorMessage = ex.getMessage();
-                }
+                authService.issueTwoFactorOtp(user.getUserId());
+                return LoginOutcome.success(user, wallet, identifierKey);
             }
-        } else {
-            // Fallback for isolated mocks
-            if ("admin".equals(username) && "password".equals(password)) {
-                this.consecutiveFailedAttempts = 0;
-                this.pendingUser = null;
-                this.pendingWallet = null;
-                pnlPassword.setVisible(false);
-                pnl2FA.setVisible(true);
-                pnlMain.revalidate();
-                pnlMain.repaint();
-                lastErrorMessage = null;
-                return true;
+
+            int attempts = failedAttemptsByIdentifier.merge(identifierKey, 1, Integer::sum);
+            if (attempts >= AuthServiceImpl.MAX_FAILED_ATTEMPTS) {
+                return LoginOutcome.failure("Account locked: maximum failed login attempts ("
+                        + AuthServiceImpl.MAX_FAILED_ATTEMPTS + ") reached.");
             }
-            consecutiveFailedAttempts++;
-            if (consecutiveFailedAttempts >= 5) {
-                lastErrorMessage = "Account locked: maximum failed login attempts (5) reached.";
-            } else {
-                lastErrorMessage = "Wrong credentials! Attempt " + consecutiveFailedAttempts + " of 5.";
+            return LoginOutcome.failure("Wrong credentials! Attempt " + attempts + " of "
+                    + AuthServiceImpl.MAX_FAILED_ATTEMPTS + ".");
+        } catch (Exception ex) {
+            String msg = ex.getMessage();
+            if (msg != null && msg.contains("locked")) {
+                failedAttemptsByIdentifier.put(identifierKey, AuthServiceImpl.MAX_FAILED_ATTEMPTS);
             }
+            return LoginOutcome.failure(msg != null && !msg.trim().isEmpty()
+                    ? msg
+                    : "Authentication failed. Please try again.");
+        }
+    }
+
+    private boolean applyLoginOutcome(LoginOutcome outcome) {
+        if (outcome.success) {
+            this.currentAuthenticatedUserId = outcome.user.getUserId();
+            this.pendingUser = outcome.user;
+            this.pendingWallet = outcome.wallet;
+            if (outcome.identifierKey != null) {
+                failedAttemptsByIdentifier.remove(outcome.identifierKey);
+            }
+
+            pnlPassword.setVisible(false);
+            pnl2FA.setVisible(true);
+            pnlMain.revalidate();
+            pnlMain.repaint();
+            lastErrorMessage = null;
+            return true;
         }
 
+        lastErrorMessage = outcome.errorMessage;
         passwordFieldPasswordInput.setText("");
         return false;
     }
 
     public boolean verifyTwoFactorCode(String code) {
-        if (code == null || code.trim().isEmpty()) {
+        if (code == null || code.trim().isEmpty() || authService == null) {
             return false;
         }
-        if (authService != null) {
-            boolean verified = authService.verifyTwoFactorOtp(currentAuthenticatedUserId, code.trim());
-            if (verified) {
-                SessionManager.getInstance().login(pendingUser, pendingWallet);
-            }
-            return verified;
+        boolean verified = authService.verifyTwoFactorOtp(currentAuthenticatedUserId, code.trim());
+        if (verified && pendingUser != null) {
+            SessionManager.getInstance().login(pendingUser, pendingWallet);
         }
-        return true;
+        return verified;
     }
 
     public JPanel getMainPanel() {
