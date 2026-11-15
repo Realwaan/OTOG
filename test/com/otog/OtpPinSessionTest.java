@@ -229,6 +229,8 @@ public class OtpPinSessionTest {
             assertFalse((Boolean) verifyTwoFactorCode.invoke(
                     loginWindow, "000000".equals(secondOtp) ? "999999" : "000000"));
             assertTrue((Boolean) verifyTwoFactorCode.invoke(loginWindow, secondOtp));
+            assertNull(getLastIssuedOtp.invoke(loginWindow),
+                    "Verified one-time OTP must be cleared from UI state");
             assertTrue(SessionManager.getInstance().isLoggedIn());
             assertEquals(alice.getUserId(), SessionManager.getInstance().getCurrentUser().getUserId());
         } finally {
@@ -293,6 +295,24 @@ public class OtpPinSessionTest {
         assertFalse(SessionManager.getInstance().isLoggedIn());
         assertThrows(SecurityException.class, () -> authService.verifyPin(alice.getUserId(), "5678"),
                 "Locked-out PIN session must reject even the correct PIN");
+    }
+
+    @Test
+    void testCrossLoginPinAttemptAccumulationLocksSession() {
+        SessionManager session = SessionManager.getInstance();
+        session.login(bob, bobWallet);
+        authService.setPin(bob.getUserId(), "BobPass123", "7890");
+
+        assertFalse(authService.verifyPin(bob.getUserId(), "0000")); // miss 1
+        session.logout();
+
+        session.login(bob, bobWallet);
+        assertFalse(authService.verifyPin(bob.getUserId(), "1111")); // miss 2
+        assertFalse(authService.verifyPin(bob.getUserId(), "2222")); // miss 3 (accumulated in DB)
+
+        assertTrue(session.isLockedOutByPin(),
+                "Accumulated failed PIN attempts across sessions must lock out SessionManager");
+        assertFalse(session.isLoggedIn());
     }
 
     @Test

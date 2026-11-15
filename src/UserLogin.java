@@ -373,6 +373,7 @@ public class UserLogin extends JFrame {
         boolean verified = authService.verifyTwoFactorOtp(currentAuthenticatedUserId, code.trim());
         if (verified && pendingUser != null) {
             lastErrorMessage = null;
+            lastIssuedOtp = null;
             SessionManager.getInstance().login(pendingUser, pendingWallet);
             return true;
         }

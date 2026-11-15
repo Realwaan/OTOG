@@ -264,8 +264,11 @@ public class AuthServiceImpl implements AuthService {
             return true;
         }
 
-        credentialRepository.recordPinFailedAttempt(cleanUserId);
-        session.recordFailedPinAttempt();
+        int dbFailedAttempts = credentialRepository.recordPinFailedAttempt(cleanUserId);
+        boolean sessionLocked = session.recordFailedPinAttempt();
+        if (dbFailedAttempts >= SessionManager.MAX_PIN_ATTEMPTS && !sessionLocked) {
+            session.lockOutByPin();
+        }
         return false;
     }
 

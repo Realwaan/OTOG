@@ -213,6 +213,10 @@ public class SessionManager {
         return lockedOutByPin;
     }
 
+    public synchronized void lockOutByPin() {
+        clearSessionState(false, true);
+    }
+
     public synchronized void requirePinAuthorization(String expectedUserId) {
         checkAndExpireIfTimedOut();
         if (expiredDueToInactivity) {
