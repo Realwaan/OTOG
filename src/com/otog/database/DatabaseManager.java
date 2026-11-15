@@ -5,6 +5,7 @@ import com.otog.exception.OtogException;
 import java.io.File;
 import java.sql.Connection;
 import java.sql.DriverManager;
+import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Statement;
 import java.util.UUID;
@@ -144,7 +145,17 @@ public class DatabaseManager implements AutoCloseable {
                 "CREATE INDEX IF NOT EXISTS idx_tx_target ON transactions(target_wallet_id);",
                 "CREATE INDEX IF NOT EXISTS idx_ledger_wallet ON ledger_entries(wallet_id);",
                 "CREATE INDEX IF NOT EXISTS idx_ledger_txn ON ledger_entries(transaction_id);",
-                "CREATE INDEX IF NOT EXISTS idx_pm_user ON payment_methods(user_id);"
+                "CREATE INDEX IF NOT EXISTS idx_pm_user ON payment_methods(user_id);",
+
+                "CREATE TABLE IF NOT EXISTS credentials (" +
+                        "user_id TEXT PRIMARY KEY, " +
+                        "password_hash TEXT NOT NULL, " +
+                        "salt TEXT NOT NULL, " +
+                        "failed_attempts INTEGER NOT NULL DEFAULT 0, " +
+                        "locked_until TEXT, " +
+                        "updated_at TEXT NOT NULL, " +
+                        "FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE CASCADE);",
+                "CREATE INDEX IF NOT EXISTS idx_cred_user ON credentials(user_id);"
         };
 
         try (Connection conn = getConnection();
@@ -152,8 +163,35 @@ public class DatabaseManager implements AutoCloseable {
             for (String ddl : ddlStatements) {
                 stmt.execute(ddl);
             }
+            seedDefaultAdmin(conn);
         } catch (SQLException e) {
             throw new OtogException("Failed to initialize database schema", e);
+        }
+    }
+
+    private void seedDefaultAdmin(Connection conn) {
+        String checkSql = "SELECT user_id FROM users WHERE user_id = 'USR-ADMIN-01' OR LOWER(name) = 'admin'";
+        try (Statement stmt = conn.createStatement();
+             ResultSet rs = stmt.executeQuery(checkSql)) {
+            if (!rs.next()) {
+                String salt = "a1b2c3d4e5f60718293a4b5c6d7e8f90";
+                String hash = com.otog.util.PasswordUtil.hashPassword("password", salt);
+                String now = java.time.LocalDateTime.now().toString();
+
+                String insertUser = "INSERT INTO users (user_id, name, mobile_number, email, role, status, created_at, updated_at) " +
+                        "VALUES ('USR-ADMIN-01', 'admin', '09000000000', 'admin@otog.ph', 'ADMIN', 'ACTIVE', '" + now + "', '" + now + "')";
+                stmt.executeUpdate(insertUser);
+
+                String insertCred = "INSERT INTO credentials (user_id, password_hash, salt, failed_attempts, locked_until, updated_at) " +
+                        "VALUES ('USR-ADMIN-01', '" + hash + "', '" + salt + "', 0, NULL, '" + now + "')";
+                stmt.executeUpdate(insertCred);
+
+                String insertWallet = "INSERT INTO wallets (wallet_id, user_id, balance, currency, status, created_at, updated_at) " +
+                        "VALUES ('WLT-ADMIN-01', 'USR-ADMIN-01', '1000.00', 'PHP', 'ACTIVE', '" + now + "', '" + now + "')";
+                stmt.executeUpdate(insertWallet);
+            }
+        } catch (SQLException e) {
+            // Seed failure should not crash if already populated concurrently
         }
     }
 

@@ -10,6 +10,8 @@ import java.util.Optional;
 public interface AuthService {
     Optional<User> authenticatePassword(String usernameOrMobile, String rawPassword);
 
+    User registerUser(String name, String mobileNumber, String email, String rawPassword);
+
     String issueTwoFactorOtp(String userId);
 
     boolean verifyTwoFactorOtp(String userId, String otpCode);

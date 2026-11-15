@@ -15,3 +15,7 @@ data/
 .idea/shelf/
 .DS_Store
 Thumbs.db
+
+# Local agent tooling & logs
+.agent/
+*.log
