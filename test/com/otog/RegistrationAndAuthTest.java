@@ -286,7 +286,7 @@ public class RegistrationAndAuthTest {
     @Test
     void testProtectedMainScreenRequiresAuthentication() {
         SessionManager.getInstance().logout();
-        assertThrows(SecurityException.class, com.otog.ui.Main::new,
+        assertThrows(SecurityException.class, () -> new com.otog.ui.Main(walletService),
                 "Opening Main without an active session must throw SecurityException");
     }
 }

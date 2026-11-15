@@ -59,6 +59,18 @@ public class SessionManager {
         this.currentWallet = wallet;
     }
 
+    public synchronized Wallet refreshWallet(WalletOperations walletService) {
+        requireAuthentication();
+        if (walletService == null) {
+            throw new IllegalArgumentException("WalletOperations service must not be null");
+        }
+        Wallet updated = (this.currentWallet != null && this.currentWallet.getWalletId() != null)
+                ? walletService.getWallet(this.currentWallet.getWalletId())
+                : walletService.getWalletByUserId(this.currentUser.getUserId());
+        this.currentWallet = updated;
+        return updated;
+    }
+
     public synchronized long getLoginTimestamp() {
         return loginTimestamp;
     }
