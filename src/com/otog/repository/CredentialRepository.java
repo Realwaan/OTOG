@@ -27,15 +27,19 @@ public class CredentialRepository {
     }
 
     public Credential save(Credential credential, Connection conn) throws SQLException {
-        String sql = "INSERT INTO credentials (user_id, password_hash, salt, failed_attempts, locked_until, updated_at) " +
-                "VALUES (?, ?, ?, ?, ?, ?)";
+        String sql = "INSERT INTO credentials (user_id, password_hash, salt, failed_attempts, locked_until, " +
+                "pin_hash, pin_salt, pin_failed_attempts, updated_at) " +
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)";
         try (PreparedStatement ps = conn.prepareStatement(sql)) {
             ps.setString(1, credential.getUserId());
             ps.setString(2, credential.getPasswordHash());
             ps.setString(3, credential.getSalt());
             ps.setInt(4, credential.getFailedAttempts());
             ps.setString(5, credential.getLockedUntil() != null ? credential.getLockedUntil().toString() : null);
-            ps.setString(6, credential.getUpdatedAt().toString());
+            ps.setString(6, credential.getPinHash());
+            ps.setString(7, credential.getPinSalt());
+            ps.setInt(8, credential.getPinFailedAttempts());
+            ps.setString(9, credential.getUpdatedAt().toString());
             ps.executeUpdate();
             return credential;
         }
@@ -50,7 +54,8 @@ public class CredentialRepository {
     }
 
     public Optional<Credential> findByUserId(String userId, Connection conn) throws SQLException {
-        String sql = "SELECT user_id, password_hash, salt, failed_attempts, locked_until, updated_at " +
+        String sql = "SELECT user_id, password_hash, salt, failed_attempts, locked_until, " +
+                "pin_hash, pin_salt, pin_failed_attempts, updated_at " +
                 "FROM credentials WHERE user_id = ?";
         try (PreparedStatement ps = conn.prepareStatement(sql)) {
             ps.setString(1, userId);
@@ -102,17 +107,77 @@ public class CredentialRepository {
         }
     }
 
+    public void updatePin(String userId, String pinHash, String pinSalt) {
+        try (Connection conn = databaseManager.getConnection()) {
+            String sql = "UPDATE credentials SET pin_hash = ?, pin_salt = ?, pin_failed_attempts = 0, updated_at = ? " +
+                    "WHERE user_id = ?";
+            try (PreparedStatement ps = conn.prepareStatement(sql)) {
+                ps.setString(1, pinHash);
+                ps.setString(2, pinSalt);
+                ps.setString(3, LocalDateTime.now().toString());
+                ps.setString(4, userId);
+                int updated = ps.executeUpdate();
+                if (updated == 0) {
+                    throw new OtogException("Credentials record not found for user: " + userId);
+                }
+            }
+        } catch (SQLException e) {
+            throw new OtogException("Failed to update transaction PIN: " + e.getMessage(), e);
+        }
+    }
+
+    public int recordPinFailedAttempt(String userId) {
+        try (Connection conn = databaseManager.getConnection()) {
+            String sql = "UPDATE credentials SET pin_failed_attempts = pin_failed_attempts + 1, updated_at = ? " +
+                    "WHERE user_id = ?";
+            try (PreparedStatement ps = conn.prepareStatement(sql)) {
+                ps.setString(1, LocalDateTime.now().toString());
+                ps.setString(2, userId);
+                ps.executeUpdate();
+            }
+
+            String query = "SELECT pin_failed_attempts FROM credentials WHERE user_id = ?";
+            try (PreparedStatement ps = conn.prepareStatement(query)) {
+                ps.setString(1, userId);
+                try (ResultSet rs = ps.executeQuery()) {
+                    if (rs.next()) {
+                        return rs.getInt("pin_failed_attempts");
+                    }
+                }
+            }
+            return 0;
+        } catch (SQLException e) {
+            throw new OtogException("Failed to record failed PIN attempt: " + e.getMessage(), e);
+        }
+    }
+
+    public void resetPinFailedAttempts(String userId) {
+        try (Connection conn = databaseManager.getConnection()) {
+            String sql = "UPDATE credentials SET pin_failed_attempts = 0, updated_at = ? WHERE user_id = ?";
+            try (PreparedStatement ps = conn.prepareStatement(sql)) {
+                ps.setString(1, LocalDateTime.now().toString());
+                ps.setString(2, userId);
+                ps.executeUpdate();
+            }
+        } catch (SQLException e) {
+            throw new OtogException("Failed to reset failed PIN attempts: " + e.getMessage(), e);
+        }
+    }
+
     public void update(Credential credential) {
         try (Connection conn = databaseManager.getConnection()) {
             String sql = "UPDATE credentials SET password_hash = ?, salt = ?, failed_attempts = ?, " +
-                    "locked_until = ?, updated_at = ? WHERE user_id = ?";
+                    "locked_until = ?, pin_hash = ?, pin_salt = ?, pin_failed_attempts = ?, updated_at = ? WHERE user_id = ?";
             try (PreparedStatement ps = conn.prepareStatement(sql)) {
                 ps.setString(1, credential.getPasswordHash());
                 ps.setString(2, credential.getSalt());
                 ps.setInt(3, credential.getFailedAttempts());
                 ps.setString(4, credential.getLockedUntil() != null ? credential.getLockedUntil().toString() : null);
-                ps.setString(5, LocalDateTime.now().toString());
-                ps.setString(6, credential.getUserId());
+                ps.setString(5, credential.getPinHash());
+                ps.setString(6, credential.getPinSalt());
+                ps.setInt(7, credential.getPinFailedAttempts());
+                ps.setString(8, LocalDateTime.now().toString());
+                ps.setString(9, credential.getUserId());
                 ps.executeUpdate();
             }
         } catch (SQLException e) {
@@ -130,6 +195,9 @@ public class CredentialRepository {
         if (lockedUntilStr != null && !lockedUntilStr.isEmpty()) {
             c.setLockedUntil(LocalDateTime.parse(lockedUntilStr));
         }
+        c.setPinHash(rs.getString("pin_hash"));
+        c.setPinSalt(rs.getString("pin_salt"));
+        c.setPinFailedAttempts(rs.getInt("pin_failed_attempts"));
         c.setUpdatedAt(LocalDateTime.parse(rs.getString("updated_at")));
         return c;
     }

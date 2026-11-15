@@ -1,124 +1,142 @@
 package com.otog.service;
 
 import java.security.SecureRandom;
+import java.time.Clock;
+import java.time.Duration;
 import java.time.Instant;
+import java.util.Objects;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
 
 /**
- * In-memory OTP manager with account binding, expiry, one-time use,
- * resend cooldown, and attempt limits.
- * Delivery is simulated (logged to System.out).
+ * Thread-safe in-memory OTP manager enforcing account binding, expiry,
+ * one-time consumption, resend cooldown, and failed-attempt limits.
+ * Delivery is simulated via stdout and surfaced for UI notification.
  */
 public class OtpService {
     public static final int OTP_EXPIRY_MINUTES = 5;
     public static final int RESEND_COOLDOWN_SECONDS = 60;
     public static final int MAX_ATTEMPTS = 5;
-    private static final int OTP_LENGTH = 6;
+    public static final int OTP_LENGTH = 6;
 
     private final SecureRandom random = new SecureRandom();
+    private final Clock clock;
     private final ConcurrentHashMap<String, OtpRecord> store = new ConcurrentHashMap<>();
 
+    public OtpService() {
+        this(Clock.systemUTC());
+    }
+
+    public OtpService(Clock clock) {
+        this.clock = Objects.requireNonNull(clock, "Clock must not be null");
+    }
+
     /**
-     * Generates a 6-digit OTP bound to the given userId, prints it as a simulated SMS,
-     * and returns the code. Enforces resend cooldown.
+     * Generates a 6-digit OTP bound to the given userId and prints a simulated SMS notice.
+     * Enforces resend cooldown regardless of whether the prior code was used or exhausted.
      *
-     * @param userId the account to issue the OTP for
-     * @return the generated OTP code
-     * @throws IllegalStateException if called within the resend cooldown window
+     * @param userId account identifier to bind the OTP to
+     * @return generated 6-digit OTP code
+     * @throws IllegalStateException if invoked within the resend cooldown window
      */
     public String generateOtp(String userId) {
         if (userId == null || userId.trim().isEmpty()) {
             throw new IllegalArgumentException("userId must not be null or empty");
         }
 
-        OtpRecord existing = store.get(userId);
-        if (existing != null && !existing.used) {
-            long secondsSinceIssue = Instant.now().getEpochSecond() - existing.createdAt.getEpochSecond();
-            if (secondsSinceIssue < RESEND_COOLDOWN_SECONDS) {
-                throw new IllegalStateException(
-                        "Resend cooldown active. Please wait " +
-                                (RESEND_COOLDOWN_SECONDS - secondsSinceIssue) + " seconds.");
+        final String boundUserId = userId.trim();
+        final Instant now = clock.instant();
+        final AtomicReference<String> issuedCode = new AtomicReference<>();
+
+        store.compute(boundUserId, (key, existing) -> {
+            if (existing != null) {
+                long secondsSinceIssue = Duration.between(existing.getCreatedAt(), now).getSeconds();
+                if (secondsSinceIssue < RESEND_COOLDOWN_SECONDS) {
+                    long waitSeconds = RESEND_COOLDOWN_SECONDS - Math.max(0L, secondsSinceIssue);
+                    throw new IllegalStateException(
+                            "Resend cooldown active. Please wait " + waitSeconds + " seconds.");
+                }
             }
-        }
+            String code = generateRandomCode();
+            issuedCode.set(code);
+            return new OtpRecord(code, boundUserId, now, false, 0);
+        });
 
-        String code = generateRandomCode();
-        OtpRecord record = new OtpRecord(code, userId, Instant.now(), false, 0);
-        store.put(userId, record);
-
-        System.out.println("[SIMULATED SMS] OTP for " + userId + ": " + code);
+        String code = issuedCode.get();
+        System.out.println("[SIMULATED SMS] OTP for " + boundUserId + ": " + code
+                + " (expires in " + OTP_EXPIRY_MINUTES + " minutes)");
         return code;
     }
 
     /**
-     * Verifies the supplied OTP code for the given userId.
+     * Atomically verifies an OTP code for the given account.
      * Rejects random/wrong codes, expired codes, already-used codes,
-     * codes bound to a different account, and codes after max attempts are exhausted.
-     *
-     * @param userId the account attempting verification
-     * @param code   the OTP code entered by the user
-     * @return true if the code is valid and consumed; false otherwise
+     * codes issued to another account, and records with exhausted attempts.
      */
     public boolean verifyOtp(String userId, String code) {
-        if (userId == null || code == null) {
+        if (userId == null || userId.trim().isEmpty() || code == null || code.trim().isEmpty()) {
             return false;
         }
 
-        OtpRecord record = store.get(userId);
-        if (record == null) {
-            return false;
-        }
+        final String boundUserId = userId.trim();
+        final String cleanCode = code.trim();
+        final Instant now = clock.instant();
+        final AtomicBoolean verified = new AtomicBoolean(false);
 
-        // Already used
-        if (record.used) {
-            return false;
-        }
-
-        // Attempts exhausted
-        if (record.failedAttempts >= MAX_ATTEMPTS) {
-            return false;
-        }
-
-        // Expired
-        long secondsElapsed = Instant.now().getEpochSecond() - record.createdAt.getEpochSecond();
-        if (secondsElapsed > OTP_EXPIRY_MINUTES * 60L) {
-            return false;
-        }
-
-        // Account binding — the record's userId must match
-        if (!record.userId.equals(userId)) {
-            return false;
-        }
-
-        // Code match
-        if (!record.code.equals(code)) {
-            // Wrong code — increment failed attempts
-            int newAttempts = record.failedAttempts + 1;
-            store.put(userId, new OtpRecord(
-                    record.code, record.userId, record.createdAt, record.used, newAttempts));
-            if (newAttempts >= MAX_ATTEMPTS) {
-                // Invalidate the record after max attempts
-                store.put(userId, new OtpRecord(
-                        record.code, record.userId, record.createdAt, true, newAttempts));
+        store.compute(boundUserId, (key, record) -> {
+            if (record == null || record.isUsed() || record.getFailedAttempts() >= MAX_ATTEMPTS) {
+                return record;
             }
-            return false;
+
+            if (Duration.between(record.getCreatedAt(), now).compareTo(Duration.ofMinutes(OTP_EXPIRY_MINUTES)) >= 0) {
+                return new OtpRecord(record.getCode(), record.getUserId(), record.getCreatedAt(),
+                        true, record.getFailedAttempts());
+            }
+
+            if (!record.getUserId().equals(boundUserId)) {
+                return record;
+            }
+
+            if (!record.getCode().equals(cleanCode)) {
+                int newAttempts = record.getFailedAttempts() + 1;
+                boolean exhausted = newAttempts >= MAX_ATTEMPTS;
+                return new OtpRecord(record.getCode(), record.getUserId(), record.getCreatedAt(),
+                        exhausted, newAttempts);
+            }
+
+            verified.set(true);
+            return new OtpRecord(record.getCode(), record.getUserId(), record.getCreatedAt(),
+                    true, record.getFailedAttempts());
+        });
+
+        return verified.get();
+    }
+
+    public int getRemainingAttempts(String userId) {
+        if (userId == null) {
+            return 0;
         }
-
-        // Success — mark as used (one-time use)
-        store.put(userId, new OtpRecord(
-                record.code, record.userId, record.createdAt, true, record.failedAttempts));
-        return true;
+        OtpRecord record = store.get(userId.trim());
+        if (record == null || record.isUsed()) {
+            return 0;
+        }
+        return Math.max(0, MAX_ATTEMPTS - record.getFailedAttempts());
     }
 
-    /**
-     * Returns the current OTP record for a userId (for testing purposes).
-     */
     public OtpRecord getRecord(String userId) {
-        return store.get(userId);
+        return userId == null ? null : store.get(userId.trim());
     }
 
-    /**
-     * Clears all OTP records (useful in tests).
-     */
+    public void invalidateOtp(String userId) {
+        if (userId == null || userId.trim().isEmpty()) {
+            return;
+        }
+        store.computeIfPresent(userId.trim(), (k, record) -> new OtpRecord(
+                record.getCode(), record.getUserId(), record.getCreatedAt(), true, record.getFailedAttempts()
+        ));
+    }
+
     public void clear() {
         store.clear();
     }
@@ -129,14 +147,12 @@ public class OtpService {
         return String.format("%0" + OTP_LENGTH + "d", code);
     }
 
-    // ---- inner record ----
-
-    public static class OtpRecord {
-        public final String code;
-        public final String userId;
-        public final Instant createdAt;
-        public final boolean used;
-        public final int failedAttempts;
+    public static final class OtpRecord {
+        private final String code;
+        private final String userId;
+        private final Instant createdAt;
+        private final boolean used;
+        private final int failedAttempts;
 
         public OtpRecord(String code, String userId, Instant createdAt, boolean used, int failedAttempts) {
             this.code = code;
@@ -144,6 +160,26 @@ public class OtpService {
             this.createdAt = createdAt;
             this.used = used;
             this.failedAttempts = failedAttempts;
+        }
+
+        public String getCode() {
+            return code;
+        }
+
+        public String getUserId() {
+            return userId;
+        }
+
+        public Instant getCreatedAt() {
+            return createdAt;
+        }
+
+        public boolean isUsed() {
+            return used;
+        }
+
+        public int getFailedAttempts() {
+            return failedAttempts;
         }
     }
 }
