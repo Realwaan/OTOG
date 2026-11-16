@@ -2,6 +2,8 @@
 setlocal
 pushd "%~dp0"
 
+if exist "C:\Program Files\Java\jdk-19\bin" set "PATH=C:\Program Files\Java\jdk-19\bin;%PATH%"
+
 call build.bat
 if %ERRORLEVEL% NEQ 0 (
     popd
