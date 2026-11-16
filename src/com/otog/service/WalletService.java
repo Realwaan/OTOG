@@ -31,6 +31,7 @@ public class WalletService implements WalletOperations {
     private final ConcurrentHashMap<String, ReentrantLock> walletLocks = new ConcurrentHashMap<>();
     private final AuthService authService;
     private final boolean requirePinAuthorization;
+    private BankApiClient bankApiClient;
     private final AdminActionRepository adminActionRepository;
     private final AdminService adminService;
 
@@ -43,6 +44,26 @@ public class WalletService implements WalletOperations {
                 new LedgerRepository(databaseManager),
                 null,
                 false);
+    }
+
+    public WalletService(DatabaseManager databaseManager, BankApiClient bankApiClient) {
+        this(databaseManager);
+        this.bankApiClient = bankApiClient != null ? bankApiClient : new BankApiClient();
+    }
+
+    public WalletService(DatabaseManager databaseManager, PaymentProviderFactory factory) {
+        this(databaseManager);
+        this.bankApiClient = factory != null ? factory.createBankApiClient() : new BankApiClient();
+    }
+
+    public WalletService(DatabaseManager databaseManager, AuthService authService, BankApiClient bankApiClient) {
+        this(databaseManager, authService);
+        this.bankApiClient = bankApiClient != null ? bankApiClient : new BankApiClient();
+    }
+
+    public WalletService(DatabaseManager databaseManager, AuthService authService, PaymentProviderFactory factory) {
+        this(databaseManager, authService);
+        this.bankApiClient = factory != null ? factory.createBankApiClient() : new BankApiClient();
     }
 
     public WalletService(DatabaseManager databaseManager, AuthService authService) {
@@ -82,6 +103,7 @@ public class WalletService implements WalletOperations {
         this.ledgerRepository = ledgerRepository;
         this.authService = authService;
         this.requirePinAuthorization = requirePinAuthorization;
+        this.bankApiClient = new BankApiClient();
         this.adminActionRepository = new AdminActionRepository(databaseManager);
         this.adminService = new AdminServiceImpl(databaseManager, this.userRepository,
                 this.walletRepository, this.transactionRepository, this.adminActionRepository,
@@ -94,6 +116,71 @@ public class WalletService implements WalletOperations {
 
     public AdminActionRepository getAdminActionRepository() {
         return adminActionRepository;
+    }
+
+    public BankApiClient getBankApiClient() {
+        return bankApiClient;
+    }
+
+    public void setBankApiClient(BankApiClient bankApiClient) {
+        this.bankApiClient = bankApiClient != null ? bankApiClient : new BankApiClient();
+    }
+
+    public void setPaymentProviderFactory(PaymentProviderFactory factory) {
+        this.bankApiClient = factory != null ? factory.createBankApiClient() : new BankApiClient();
+    }
+
+    @Override
+    public BankResponseStatus getCurrentProviderMode() {
+        if (bankApiClient != null && bankApiClient.getAdapter() instanceof MockBankAdapter mock) {
+            return mock.getMode();
+        }
+        return BankResponseStatus.SUCCESS;
+    }
+
+    public PaymentMethod linkPaymentMethod(PaymentMethod paymentMethod) {
+        if (paymentMethod == null) {
+            throw new IllegalArgumentException("Payment method cannot be null");
+        }
+        if (paymentMethod.getPaymentMethodId() == null) {
+            paymentMethod.setPaymentMethodId(IdGenerator.nextPaymentMethodId());
+        }
+        return paymentMethodRepository.save(paymentMethod);
+    }
+
+    public PaymentMethod linkPaymentMethod(String userId, PaymentMethodType type, String providerName,
+                                           String accountName, String accountNumber) {
+        if (userId == null || userId.trim().isEmpty() || type == null
+                || providerName == null || providerName.trim().isEmpty()) {
+            throw new IllegalArgumentException("User ID, payment method type, and provider name cannot be null or empty");
+        }
+        String pmId = IdGenerator.nextPaymentMethodId();
+        PaymentMethod pm = new PaymentMethod(pmId, userId, type, providerName, accountName, accountNumber);
+        List<PaymentMethod> existing = paymentMethodRepository.findByUserId(userId);
+        if (existing.isEmpty()) {
+            pm.setDefault(true);
+        }
+        return paymentMethodRepository.save(pm);
+    }
+
+    public List<PaymentMethod> seedDemoBankAccountsForUser(String userId) {
+        List<PaymentMethod> existing = paymentMethodRepository.findByUserId(userId);
+        if (!existing.isEmpty()) {
+            return existing;
+        }
+        List<PaymentMethod> list = new ArrayList<>();
+        list.add(linkPaymentMethod(userId, PaymentMethodType.BANK_ACCOUNT, "BDO Unibank", "Demo BDO Account", "•••• 1234"));
+        list.add(linkPaymentMethod(userId, PaymentMethodType.BANK_ACCOUNT, "Bank of the Philippine Islands (BPI)", "Demo BPI Account", "•••• 5678"));
+        list.add(linkPaymentMethod(userId, PaymentMethodType.BANK_ACCOUNT, "Metrobank", "Demo Metrobank Account", "•••• 9012"));
+        return list;
+    }
+
+    public List<PaymentMethod> getPaymentMethodsByUserId(String userId) {
+        return paymentMethodRepository.findByUserId(userId);
+    }
+
+    public Optional<PaymentMethod> getDefaultPaymentMethod(String userId) {
+        return paymentMethodRepository.findDefaultByUserId(userId);
     }
 
     public UserRepository getUserRepository() {
@@ -388,10 +475,14 @@ public class WalletService implements WalletOperations {
 
     /**
      * Executes an atomic Cash-In operation, crediting a wallet from a funding payment method.
+     * Credit cash-in only on confirmed success; unknown/timeout outcomes remain pending.
      */
     public Transaction cashIn(String referenceNumber, String targetWalletId, String paymentMethodId,
                               BigDecimal amount, String description) {
         validateReferenceNumber(referenceNumber);
+        if (targetWalletId == null || targetWalletId.trim().isEmpty()) {
+            throw new IllegalArgumentException("Target wallet ID must not be null or empty");
+        }
         BigDecimal validAmount = MoneyUtil.validatePositiveAmount(amount);
 
         ReentrantLock lock = getLock(targetWalletId);
@@ -412,36 +503,89 @@ public class WalletService implements WalletOperations {
                 }
 
                 PaymentMethod pm = null;
+                PaymentMethod bankPm = null;
+                String channel;
                 if (paymentMethodId != null) {
                     pm = paymentMethodRepository.findById(paymentMethodId, conn)
                             .orElseThrow(() -> new EntityNotFoundException("PaymentMethod", paymentMethodId));
+                    if (!pm.getUserId().equals(wallet.getUserId())) {
+                        throw new WalletException("Payment method does not belong to wallet owner: " + paymentMethodId);
+                    }
+                    if (pm.getStatus() != PaymentMethodStatus.ACTIVE) {
+                        throw new WalletException("Payment method is not active: " + pm.getStatus());
+                    }
+                    channel = (pm.getProviderName() != null) ? pm.getProviderName() : "Bank";
+                    bankPm = pm;
+                } else {
+                    String explicitChannel = resolveChannelFromDescription(description, "Cash In via ");
+                    if (explicitChannel != null) {
+                        channel = explicitChannel;
+                        bankPm = new PaymentMethod(null, wallet.getUserId(), PaymentMethodType.BANK_ACCOUNT,
+                                channel, wallet.getUserId(), "N/A");
+                    } else {
+                        pm = paymentMethodRepository.findDefaultByUserId(wallet.getUserId(), conn).orElse(null);
+                        if (pm != null && pm.getStatus() != PaymentMethodStatus.ACTIVE) {
+                            pm = null;
+                        }
+                        channel = (pm != null && pm.getProviderName() != null) ? pm.getProviderName() : "Bank";
+                        bankPm = pm;
+                    }
                 }
 
                 String txnId = IdGenerator.nextTransactionId();
-                String desc = description != null ? description :
-                        (pm != null ? "Cash In via " + pm.getProviderName() : "Cash In deposit");
+                String desc = description != null ? description : "Cash In via " + channel;
 
-                CashInOutTransaction txn = buildCashInOutTransaction(
-                        txnId, referenceNumber, targetWalletId, validAmount, MoneyUtil.ZERO, "CASH_IN", pm, desc);
-                transactionRepository.save(txn, conn);
+                BankApiResponse response = bankApiClient.cashIn(referenceNumber, bankPm, validAmount);
 
-                BigDecimal balanceBefore = wallet.getBalance();
-                BigDecimal balanceAfter = balanceBefore.add(validAmount)
-                        .setScale(MoneyUtil.DEFAULT_SCALE, MoneyUtil.DEFAULT_ROUNDING);
-                walletRepository.updateBalance(targetWalletId, balanceAfter, conn);
-
-                LedgerEntry creditEntry = new LedgerEntry(
-                        IdGenerator.nextLedgerEntryId(),
+                CashInOutTransaction txn = new CashInOutTransaction(
                         txnId,
+                        referenceNumber,
                         targetWalletId,
-                        LedgerEntryType.CREDIT,
                         validAmount,
-                        balanceBefore,
-                        balanceAfter,
-                        wallet.getCurrency(),
-                        desc
+                        MoneyUtil.ZERO,
+                        "CASH_IN",
+                        channel,
+                        response != null ? response.getProviderReference() : null
                 );
-                ledgerRepository.save(creditEntry, conn);
+                txn.setDescription(desc);
+                if (response != null && response.getStatus() != null) {
+                    txn.setProviderStatus(response.getStatus().name());
+                }
+
+                if (response != null && response.isSuccess()) {
+                    // Credit cash-in only on success
+                    txn.setStatus(TransactionStatus.COMPLETED);
+                    txn.setCompletedAt(LocalDateTime.now());
+                    transactionRepository.save(txn, conn);
+
+                    BigDecimal balanceBefore = wallet.getBalance();
+                    BigDecimal balanceAfter = balanceBefore.add(validAmount)
+                            .setScale(MoneyUtil.DEFAULT_SCALE, MoneyUtil.DEFAULT_ROUNDING);
+                    walletRepository.updateBalance(targetWalletId, balanceAfter, conn);
+                    wallet.setBalance(balanceAfter);
+
+                    LedgerEntry creditEntry = new LedgerEntry(
+                            IdGenerator.nextLedgerEntryId(),
+                            txnId,
+                            targetWalletId,
+                            LedgerEntryType.CREDIT,
+                            validAmount,
+                            balanceBefore,
+                            balanceAfter,
+                            wallet.getCurrency(),
+                            desc
+                    );
+                    ledgerRepository.save(creditEntry, conn);
+                } else if (response != null && response.isFailure()) {
+                    // Credit cash-in only on success; on confirmed failure, mark FAILED without crediting
+                    txn.setStatus(TransactionStatus.FAILED);
+                    txn.setCompletedAt(LocalDateTime.now());
+                    transactionRepository.save(txn, conn);
+                } else {
+                    // Timeout or unknown/pending outcomes stay pending without moving funds
+                    txn.setStatus(TransactionStatus.PENDING);
+                    transactionRepository.save(txn, conn);
+                }
 
                 return txn;
             });
@@ -452,10 +596,14 @@ public class WalletService implements WalletOperations {
 
     /**
      * Executes an atomic Cash-Out operation, debiting a wallet to a destination payment method.
+     * Reserves cash-out funds immediately until settlement, releasing them on confirmed failure.
      */
     public Transaction cashOut(String referenceNumber, String sourceWalletId, String paymentMethodId,
                                BigDecimal amount, BigDecimal fee, String description) {
         validateReferenceNumber(referenceNumber);
+        if (sourceWalletId == null || sourceWalletId.trim().isEmpty()) {
+            throw new IllegalArgumentException("Source wallet ID must not be null or empty");
+        }
         BigDecimal validAmount = MoneyUtil.validatePositiveAmount(amount);
         BigDecimal validFee = fee != null ? MoneyUtil.validateNonNegativeAmount(fee) : MoneyUtil.ZERO;
         BigDecimal totalDebit = validAmount.add(validFee).setScale(MoneyUtil.DEFAULT_SCALE, MoneyUtil.DEFAULT_ROUNDING);
@@ -488,23 +636,59 @@ public class WalletService implements WalletOperations {
                 }
 
                 PaymentMethod pm = null;
+                PaymentMethod bankPm = null;
+                String channel;
                 if (paymentMethodId != null) {
                     pm = paymentMethodRepository.findById(paymentMethodId, conn)
                             .orElseThrow(() -> new EntityNotFoundException("PaymentMethod", paymentMethodId));
+                    if (!pm.getUserId().equals(wallet.getUserId())) {
+                        throw new WalletException("Payment method does not belong to wallet owner: " + paymentMethodId);
+                    }
+                    if (pm.getStatus() != PaymentMethodStatus.ACTIVE) {
+                        throw new WalletException("Payment method is not active: " + pm.getStatus());
+                    }
+                    channel = (pm.getProviderName() != null) ? pm.getProviderName() : "Bank";
+                    bankPm = pm;
+                } else {
+                    String explicitChannel = resolveChannelFromDescription(description, "Cash Out to ");
+                    if (explicitChannel != null) {
+                        channel = explicitChannel;
+                        bankPm = new PaymentMethod(null, wallet.getUserId(), PaymentMethodType.BANK_ACCOUNT,
+                                channel, wallet.getUserId(), "N/A");
+                    } else {
+                        pm = paymentMethodRepository.findDefaultByUserId(wallet.getUserId(), conn).orElse(null);
+                        if (pm != null && pm.getStatus() != PaymentMethodStatus.ACTIVE) {
+                            pm = null;
+                        }
+                        channel = (pm != null && pm.getProviderName() != null) ? pm.getProviderName() : "Bank";
+                        bankPm = pm;
+                    }
                 }
 
                 String txnId = IdGenerator.nextTransactionId();
-                String desc = description != null ? description :
-                        (pm != null ? "Cash Out to " + pm.getProviderName() : "Cash Out withdrawal");
+                String desc = description != null ? description : "Cash Out to " + channel;
 
-                CashInOutTransaction txn = buildCashInOutTransaction(
-                        txnId, referenceNumber, sourceWalletId, validAmount, validFee, "CASH_OUT", pm, desc);
+                CashInOutTransaction txn = new CashInOutTransaction(
+                        txnId,
+                        referenceNumber,
+                        sourceWalletId,
+                        validAmount,
+                        validFee,
+                        "CASH_OUT",
+                        channel,
+                        null
+                );
+                txn.setDescription(desc);
+                txn.setStatus(TransactionStatus.PENDING);
                 transactionRepository.save(txn, conn);
 
-                BigDecimal balanceAfter = balance.subtract(totalDebit)
+                // Reserve cash-out funds until settlement, releasing them on confirmed failure
+                BigDecimal balanceAfterReserve = balance.subtract(totalDebit)
                         .setScale(MoneyUtil.DEFAULT_SCALE, MoneyUtil.DEFAULT_ROUNDING);
-                walletRepository.updateBalance(sourceWalletId, balanceAfter, conn);
+                walletRepository.updateBalance(sourceWalletId, balanceAfterReserve, conn);
+                wallet.setBalance(balanceAfterReserve);
 
+                String reserveDesc = desc + " (reserved funds" + (validFee.compareTo(BigDecimal.ZERO) > 0 ? " including fee " + validFee : "") + ")";
                 LedgerEntry debitEntry = new LedgerEntry(
                         IdGenerator.nextLedgerEntryId(),
                         txnId,
@@ -512,13 +696,222 @@ public class WalletService implements WalletOperations {
                         LedgerEntryType.DEBIT,
                         totalDebit,
                         balance,
-                        balanceAfter,
+                        balanceAfterReserve,
                         wallet.getCurrency(),
-                        desc
+                        reserveDesc
                 );
                 ledgerRepository.save(debitEntry, conn);
 
+                BankApiResponse response = bankApiClient.cashOut(referenceNumber, bankPm, validAmount);
+
+                if (response != null) {
+                    txn.setProviderReference(response.getProviderReference());
+                    if (response.getStatus() != null) {
+                        txn.setProviderStatus(response.getStatus().name());
+                    }
+                }
+
+                if (response != null && response.isSuccess()) {
+                    // Confirmed settlement: funds remain debited/reserved
+                    txn.setStatus(TransactionStatus.COMPLETED);
+                    txn.setCompletedAt(LocalDateTime.now());
+                    transactionRepository.updateStatus(txnId, TransactionStatus.COMPLETED,
+                            txn.getProviderReference(), txn.getProviderStatus(), txn.getCompletedAt(), conn);
+                } else if (response != null && response.isFailure()) {
+                    // Confirmed failure: release reserved funds back to wallet balance
+                    BigDecimal balanceBeforeRefund = balanceAfterReserve;
+                    BigDecimal balanceAfterRefund = balanceBeforeRefund.add(totalDebit)
+                            .setScale(MoneyUtil.DEFAULT_SCALE, MoneyUtil.DEFAULT_ROUNDING);
+                    walletRepository.updateBalance(sourceWalletId, balanceAfterRefund, conn);
+                    wallet.setBalance(balanceAfterRefund);
+
+                    LedgerEntry refundEntry = new LedgerEntry(
+                            IdGenerator.nextLedgerEntryId(),
+                            txnId,
+                            sourceWalletId,
+                            LedgerEntryType.CREDIT,
+                            totalDebit,
+                            balanceBeforeRefund,
+                            balanceAfterRefund,
+                            wallet.getCurrency(),
+                            "Cash Out failed - released reserved funds"
+                    );
+                    ledgerRepository.save(refundEntry, conn);
+
+                    txn.setStatus(TransactionStatus.FAILED);
+                    txn.setCompletedAt(LocalDateTime.now());
+                    transactionRepository.updateStatus(txnId, TransactionStatus.FAILED,
+                            txn.getProviderReference(), txn.getProviderStatus(), txn.getCompletedAt(), conn);
+                } else {
+                    // Timeout or unknown/pending: stays pending and funds remain reserved
+                    txn.setStatus(TransactionStatus.PENDING);
+                    transactionRepository.updateStatus(txnId, TransactionStatus.PENDING,
+                            txn.getProviderReference(), txn.getProviderStatus(), null, conn);
+                }
+
                 return txn;
+            });
+        } finally {
+            lock.unlock();
+        }
+    }
+
+    /**
+     * Looks up provider status for a pending transaction and applies deterministic settlement or release.
+     * Repeated provider responses never duplicate money movement.
+     */
+    public Transaction statusLookup(String referenceNumber) {
+        return applyProviderResponse(referenceNumber, null);
+    }
+
+    public Transaction queryTransactionStatus(String referenceNumber) {
+        return statusLookup(referenceNumber);
+    }
+
+    public Transaction syncStatus(String referenceNumber) {
+        return statusLookup(referenceNumber);
+    }
+
+    public Transaction handleProviderResponse(String referenceNumber, BankApiResponse response) {
+        if (response == null) {
+            throw new IllegalArgumentException("Bank response cannot be null");
+        }
+        return applyProviderResponse(referenceNumber, response);
+    }
+
+    private Transaction applyProviderResponse(String referenceNumber, BankApiResponse directResponse) {
+        validateReferenceNumber(referenceNumber);
+
+        Transaction existingTxn = transactionRepository.findByReferenceNumber(referenceNumber)
+                .orElseThrow(() -> new EntityNotFoundException("Transaction with reference", referenceNumber));
+
+        if (existingTxn.getType() != TransactionType.CASH_IN && existingTxn.getType() != TransactionType.CASH_OUT) {
+            throw new WalletException("Bank status lookup is only supported for CASH_IN and CASH_OUT transactions: "
+                    + existingTxn.getType());
+        }
+
+        // Repeated provider responses never duplicate money movement
+        if (existingTxn.getStatus() == TransactionStatus.COMPLETED || existingTxn.getStatus() == TransactionStatus.FAILED) {
+            return existingTxn;
+        }
+
+        String walletId = existingTxn.getType() == TransactionType.CASH_IN
+                ? existingTxn.getTargetWalletId()
+                : existingTxn.getSourceWalletId();
+
+        if (walletId == null) {
+            return existingTxn;
+        }
+
+        ReentrantLock lock = getLock(walletId);
+        lock.lock();
+        try {
+            return databaseManager.executeInTransaction(conn -> {
+                Transaction currentTxn = transactionRepository.findByReferenceNumber(referenceNumber, conn)
+                        .orElseThrow(() -> new EntityNotFoundException("Transaction with reference", referenceNumber));
+
+                // Re-check after acquiring lock and transaction boundary
+                if (currentTxn.getStatus() == TransactionStatus.COMPLETED || currentTxn.getStatus() == TransactionStatus.FAILED) {
+                    return currentTxn;
+                }
+
+                BankApiResponse response = directResponse != null
+                        ? directResponse
+                        : bankApiClient.checkStatus(referenceNumber, currentTxn.getProviderReference());
+
+                if (response == null) {
+                    return currentTxn;
+                }
+
+                if (response.getProviderReference() != null) {
+                    currentTxn.setProviderReference(response.getProviderReference());
+                }
+                if (response.getStatus() != null) {
+                    currentTxn.setProviderStatus(response.getStatus().name());
+                }
+
+                if (currentTxn.getType() == TransactionType.CASH_IN) {
+                    if (response.isSuccess()) {
+                        Wallet wallet = walletRepository.findById(currentTxn.getTargetWalletId(), conn)
+                                .orElseThrow(() -> new EntityNotFoundException("Wallet", currentTxn.getTargetWalletId()));
+
+                        BigDecimal balanceBefore = wallet.getBalance();
+                        BigDecimal balanceAfter = balanceBefore.add(currentTxn.getAmount())
+                                .setScale(MoneyUtil.DEFAULT_SCALE, MoneyUtil.DEFAULT_ROUNDING);
+                        walletRepository.updateBalance(wallet.getWalletId(), balanceAfter, conn);
+                        wallet.setBalance(balanceAfter);
+
+                        LedgerEntry creditEntry = new LedgerEntry(
+                                IdGenerator.nextLedgerEntryId(),
+                                currentTxn.getTransactionId(),
+                                wallet.getWalletId(),
+                                LedgerEntryType.CREDIT,
+                                currentTxn.getAmount(),
+                                balanceBefore,
+                                balanceAfter,
+                                wallet.getCurrency(),
+                                "Settled Cash In: " + currentTxn.getDescription()
+                        );
+                        ledgerRepository.save(creditEntry, conn);
+
+                        currentTxn.setStatus(TransactionStatus.COMPLETED);
+                        currentTxn.setCompletedAt(LocalDateTime.now());
+                        transactionRepository.updateStatus(currentTxn.getTransactionId(), TransactionStatus.COMPLETED,
+                                currentTxn.getProviderReference(), currentTxn.getProviderStatus(), currentTxn.getCompletedAt(), conn);
+                    } else if (response.isFailure()) {
+                        // Credit cash-in only on success; failed cash-in does not credit wallet
+                        currentTxn.setStatus(TransactionStatus.FAILED);
+                        currentTxn.setCompletedAt(LocalDateTime.now());
+                        transactionRepository.updateStatus(currentTxn.getTransactionId(), TransactionStatus.FAILED,
+                                currentTxn.getProviderReference(), currentTxn.getProviderStatus(), currentTxn.getCompletedAt(), conn);
+                    } else {
+                        // Unknown / pending / timeout outcomes stay pending
+                        transactionRepository.updateStatus(currentTxn.getTransactionId(), TransactionStatus.PENDING,
+                                currentTxn.getProviderReference(), currentTxn.getProviderStatus(), null, conn);
+                    }
+                } else if (currentTxn.getType() == TransactionType.CASH_OUT) {
+                    if (response.isSuccess()) {
+                        // Confirmed settlement: funds were already reserved
+                        currentTxn.setStatus(TransactionStatus.COMPLETED);
+                        currentTxn.setCompletedAt(LocalDateTime.now());
+                        transactionRepository.updateStatus(currentTxn.getTransactionId(), TransactionStatus.COMPLETED,
+                                currentTxn.getProviderReference(), currentTxn.getProviderStatus(), currentTxn.getCompletedAt(), conn);
+                    } else if (response.isFailure()) {
+                        // Confirmed failure: release reserved funds back to source wallet
+                        Wallet wallet = walletRepository.findById(currentTxn.getSourceWalletId(), conn)
+                                .orElseThrow(() -> new EntityNotFoundException("Wallet", currentTxn.getSourceWalletId()));
+
+                        BigDecimal balanceBefore = wallet.getBalance();
+                        BigDecimal balanceAfter = balanceBefore.add(currentTxn.getTotalAmount())
+                                .setScale(MoneyUtil.DEFAULT_SCALE, MoneyUtil.DEFAULT_ROUNDING);
+                        walletRepository.updateBalance(wallet.getWalletId(), balanceAfter, conn);
+                        wallet.setBalance(balanceAfter);
+
+                        LedgerEntry releaseEntry = new LedgerEntry(
+                                IdGenerator.nextLedgerEntryId(),
+                                currentTxn.getTransactionId(),
+                                wallet.getWalletId(),
+                                LedgerEntryType.CREDIT,
+                                currentTxn.getTotalAmount(),
+                                balanceBefore,
+                                balanceAfter,
+                                wallet.getCurrency(),
+                                "Cash Out failed - released reserved funds"
+                        );
+                        ledgerRepository.save(releaseEntry, conn);
+
+                        currentTxn.setStatus(TransactionStatus.FAILED);
+                        currentTxn.setCompletedAt(LocalDateTime.now());
+                        transactionRepository.updateStatus(currentTxn.getTransactionId(), TransactionStatus.FAILED,
+                                currentTxn.getProviderReference(), currentTxn.getProviderStatus(), currentTxn.getCompletedAt(), conn);
+                    } else {
+                        // Unknown / pending / timeout outcomes stay pending; funds remain reserved
+                        transactionRepository.updateStatus(currentTxn.getTransactionId(), TransactionStatus.PENDING,
+                                currentTxn.getProviderReference(), currentTxn.getProviderStatus(), null, conn);
+                    }
+                }
+
+                return currentTxn;
             });
         } finally {
             lock.unlock();
@@ -690,6 +1083,25 @@ public class WalletService implements WalletOperations {
         txn.setDescription(desc);
         txn.execute();
         return txn;
+    }
+
+    private String resolveChannelFromDescription(String description, String prefix) {
+        if (description == null || description.trim().isEmpty()) {
+            return null;
+        }
+        String trimmed = description.trim();
+        if (trimmed.startsWith(prefix)) {
+            String rest = trimmed.substring(prefix.length()).trim();
+            int dashIdx = rest.indexOf(" - ");
+            String candidate = dashIdx >= 0 ? rest.substring(0, dashIdx).trim() : rest;
+            return candidate.isEmpty() ? null : candidate;
+        }
+        int dashIdx = trimmed.indexOf(" - ");
+        if (dashIdx > 0) {
+            String candidate = trimmed.substring(0, dashIdx).trim();
+            return candidate.isEmpty() ? null : candidate;
+        }
+        return null;
     }
 
     private void validateReferenceNumber(String ref) {

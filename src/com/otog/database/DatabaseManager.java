@@ -122,6 +122,9 @@ public class DatabaseManager implements AutoCloseable {
                         "description TEXT, " +
                         "created_at TEXT NOT NULL, " +
                         "completed_at TEXT, " +
+                        "provider_reference TEXT, " +
+                        "provider_status TEXT, " +
+                        "channel TEXT, " +
                         "FOREIGN KEY (source_wallet_id) REFERENCES wallets(wallet_id), " +
                         "FOREIGN KEY (target_wallet_id) REFERENCES wallets(wallet_id));",
 
@@ -179,7 +182,9 @@ public class DatabaseManager implements AutoCloseable {
                 stmt.execute(ddl);
             }
             ensureCredentialPinColumns(conn);
+            ensureTransactionColumns(conn);
             seedDefaultAdmin(conn);
+            seedDemoPaymentMethods(conn);
         } catch (SQLException e) {
             throw new OtogException("Failed to initialize database schema", e);
         }
@@ -212,6 +217,96 @@ public class DatabaseManager implements AutoCloseable {
             if (!hasPinFailedAttempts) {
                 stmt.execute("ALTER TABLE credentials ADD COLUMN pin_failed_attempts INTEGER NOT NULL DEFAULT 0");
             }
+        }
+    }
+
+    private void ensureTransactionColumns(Connection conn) throws SQLException {
+        boolean hasProviderRef = false;
+        boolean hasProviderStatus = false;
+        boolean hasChannel = false;
+        try (Statement stmt = conn.createStatement();
+             ResultSet rs = stmt.executeQuery("PRAGMA table_info(transactions)")) {
+            while (rs.next()) {
+                String col = rs.getString("name");
+                if ("provider_reference".equalsIgnoreCase(col)) {
+                    hasProviderRef = true;
+                } else if ("provider_status".equalsIgnoreCase(col)) {
+                    hasProviderStatus = true;
+                } else if ("channel".equalsIgnoreCase(col)) {
+                    hasChannel = true;
+                }
+            }
+        }
+        try (Statement stmt = conn.createStatement()) {
+            if (!hasProviderRef) {
+                stmt.execute("ALTER TABLE transactions ADD COLUMN provider_reference TEXT");
+            }
+            if (!hasProviderStatus) {
+                stmt.execute("ALTER TABLE transactions ADD COLUMN provider_status TEXT");
+            }
+            if (!hasChannel) {
+                stmt.execute("ALTER TABLE transactions ADD COLUMN channel TEXT");
+            }
+        }
+    }
+
+    private void seedDemoPaymentMethods(Connection conn) {
+        String checkSql = "SELECT payment_method_id FROM payment_methods WHERE user_id = 'USR-ADMIN-01'";
+        try (Statement stmt = conn.createStatement();
+             ResultSet rs = stmt.executeQuery(checkSql)) {
+            if (!rs.next()) {
+                String now = java.time.LocalDateTime.now().toString();
+                String insertBdo = "INSERT INTO payment_methods (payment_method_id, user_id, type, provider_name, account_name, account_number, is_default, status, created_at) " +
+                        "VALUES ('PM-DEMO-BDO', 'USR-ADMIN-01', 'BANK_ACCOUNT', 'BDO Unibank', 'Admin BDO Demo', '•••• 1234', 1, 'ACTIVE', '" + now + "')";
+                stmt.executeUpdate(insertBdo);
+
+                String insertBpi = "INSERT INTO payment_methods (payment_method_id, user_id, type, provider_name, account_name, account_number, is_default, status, created_at) " +
+                        "VALUES ('PM-DEMO-BPI', 'USR-ADMIN-01', 'BANK_ACCOUNT', 'Bank of the Philippine Islands (BPI)', 'Admin BPI Demo', '•••• 5678', 0, 'ACTIVE', '" + now + "')";
+                stmt.executeUpdate(insertBpi);
+
+                String insertMetro = "INSERT INTO payment_methods (payment_method_id, user_id, type, provider_name, account_name, account_number, is_default, status, created_at) " +
+                        "VALUES ('PM-DEMO-METRO', 'USR-ADMIN-01', 'BANK_ACCOUNT', 'Metrobank', 'Admin Metrobank Demo', '•••• 9012', 0, 'ACTIVE', '" + now + "')";
+                stmt.executeUpdate(insertMetro);
+            }
+        } catch (SQLException e) {
+            // Seed failure should not crash if already populated concurrently
+        }
+
+        // Backfill demo bank methods for any pre-existing users lacking payment methods
+        String missingUsersSql = "SELECT u.user_id, u.name FROM users u " +
+                "WHERE NOT EXISTS (SELECT 1 FROM payment_methods pm WHERE pm.user_id = u.user_id)";
+        String insertSql = "INSERT INTO payment_methods (payment_method_id, user_id, type, provider_name, " +
+                "account_name, account_number, is_default, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)";
+        try (Statement stmt = conn.createStatement();
+             ResultSet rs = stmt.executeQuery(missingUsersSql);
+             java.sql.PreparedStatement ps = conn.prepareStatement(insertSql)) {
+            String now = java.time.LocalDateTime.now().toString();
+            while (rs.next()) {
+                String uid = rs.getString("user_id");
+                String uname = rs.getString("name");
+                String displayName = (uname != null && !uname.trim().isEmpty()) ? uname.trim() : "Demo User";
+
+                Object[][] demos = {
+                        {com.otog.util.IdGenerator.nextPaymentMethodId(), "BDO Unibank", displayName + " BDO Demo", "•••• 1234", 1},
+                        {com.otog.util.IdGenerator.nextPaymentMethodId(), "Bank of the Philippine Islands (BPI)", displayName + " BPI Demo", "•••• 5678", 0},
+                        {com.otog.util.IdGenerator.nextPaymentMethodId(), "Metrobank", displayName + " Metrobank Demo", "•••• 9012", 0}
+                };
+                for (Object[] row : demos) {
+                    ps.setString(1, (String) row[0]);
+                    ps.setString(2, uid);
+                    ps.setString(3, "BANK_ACCOUNT");
+                    ps.setString(4, (String) row[1]);
+                    ps.setString(5, (String) row[2]);
+                    ps.setString(6, (String) row[3]);
+                    ps.setInt(7, (Integer) row[4]);
+                    ps.setString(8, "ACTIVE");
+                    ps.setString(9, now);
+                    ps.addBatch();
+                }
+            }
+            ps.executeBatch();
+        } catch (SQLException e) {
+            // Seed failure should not crash if already populated concurrently
         }
     }
 
