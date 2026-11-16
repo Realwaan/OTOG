@@ -20,9 +20,15 @@ public interface WalletOperations {
     Transaction transfer(String referenceNumber, String sourceWalletId, String targetWalletId,
                          BigDecimal amount, BigDecimal fee, String description);
 
+    Transaction transferWithPin(String referenceNumber, String sourceWalletId, String targetWalletId,
+                                BigDecimal amount, BigDecimal fee, String description, String rawPin);
+
     Transaction cashIn(String referenceNumber, String targetWalletId, String paymentMethodId,
                        BigDecimal amount, String description);
 
     Transaction cashOut(String referenceNumber, String sourceWalletId, String paymentMethodId,
                         BigDecimal amount, BigDecimal fee, String description);
+
+    Transaction cashOutWithPin(String referenceNumber, String sourceWalletId, String paymentMethodId,
+                               BigDecimal amount, BigDecimal fee, String description, String rawPin);
 }

@@ -153,6 +153,9 @@ public class DatabaseManager implements AutoCloseable {
                         "salt TEXT NOT NULL, " +
                         "failed_attempts INTEGER NOT NULL DEFAULT 0, " +
                         "locked_until TEXT, " +
+                        "pin_hash TEXT, " +
+                        "pin_salt TEXT, " +
+                        "pin_failed_attempts INTEGER NOT NULL DEFAULT 0, " +
                         "updated_at TEXT NOT NULL, " +
                         "FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE CASCADE);",
                 "CREATE INDEX IF NOT EXISTS idx_cred_user ON credentials(user_id);"
@@ -163,9 +166,40 @@ public class DatabaseManager implements AutoCloseable {
             for (String ddl : ddlStatements) {
                 stmt.execute(ddl);
             }
+            ensureCredentialPinColumns(conn);
             seedDefaultAdmin(conn);
         } catch (SQLException e) {
             throw new OtogException("Failed to initialize database schema", e);
+        }
+    }
+
+    private void ensureCredentialPinColumns(Connection conn) throws SQLException {
+        boolean hasPinHash = false;
+        boolean hasPinSalt = false;
+        boolean hasPinFailedAttempts = false;
+        try (Statement stmt = conn.createStatement();
+             ResultSet rs = stmt.executeQuery("PRAGMA table_info(credentials)")) {
+            while (rs.next()) {
+                String col = rs.getString("name");
+                if ("pin_hash".equalsIgnoreCase(col)) {
+                    hasPinHash = true;
+                } else if ("pin_salt".equalsIgnoreCase(col)) {
+                    hasPinSalt = true;
+                } else if ("pin_failed_attempts".equalsIgnoreCase(col)) {
+                    hasPinFailedAttempts = true;
+                }
+            }
+        }
+        try (Statement stmt = conn.createStatement()) {
+            if (!hasPinHash) {
+                stmt.execute("ALTER TABLE credentials ADD COLUMN pin_hash TEXT");
+            }
+            if (!hasPinSalt) {
+                stmt.execute("ALTER TABLE credentials ADD COLUMN pin_salt TEXT");
+            }
+            if (!hasPinFailedAttempts) {
+                stmt.execute("ALTER TABLE credentials ADD COLUMN pin_failed_attempts INTEGER NOT NULL DEFAULT 0");
+            }
         }
     }
 

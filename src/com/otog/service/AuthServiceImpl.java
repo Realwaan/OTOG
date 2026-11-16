@@ -14,9 +14,7 @@ import com.otog.util.MoneyUtil;
 import com.otog.util.PasswordUtil;
 
 import java.time.LocalDateTime;
-import java.util.Map;
 import java.util.Optional;
-import java.util.concurrent.ConcurrentHashMap;
 
 public class AuthServiceImpl implements AuthService {
     public static final int MAX_FAILED_ATTEMPTS = 5;
@@ -25,24 +23,37 @@ public class AuthServiceImpl implements AuthService {
     private final UserRepository userRepository;
     private final CredentialRepository credentialRepository;
     private final WalletService walletService;
-
-    private final Map<String, String> activeOtps = new ConcurrentHashMap<>();
+    private final OtpService otpService;
 
     public AuthServiceImpl(DatabaseManager databaseManager) {
+        this(databaseManager, new OtpService());
+    }
+
+    public AuthServiceImpl(DatabaseManager databaseManager, OtpService otpService) {
         this.databaseManager = databaseManager;
         this.userRepository = new UserRepository(databaseManager);
         this.credentialRepository = new CredentialRepository(databaseManager);
-        this.walletService = new WalletService(databaseManager);
+        this.walletService = new WalletService(databaseManager, this);
+        this.otpService = otpService != null ? otpService : new OtpService();
     }
 
     public AuthServiceImpl(DatabaseManager databaseManager,
                            UserRepository userRepository,
                            CredentialRepository credentialRepository,
                            WalletService walletService) {
+        this(databaseManager, userRepository, credentialRepository, walletService, new OtpService());
+    }
+
+    public AuthServiceImpl(DatabaseManager databaseManager,
+                           UserRepository userRepository,
+                           CredentialRepository credentialRepository,
+                           WalletService walletService,
+                           OtpService otpService) {
         this.databaseManager = databaseManager;
         this.userRepository = userRepository;
         this.credentialRepository = credentialRepository;
         this.walletService = walletService;
+        this.otpService = otpService != null ? otpService : new OtpService();
     }
 
     public static String normalizeMobile(String raw) {
@@ -147,42 +158,137 @@ public class AuthServiceImpl implements AuthService {
 
     @Override
     public String issueTwoFactorOtp(String userId) {
-        int otp = 100000 + (int) (Math.random() * 900000);
-        String code = String.valueOf(otp);
-        if (userId != null) {
-            activeOtps.put(userId, code);
+        if (userId == null || userId.trim().isEmpty()) {
+            throw new IllegalArgumentException("User ID must not be empty.");
         }
-        return code;
+        return otpService.generateOtp(userId.trim());
     }
 
     @Override
     public boolean verifyTwoFactorOtp(String userId, String otpCode) {
-        if (otpCode == null || otpCode.trim().isEmpty()) {
+        if (userId == null || userId.trim().isEmpty()) {
             return false;
         }
-        String cleanCode = otpCode.trim();
-        // Standard test/baseline fallback code
-        if ("123456".equals(cleanCode)) {
-            return true;
+        return otpService.verifyOtp(userId.trim(), otpCode);
+    }
+
+    @Override
+    public boolean hasPin(String userId) {
+        if (userId == null || userId.trim().isEmpty()) {
+            return false;
         }
-        if (userId != null && cleanCode.equals(activeOtps.get(userId))) {
-            activeOtps.remove(userId);
-            return true;
+        return credentialRepository.findByUserId(userId.trim())
+                .map(Credential::hasPin)
+                .orElse(false);
+    }
+
+    @Override
+    public void setPin(String userId, String currentPassword, String newPin) {
+        if (userId == null || userId.trim().isEmpty()) {
+            throw new OtogException("User ID is required to set a transaction PIN.");
         }
-        return false;
+        String cleanUserId = userId.trim();
+        SessionManager session = SessionManager.getInstance();
+        session.requireActiveSessionFor(cleanUserId);
+
+        if (currentPassword == null || currentPassword.isEmpty()) {
+            throw new OtogException("Current password is required to set a transaction PIN.");
+        }
+        String validPin = validatePinFormat(newPin);
+
+        Credential cred = credentialRepository.findByUserId(cleanUserId)
+                .orElseThrow(() -> new OtogException("Credentials not found for user: " + cleanUserId));
+        if (!PasswordUtil.verifyPassword(currentPassword, cred.getSalt(), cred.getPasswordHash())) {
+            throw new OtogException("Reauthentication failed: current password is incorrect.");
+        }
+
+        String pinSalt = PasswordUtil.generateSalt();
+        String pinHash = PasswordUtil.hashPassword(validPin, pinSalt);
+        credentialRepository.updatePin(cleanUserId, pinHash, pinSalt);
+        session.resetPinAttempts();
+        session.touchActivity();
+    }
+
+    @Override
+    public void changePin(String userId, String currentPin, String newPin) {
+        if (userId == null || userId.trim().isEmpty()) {
+            throw new OtogException("User ID is required to change a transaction PIN.");
+        }
+        String cleanUserId = userId.trim();
+        SessionManager session = SessionManager.getInstance();
+        session.requireActiveSessionFor(cleanUserId);
+
+        if (!hasPin(cleanUserId)) {
+            throw new OtogException("No transaction PIN is set. Please set a PIN first.");
+        }
+        String validNewPin = validatePinFormat(newPin);
+
+        if (!verifyPin(cleanUserId, currentPin)) {
+            throw new OtogException("Reauthentication failed: current transaction PIN is incorrect.");
+        }
+        if (validNewPin.equals(currentPin)) {
+            throw new OtogException("New transaction PIN must be different from the current PIN.");
+        }
+
+        String pinSalt = PasswordUtil.generateSalt();
+        String pinHash = PasswordUtil.hashPassword(validNewPin, pinSalt);
+        credentialRepository.updatePin(cleanUserId, pinHash, pinSalt);
+        session.resetPinAttempts();
+        session.touchActivity();
     }
 
     @Override
     public boolean verifyPin(String userId, String rawPin) {
-        return rawPin != null && rawPin.trim().length() >= 4;
+        if (userId == null || userId.trim().isEmpty()) {
+            return false;
+        }
+        String cleanUserId = userId.trim();
+        SessionManager session = SessionManager.getInstance();
+        session.requireActiveSessionFor(cleanUserId);
+
+        Credential cred = credentialRepository.findByUserId(cleanUserId)
+                .orElseThrow(() -> new OtogException("Credentials not found for user: " + cleanUserId));
+        if (!cred.hasPin()) {
+            throw new SecurityException("Transaction PIN is not set. Please set a PIN before authorizing payments.");
+        }
+        if (cred.getPinFailedAttempts() >= SessionManager.MAX_PIN_ATTEMPTS || session.isLockedOutByPin()) {
+            throw new SecurityException("Transaction PIN is locked due to too many failed attempts.");
+        }
+
+        boolean matches = rawPin != null
+                && !rawPin.isEmpty()
+                && PasswordUtil.verifyPassword(rawPin, cred.getPinSalt(), cred.getPinHash());
+        if (matches) {
+            credentialRepository.resetPinFailedAttempts(cleanUserId);
+            session.markPinVerified();
+            return true;
+        }
+
+        int dbFailedAttempts = credentialRepository.recordPinFailedAttempt(cleanUserId);
+        boolean sessionLocked = session.recordFailedPinAttempt();
+        if (dbFailedAttempts >= SessionManager.MAX_PIN_ATTEMPTS && !sessionLocked) {
+            session.lockOutByPin();
+        }
+        return false;
+    }
+
+    private String validatePinFormat(String rawPin) {
+        if (rawPin == null || !rawPin.matches("^[0-9]{4,6}$")) {
+            throw new OtogException("Transaction PIN must be 4 to 6 numeric digits.");
+        }
+        return rawPin;
     }
 
     @Override
     public void logout(String userId) {
         SessionManager.getInstance().logout();
-        if (userId != null) {
-            activeOtps.remove(userId);
+        if (userId != null && !userId.trim().isEmpty()) {
+            otpService.invalidateOtp(userId.trim());
         }
+    }
+
+    public OtpService getOtpService() {
+        return otpService;
     }
 
     public UserRepository getUserRepository() {

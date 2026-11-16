@@ -3,8 +3,10 @@ package com.otog;
 import com.otog.service.AuthService;
 import com.otog.service.InvestmentService;
 import com.otog.service.LoanService;
+import com.otog.service.SessionManager;
 import com.otog.service.WalletOperations;
 import com.otog.service.WalletService;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 
 import javax.swing.*;
@@ -19,6 +21,11 @@ import static org.junit.jupiter.api.Assertions.*;
  * - Shared service contracts are present and implemented by WalletService.
  */
 public class BaselineReproducibilityTest {
+
+    @AfterEach
+    void resetSession() {
+        SessionManager.getInstance().reset();
+    }
 
     @Test
     void testUserLoginFormInitializesWithoutBytecodeInstrumentation() throws Exception {
@@ -72,9 +79,22 @@ public class BaselineReproducibilityTest {
             assertFalse(pnlPassword.isVisible(), "Valid login must hide password panel");
             assertTrue(pnl2FA.isVisible(), "Valid login must show 2FA panel");
 
+            JLabel headerLabel = (JLabel) loginClass.getMethod("getTwoFactorHeaderLabel").invoke(instance);
+            assertNotNull(headerLabel);
+            assertTrue(headerLabel.getText().contains("Simulated SMS"),
+                    "OTP prompt must label delivery as simulated");
+            String issuedOtp = (String) loginClass.getMethod("getLastIssuedOtp").invoke(instance);
+            assertNotNull(issuedOtp, "Simulated OTP must be issued on login");
+            String wrongCode = "123456".equals(issuedOtp) ? "654321" : "123456";
+
             assertFalse((Boolean) verifyTwoFactorCode.invoke(instance, ""));
             assertFalse((Boolean) verifyTwoFactorCode.invoke(instance, "   "));
-            assertTrue((Boolean) verifyTwoFactorCode.invoke(instance, "123456"));
+            assertFalse((Boolean) verifyTwoFactorCode.invoke(instance, wrongCode),
+                    "Hardcoded or random OTP must be rejected");
+            assertTrue((Boolean) verifyTwoFactorCode.invoke(instance, issuedOtp),
+                    "Issued OTP must succeed once");
+            assertFalse((Boolean) verifyTwoFactorCode.invoke(instance, issuedOtp),
+                    "Used OTP must be rejected on replay");
         } finally {
             if (instance instanceof JFrame frame) {
                 frame.dispose();

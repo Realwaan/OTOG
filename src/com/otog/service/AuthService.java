@@ -18,5 +18,11 @@ public interface AuthService {
 
     boolean verifyPin(String userId, String rawPin);
 
+    boolean hasPin(String userId);
+
+    void setPin(String userId, String currentPassword, String newPin);
+
+    void changePin(String userId, String currentPin, String newPin);
+
     void logout(String userId);
 }

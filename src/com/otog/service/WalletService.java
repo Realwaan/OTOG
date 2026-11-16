@@ -27,14 +27,29 @@ public class WalletService implements WalletOperations {
     private final LedgerRepository ledgerRepository;
 
     private final ConcurrentHashMap<String, ReentrantLock> walletLocks = new ConcurrentHashMap<>();
+    private final AuthService authService;
+    private final boolean requirePinAuthorization;
 
     public WalletService(DatabaseManager databaseManager) {
-        this.databaseManager = databaseManager;
-        this.userRepository = new UserRepository(databaseManager);
-        this.walletRepository = new WalletRepository(databaseManager);
-        this.paymentMethodRepository = new PaymentMethodRepository(databaseManager);
-        this.transactionRepository = new TransactionRepository(databaseManager);
-        this.ledgerRepository = new LedgerRepository(databaseManager);
+        this(databaseManager,
+                new UserRepository(databaseManager),
+                new WalletRepository(databaseManager),
+                new PaymentMethodRepository(databaseManager),
+                new TransactionRepository(databaseManager),
+                new LedgerRepository(databaseManager),
+                null,
+                false);
+    }
+
+    public WalletService(DatabaseManager databaseManager, AuthService authService) {
+        this(databaseManager,
+                new UserRepository(databaseManager),
+                new WalletRepository(databaseManager),
+                new PaymentMethodRepository(databaseManager),
+                new TransactionRepository(databaseManager),
+                new LedgerRepository(databaseManager),
+                authService,
+                true);
     }
 
     public WalletService(DatabaseManager databaseManager,
@@ -43,12 +58,26 @@ public class WalletService implements WalletOperations {
                          PaymentMethodRepository paymentMethodRepository,
                          TransactionRepository transactionRepository,
                          LedgerRepository ledgerRepository) {
+        this(databaseManager, userRepository, walletRepository, paymentMethodRepository,
+                transactionRepository, ledgerRepository, null, false);
+    }
+
+    public WalletService(DatabaseManager databaseManager,
+                         UserRepository userRepository,
+                         WalletRepository walletRepository,
+                         PaymentMethodRepository paymentMethodRepository,
+                         TransactionRepository transactionRepository,
+                         LedgerRepository ledgerRepository,
+                         AuthService authService,
+                         boolean requirePinAuthorization) {
         this.databaseManager = databaseManager;
         this.userRepository = userRepository;
         this.walletRepository = walletRepository;
         this.paymentMethodRepository = paymentMethodRepository;
         this.transactionRepository = transactionRepository;
         this.ledgerRepository = ledgerRepository;
+        this.authService = authService;
+        this.requirePinAuthorization = requirePinAuthorization;
     }
 
     public UserRepository getUserRepository() {
@@ -160,6 +189,10 @@ public class WalletService implements WalletOperations {
         BigDecimal validFee = fee != null ? MoneyUtil.validateNonNegativeAmount(fee) : MoneyUtil.ZERO;
         BigDecimal totalDebit = validAmount.add(validFee).setScale(MoneyUtil.DEFAULT_SCALE, MoneyUtil.DEFAULT_ROUNDING);
 
+        if (requirePinAuthorization) {
+            SessionManager.getInstance().requirePinAuthorization(null);
+        }
+
         // Acquire wallet locks in canonical order to prevent deadlocks
         String firstLockId = sourceWalletId.compareTo(targetWalletId) < 0 ? sourceWalletId : targetWalletId;
         String secondLockId = sourceWalletId.compareTo(targetWalletId) < 0 ? targetWalletId : sourceWalletId;
@@ -180,6 +213,7 @@ public class WalletService implements WalletOperations {
 
                     Wallet sourceWallet = walletRepository.findById(sourceWalletId, conn)
                             .orElseThrow(() -> new EntityNotFoundException("Source wallet", sourceWalletId));
+                    authorizeOutgoingPayment(sourceWallet.getUserId());
                     Wallet targetWallet = walletRepository.findById(targetWalletId, conn)
                             .orElseThrow(() -> new EntityNotFoundException("Target wallet", targetWalletId));
 
@@ -339,6 +373,10 @@ public class WalletService implements WalletOperations {
         BigDecimal validFee = fee != null ? MoneyUtil.validateNonNegativeAmount(fee) : MoneyUtil.ZERO;
         BigDecimal totalDebit = validAmount.add(validFee).setScale(MoneyUtil.DEFAULT_SCALE, MoneyUtil.DEFAULT_ROUNDING);
 
+        if (requirePinAuthorization) {
+            SessionManager.getInstance().requirePinAuthorization(null);
+        }
+
         ReentrantLock lock = getLock(sourceWalletId);
         lock.lock();
         try {
@@ -350,6 +388,7 @@ public class WalletService implements WalletOperations {
 
                 Wallet wallet = walletRepository.findById(sourceWalletId, conn)
                         .orElseThrow(() -> new EntityNotFoundException("Wallet", sourceWalletId));
+                authorizeOutgoingPayment(wallet.getUserId());
 
                 if (wallet.getStatus() != WalletStatus.ACTIVE) {
                     throw new WalletException("Wallet is not active: " + wallet.getStatus());
@@ -404,6 +443,59 @@ public class WalletService implements WalletOperations {
             });
         } finally {
             lock.unlock();
+        }
+    }
+
+    @Override
+    public Transaction transferWithPin(String referenceNumber, String sourceWalletId, String targetWalletId,
+                                       BigDecimal amount, BigDecimal fee, String description, String rawPin) {
+        authorizeWithPin(sourceWalletId, rawPin);
+        return transfer(referenceNumber, sourceWalletId, targetWalletId, amount, fee, description);
+    }
+
+    @Override
+    public Transaction cashOutWithPin(String referenceNumber, String sourceWalletId, String paymentMethodId,
+                                      BigDecimal amount, BigDecimal fee, String description, String rawPin) {
+        authorizeWithPin(sourceWalletId, rawPin);
+        return cashOut(referenceNumber, sourceWalletId, paymentMethodId, amount, fee, description);
+    }
+
+    private void authorizeWithPin(String sourceWalletId, String rawPin) {
+        if (sourceWalletId == null) {
+            throw new IllegalArgumentException("Source wallet ID must not be null");
+        }
+        SessionManager session = SessionManager.getInstance();
+        if (!session.isLoggedIn()) {
+            if (session.isExpiredDueToInactivity()) {
+                throw new WalletException("Session expired due to inactivity. Please log in again.");
+            }
+            if (session.isLockedOutByPin()) {
+                throw new WalletException("Session locked after excessive failed PIN attempts.");
+            }
+            throw new WalletException("Active authenticated session required for outgoing payments.");
+        }
+
+        Wallet sourceWallet = getWallet(sourceWalletId);
+        if (!session.getCurrentUser().getUserId().equals(sourceWallet.getUserId())) {
+            throw new WalletException("Wallet ownership mismatch: active session user cannot authorize this wallet.");
+        }
+        if (authService == null) {
+            throw new WalletException("AuthService is required for PIN verification.");
+        }
+        try {
+            if (!authService.verifyPin(sourceWallet.getUserId(), rawPin)) {
+                throw new WalletException("Invalid transaction PIN. Outgoing payment blocked.");
+            }
+        } catch (SecurityException ex) {
+            throw new WalletException(ex.getMessage(), ex);
+        }
+    }
+
+    private void authorizeOutgoingPayment(String walletOwnerUserId) {
+        SessionManager session = SessionManager.getInstance();
+        if (requirePinAuthorization || session.isLoggedIn()
+                || session.isExpiredDueToInactivity() || session.isLockedOutByPin()) {
+            session.requirePinAuthorization(walletOwnerUserId);
         }
     }
 
