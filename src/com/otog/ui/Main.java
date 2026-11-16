@@ -2,9 +2,11 @@ package com.otog.ui;
 
 import com.otog.database.DatabaseManager;
 import com.otog.exception.WalletException;
+import com.otog.model.AdminAction;
 import com.otog.model.Transaction;
 import com.otog.model.TransactionType;
 import com.otog.model.User;
+import com.otog.model.UserRole;
 import com.otog.model.Wallet;
 import com.otog.service.AuthService;
 import com.otog.service.AuthServiceImpl;
@@ -26,6 +28,7 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Deque;
 import java.util.EnumMap;
+import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
@@ -107,6 +110,7 @@ public class Main extends JFrame {
     private volatile DashboardState currentState = DashboardState.LOADING;
     private volatile boolean lastLoadExecutedOffEdt;
     private volatile boolean lastPaymentExecutedOffEdt;
+    private volatile boolean lastAdminLoadExecutedOffEdt;
     private volatile boolean cachedHasPin;
     private CompletableFuture<Void> initialLoadFuture;
     private List<Transaction> loadedTransactions = Collections.emptyList();
@@ -540,55 +544,62 @@ public class Main extends JFrame {
     // ─── CAP-09: Admin Controls Panel ───────────────────────────────────────────
 
     /**
-     * Builds the Admin Controls tab: user account list with suspend/reactivate
-     * actions (each requiring a reason), and an audit log of admin_actions.
-     * Only rendered when the session user has role ADMIN.
+     * Builds the Admin Controls tab: user account and wallet overview, suspend/reactivate/role
+     * actions (with mandatory recorded reasons), transaction inspection, and audit log viewer.
+     * Only rendered when the session user has role ADMIN; all DB calls execute off the EDT.
      */
     private JPanel buildAdminControlsPanel(WalletService ws) {
         User admin = SessionManager.getInstance().getCurrentUser();
+        String adminId = admin.getUserId();
 
         JPanel root = new JPanel(new BorderLayout(8, 8));
         root.setBorder(BorderFactory.createEmptyBorder(10, 12, 10, 12));
 
-        // ── Title ────────────────────────────────────────────────────────────────
         JLabel title = new JLabel("Admin Controls — Account Management & Audit Log");
         title.setFont(new Font("SansSerif", Font.BOLD, 14));
         root.add(title, BorderLayout.NORTH);
 
-        // ── Split pane: top = users table, bottom = audit log ───────────────────
         JSplitPane split = new JSplitPane(JSplitPane.VERTICAL_SPLIT);
         split.setResizeWeight(0.55);
 
-        // ── Users table ──────────────────────────────────────────────────────────
-        String[] userCols = {"User ID", "Name", "Mobile", "Role", "Status"};
+        String[] userCols = {"User ID", "Name", "Mobile", "Role", "Status", "Wallet", "Balance"};
         DefaultTableModel userModel = new DefaultTableModel(userCols, 0) {
             @Override public boolean isCellEditable(int r, int c) { return false; }
         };
         JTable userTable = new JTable(userModel);
-        userTable.setSelectionMode(javax.swing.ListSelectionModel.SINGLE_SELECTION);
+        userTable.setSelectionMode(ListSelectionModel.SINGLE_SELECTION);
         userTable.setAutoCreateRowSorter(true);
 
         JScrollPane userScroll = new JScrollPane(userTable);
-        userScroll.setBorder(BorderFactory.createTitledBorder("Registered Accounts"));
+        userScroll.setBorder(BorderFactory.createTitledBorder("Registered Accounts & Wallets"));
 
-        // ── Action buttons ───────────────────────────────────────────────────────
-        JButton btnSuspend    = new JButton("Suspend User");
+        JButton btnSuspend = new JButton("Suspend User");
         JButton btnReactivate = new JButton("Reactivate User");
+        JButton btnChangeRole = new JButton("Change Role");
+        JButton btnViewUserTxns = new JButton("View User Txns");
+        JButton btnViewAllTxns = new JButton("All System Txns");
         JButton btnRefreshAll = new JButton("Refresh");
         btnSuspend.setEnabled(false);
         btnReactivate.setEnabled(false);
+        btnChangeRole.setEnabled(false);
+        btnViewUserTxns.setEnabled(false);
 
         userTable.getSelectionModel().addListSelectionListener(e -> {
             if (!e.getValueIsAdjusting()) {
-                int row = userTable.getSelectedRow();
-                btnSuspend.setEnabled(row >= 0);
-                btnReactivate.setEnabled(row >= 0);
+                boolean hasSelection = userTable.getSelectedRow() >= 0;
+                btnSuspend.setEnabled(hasSelection);
+                btnReactivate.setEnabled(hasSelection);
+                btnChangeRole.setEnabled(hasSelection);
+                btnViewUserTxns.setEnabled(hasSelection);
             }
         });
 
         JPanel btnPanel = new JPanel(new FlowLayout(FlowLayout.LEFT, 6, 4));
         btnPanel.add(btnSuspend);
         btnPanel.add(btnReactivate);
+        btnPanel.add(btnChangeRole);
+        btnPanel.add(btnViewUserTxns);
+        btnPanel.add(btnViewAllTxns);
         btnPanel.add(btnRefreshAll);
 
         JPanel usersPanel = new JPanel(new BorderLayout(4, 4));
@@ -596,7 +607,6 @@ public class Main extends JFrame {
         usersPanel.add(btnPanel, BorderLayout.SOUTH);
         split.setTopComponent(usersPanel);
 
-        // ── Audit log table ──────────────────────────────────────────────────────
         String[] auditCols = {"Action ID", "Type", "Target", "Reason", "Timestamp"};
         DefaultTableModel auditModel = new DefaultTableModel(auditCols, 0) {
             @Override public boolean isCellEditable(int r, int c) { return false; }
@@ -610,106 +620,246 @@ public class Main extends JFrame {
 
         root.add(split, BorderLayout.CENTER);
 
-        // ── Status label ─────────────────────────────────────────────────────────
-        JLabel statusLbl = new JLabel(" ");
+        JLabel statusLbl = new JLabel("Loading admin records...");
         statusLbl.setFont(new Font("SansSerif", Font.PLAIN, 11));
         root.add(statusLbl, BorderLayout.SOUTH);
 
-        // ── Helper: reload tables ────────────────────────────────────────────────
-        Runnable reloadAll = () -> SwingUtilities.invokeLater(() -> {
-            userModel.setRowCount(0);
-            auditModel.setRowCount(0);
-            try {
-                for (com.otog.model.User u : ws.getAllUsers(admin.getUserId())) {
-                    userModel.addRow(new Object[]{
-                            u.getUserId(), u.getName(), u.getMobileNumber(),
-                            u.getRole(), u.getStatus()
-                    });
+        Runnable reloadAll = () -> {
+            btnRefreshAll.setEnabled(false);
+            statusLbl.setText("Loading admin records...");
+            new SwingWorker<AdminPanelSnapshot, Void>() {
+                @Override
+                protected AdminPanelSnapshot doInBackground() {
+                    lastAdminLoadExecutedOffEdt = !SwingUtilities.isEventDispatchThread();
+                    List<User> users = ws.getAllUsers(adminId);
+                    List<Wallet> wallets = ws.getAllWallets(adminId);
+                    List<AdminAction> actions = ws.getAdminActions(adminId);
+                    Map<String, Wallet> walletsByUser = new HashMap<>();
+                    for (Wallet w : wallets) {
+                        walletsByUser.put(w.getUserId(), w);
+                    }
+                    return new AdminPanelSnapshot(users, walletsByUser, actions);
                 }
-                for (com.otog.model.AdminAction a : ws.getAdminActions(admin.getUserId())) {
-                    auditModel.addRow(new Object[]{
-                            a.getActionId(), a.getActionType(), a.getTargetUserId(),
-                            a.getReason(), a.getCreatedAt()
-                    });
+
+                @Override
+                protected void done() {
+                    btnRefreshAll.setEnabled(true);
+                    try {
+                        AdminPanelSnapshot snap = get();
+                        userModel.setRowCount(0);
+                        for (User u : snap.users) {
+                            Wallet w = snap.walletsByUser.get(u.getUserId());
+                            userModel.addRow(new Object[]{
+                                    u.getUserId(),
+                                    u.getName(),
+                                    u.getMobileNumber(),
+                                    u.getRole(),
+                                    u.getStatus(),
+                                    w != null ? w.getWalletId() + " (" + w.getStatus() + ")" : "--",
+                                    w != null ? MoneyUtil.format(w.getBalance(), w.getCurrency()) : "--"
+                            });
+                        }
+                        auditModel.setRowCount(0);
+                        for (AdminAction a : snap.actions) {
+                            auditModel.addRow(new Object[]{
+                                    a.getActionId(),
+                                    a.getActionType(),
+                                    a.getTargetUserId(),
+                                    a.getReason(),
+                                    a.getCreatedAt()
+                            });
+                        }
+                        statusLbl.setText("Last refreshed: " + java.time.LocalDateTime.now()
+                                .format(java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss")));
+                    } catch (Exception ex) {
+                        Throwable cause = unwrapCause(ex);
+                        statusLbl.setText("Error loading admin data: " + cause.getMessage());
+                    }
                 }
-                statusLbl.setText("Last refreshed: " + java.time.LocalDateTime.now()
-                        .format(java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss")));
-            } catch (Exception ex) {
-                statusLbl.setText("Error loading admin data: " + ex.getMessage());
-            }
-        });
+            }.execute();
+        };
 
-        // Initial load
-        new Thread(reloadAll, "admin-panel-loader").start();
+        reloadAll.run();
 
-        // ── Suspend action ───────────────────────────────────────────────────────
-        btnSuspend.addActionListener(e -> {
+        btnSuspend.addActionListener(e -> executeAdminStatusAction(
+                ws, adminId, userTable, userModel, statusLbl, reloadAll, true));
+
+        btnReactivate.addActionListener(e -> executeAdminStatusAction(
+                ws, adminId, userTable, userModel, statusLbl, reloadAll, false));
+
+        btnChangeRole.addActionListener(e -> {
             int row = userTable.getSelectedRow();
             if (row < 0) return;
-            String targetId   = (String) userModel.getValueAt(userTable.convertRowIndexToModel(row), 0);
-            String targetName = (String) userModel.getValueAt(userTable.convertRowIndexToModel(row), 1);
+            int modelRow = userTable.convertRowIndexToModel(row);
+            String targetId = (String) userModel.getValueAt(modelRow, 0);
+            String targetName = (String) userModel.getValueAt(modelRow, 1);
+            UserRole currentRole = (UserRole) userModel.getValueAt(modelRow, 3);
 
-            String reason = JOptionPane.showInputDialog(root,
-                    "Enter reason for suspending " + targetName + " (" + targetId + "):",
-                    "Suspend Account", JOptionPane.WARNING_MESSAGE);
-            if (reason == null) return; // cancelled
-            reason = reason.trim();
-            if (reason.isEmpty()) {
-                JOptionPane.showMessageDialog(root, "A reason is required.", "Validation Error", JOptionPane.ERROR_MESSAGE);
-                return;
-            }
-            final String finalReason = reason;
-            statusLbl.setText("Suspending " + targetId + "...");
-            new Thread(() -> {
-                try {
-                    ws.suspendUser(admin.getUserId(), targetId, finalReason);
-                    SwingUtilities.invokeLater(() ->
-                            JOptionPane.showMessageDialog(root, "Account suspended.", "Done", JOptionPane.INFORMATION_MESSAGE));
-                } catch (Exception ex) {
-                    SwingUtilities.invokeLater(() ->
-                            JOptionPane.showMessageDialog(root, "Error: " + ex.getMessage(), "Suspend Failed", JOptionPane.ERROR_MESSAGE));
-                } finally {
-                    reloadAll.run();
-                }
-            }, "admin-suspend").start();
-        });
-
-        // ── Reactivate action ────────────────────────────────────────────────────
-        btnReactivate.addActionListener(e -> {
-            int row = userTable.getSelectedRow();
-            if (row < 0) return;
-            String targetId   = (String) userModel.getValueAt(userTable.convertRowIndexToModel(row), 0);
-            String targetName = (String) userModel.getValueAt(userTable.convertRowIndexToModel(row), 1);
-
-            String reason = JOptionPane.showInputDialog(root,
-                    "Enter reason for reactivating " + targetName + " (" + targetId + "):",
-                    "Reactivate Account", JOptionPane.QUESTION_MESSAGE);
+            UserRole selectedRole = (UserRole) JOptionPane.showInputDialog(
+                    root,
+                    "Select new role for " + targetName + " (" + targetId + "):",
+                    "Change User Role",
+                    JOptionPane.QUESTION_MESSAGE,
+                    null,
+                    UserRole.values(),
+                    currentRole
+            );
+            if (selectedRole == null) return;
+            String reason = promptMandatoryAdminReason(root,
+                    "Enter reason for changing role of " + targetName + " to " + selectedRole + ":",
+                    "Change User Role");
             if (reason == null) return;
-            reason = reason.trim();
-            if (reason.isEmpty()) {
-                JOptionPane.showMessageDialog(root, "A reason is required.", "Validation Error", JOptionPane.ERROR_MESSAGE);
-                return;
-            }
-            final String finalReason = reason;
-            statusLbl.setText("Reactivating " + targetId + "...");
-            new Thread(() -> {
-                try {
-                    ws.reactivateUser(admin.getUserId(), targetId, finalReason);
-                    SwingUtilities.invokeLater(() ->
-                            JOptionPane.showMessageDialog(root, "Account reactivated.", "Done", JOptionPane.INFORMATION_MESSAGE));
-                } catch (Exception ex) {
-                    SwingUtilities.invokeLater(() ->
-                            JOptionPane.showMessageDialog(root, "Error: " + ex.getMessage(), "Reactivate Failed", JOptionPane.ERROR_MESSAGE));
-                } finally {
-                    reloadAll.run();
+
+            statusLbl.setText("Updating role for " + targetId + "...");
+            new SwingWorker<Void, Void>() {
+                @Override
+                protected Void doInBackground() {
+                    ws.getAdminService().changeUserRole(adminId, targetId, selectedRole, reason);
+                    return null;
                 }
-            }, "admin-reactivate").start();
+
+                @Override
+                protected void done() {
+                    try {
+                        get();
+                        JOptionPane.showMessageDialog(root, "Role updated to " + selectedRole + ".",
+                                "Done", JOptionPane.INFORMATION_MESSAGE);
+                    } catch (Exception ex) {
+                        Throwable cause = unwrapCause(ex);
+                        JOptionPane.showMessageDialog(root, "Error: " + cause.getMessage(),
+                                "Role Update Failed", JOptionPane.ERROR_MESSAGE);
+                    } finally {
+                        reloadAll.run();
+                    }
+                }
+            }.execute();
         });
 
-        // ── Refresh button ───────────────────────────────────────────────────────
-        btnRefreshAll.addActionListener(e -> new Thread(reloadAll, "admin-panel-refresh").start());
+        btnViewUserTxns.addActionListener(e -> {
+            int row = userTable.getSelectedRow();
+            if (row < 0) return;
+            int modelRow = userTable.convertRowIndexToModel(row);
+            String targetId = (String) userModel.getValueAt(modelRow, 0);
+            String targetName = (String) userModel.getValueAt(modelRow, 1);
+            loadAndShowAdminTransactions(ws, adminId, targetId,
+                    "Transactions — " + targetName + " (" + targetId + ")", root, statusLbl, reloadAll);
+        });
+
+        btnViewAllTxns.addActionListener(e ->
+                loadAndShowAdminTransactions(ws, adminId, null,
+                        "All System Transactions", root, statusLbl, reloadAll));
+
+        btnRefreshAll.addActionListener(e -> reloadAll.run());
 
         return root;
+    }
+
+    private void executeAdminStatusAction(WalletService ws, String adminId, JTable userTable,
+                                          DefaultTableModel userModel, JLabel statusLbl,
+                                          Runnable reloadAll, boolean suspend) {
+        int row = userTable.getSelectedRow();
+        if (row < 0) return;
+        int modelRow = userTable.convertRowIndexToModel(row);
+        String targetId = (String) userModel.getValueAt(modelRow, 0);
+        String targetName = (String) userModel.getValueAt(modelRow, 1);
+
+        String verb = suspend ? "suspending" : "reactivating";
+        String dialogTitle = suspend ? "Suspend Account" : "Reactivate Account";
+        String reason = promptMandatoryAdminReason(userTable,
+                "Enter reason for " + verb + " " + targetName + " (" + targetId + "):",
+                dialogTitle);
+        if (reason == null) return;
+
+        statusLbl.setText((suspend ? "Suspending " : "Reactivating ") + targetId + "...");
+        new SwingWorker<Void, Void>() {
+            @Override
+            protected Void doInBackground() {
+                if (suspend) {
+                    ws.suspendUser(adminId, targetId, reason);
+                } else {
+                    ws.reactivateUser(adminId, targetId, reason);
+                }
+                return null;
+            }
+
+            @Override
+            protected void done() {
+                try {
+                    get();
+                    JOptionPane.showMessageDialog(userTable,
+                            suspend ? "Account suspended." : "Account reactivated.",
+                            "Done", JOptionPane.INFORMATION_MESSAGE);
+                } catch (Exception ex) {
+                    Throwable cause = unwrapCause(ex);
+                    JOptionPane.showMessageDialog(userTable, "Error: " + cause.getMessage(),
+                            suspend ? "Suspend Failed" : "Reactivate Failed", JOptionPane.ERROR_MESSAGE);
+                } finally {
+                    reloadAll.run();
+                }
+            }
+        }.execute();
+    }
+
+    private String promptMandatoryAdminReason(Component parent, String message, String title) {
+        String reason = JOptionPane.showInputDialog(parent, message, title, JOptionPane.QUESTION_MESSAGE);
+        if (reason == null) {
+            return null;
+        }
+        String trimmed = reason.trim();
+        if (trimmed.isEmpty()) {
+            JOptionPane.showMessageDialog(parent, "A reason is required.", "Validation Error", JOptionPane.ERROR_MESSAGE);
+            return null;
+        }
+        return trimmed;
+    }
+
+    private void loadAndShowAdminTransactions(WalletService ws, String adminId, String targetUserId,
+                                              String dialogTitle, Component parent,
+                                              JLabel statusLbl, Runnable reloadAll) {
+        statusLbl.setText("Loading transactions...");
+        new SwingWorker<List<Transaction>, Void>() {
+            @Override
+            protected List<Transaction> doInBackground() {
+                return targetUserId != null
+                        ? ws.getUserTransactions(adminId, targetUserId)
+                        : ws.getAllTransactions(adminId);
+            }
+
+            @Override
+            protected void done() {
+                try {
+                    List<Transaction> txns = get();
+                    String[] cols = {"Date", "Ref #", "Type", "Source", "Target", "Amount", "Fee", "Status", "Description"};
+                    DefaultTableModel model = new DefaultTableModel(cols, 0) {
+                        @Override public boolean isCellEditable(int r, int c) { return false; }
+                    };
+                    for (Transaction t : txns) {
+                        model.addRow(new Object[]{
+                                t.getCreatedAt() != null ? t.getCreatedAt().format(DATE_FORMATTER) : "-",
+                                t.getReferenceNumber(),
+                                t.getType(),
+                                t.getSourceWalletId() != null ? t.getSourceWalletId() : "-",
+                                t.getTargetWalletId() != null ? t.getTargetWalletId() : "-",
+                                MoneyUtil.format(t.getAmount(), t.getCurrency()),
+                                MoneyUtil.format(t.getFee(), t.getCurrency()),
+                                t.getStatus(),
+                                t.getDescription() != null ? t.getDescription() : ""
+                        });
+                    }
+                    JTable table = new JTable(model);
+                    table.setAutoCreateRowSorter(true);
+                    JScrollPane scroll = new JScrollPane(table);
+                    scroll.setPreferredSize(new Dimension(760, 320));
+                    JOptionPane.showMessageDialog(parent, scroll, dialogTitle, JOptionPane.INFORMATION_MESSAGE);
+                    reloadAll.run();
+                } catch (Exception ex) {
+                    Throwable cause = unwrapCause(ex);
+                    statusLbl.setText("Error loading transactions: " + cause.getMessage());
+                    JOptionPane.showMessageDialog(parent, "Error: " + cause.getMessage(),
+                            "Transaction Inspection Failed", JOptionPane.ERROR_MESSAGE);
+                }
+            }
+        }.execute();
     }
 
     private JPanel buildFooterPanel() {
@@ -1484,6 +1634,10 @@ public class Main extends JFrame {
         return lastPaymentExecutedOffEdt;
     }
 
+    public boolean isLastAdminLoadExecutedOffEdt() {
+        return lastAdminLoadExecutedOffEdt;
+    }
+
     public JButton getCashInQuickNavButton() {
         return btnNavCashIn;
     }
@@ -1535,6 +1689,18 @@ public class Main extends JFrame {
             this.wallet = wallet;
             this.transactions = transactions;
             this.hasPin = hasPin;
+        }
+    }
+
+    private static final class AdminPanelSnapshot {
+        private final List<User> users;
+        private final Map<String, Wallet> walletsByUser;
+        private final List<AdminAction> actions;
+
+        private AdminPanelSnapshot(List<User> users, Map<String, Wallet> walletsByUser, List<AdminAction> actions) {
+            this.users = users;
+            this.walletsByUser = walletsByUser;
+            this.actions = actions;
         }
     }
 }

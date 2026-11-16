@@ -47,18 +47,25 @@ public class AdminServiceImpl implements AdminService {
         this.credentialRepository = credentialRepository;
     }
 
-    private User validateAdminCaller(String adminUserId, String operationDescription) {
+    private User requireAuthenticatedCaller(String suppliedUserId) {
         SessionManager session = SessionManager.getInstance();
         session.requireAuthentication();
 
-        if (adminUserId != null && !adminUserId.trim().isEmpty()) {
-            session.requireActiveSessionFor(adminUserId.trim());
+        if (suppliedUserId != null && !suppliedUserId.trim().isEmpty()) {
+            session.requireActiveSessionFor(suppliedUserId.trim());
         }
 
-        User caller = session.getCurrentUser();
-        if (caller == null) {
-            throw new SecurityException("Access denied: Active administrator identity required to " + operationDescription + ".");
+        User sessionUser = session.getCurrentUser();
+        if (sessionUser == null) {
+            throw new SecurityException("Access denied: Active authenticated session required.");
         }
+
+        return userRepository.findById(sessionUser.getUserId())
+                .orElseThrow(() -> new SecurityException("Access denied: Unknown user identity: " + sessionUser.getUserId()));
+    }
+
+    private User validateAdminCaller(String adminUserId, String operationDescription) {
+        User caller = requireAuthenticatedCaller(adminUserId);
 
         if (caller.getStatus() != UserStatus.ACTIVE) {
             throw new SecurityException("Access denied: Administrator account is " + caller.getStatus() + ".");
@@ -217,14 +224,7 @@ public class AdminServiceImpl implements AdminService {
 
     @Override
     public List<Transaction> getUserTransactions(String requesterUserId, String targetUserId) {
-        SessionManager session = SessionManager.getInstance();
-        session.requireAuthentication();
-
-        if (requesterUserId != null && !requesterUserId.trim().isEmpty()) {
-            session.requireActiveSessionFor(requesterUserId.trim());
-        }
-
-        User requester = session.getCurrentUser();
+        User requester = requireAuthenticatedCaller(requesterUserId);
         String reqId = requester.getUserId();
 
         if (targetUserId == null || targetUserId.trim().isEmpty()) {
@@ -258,14 +258,7 @@ public class AdminServiceImpl implements AdminService {
 
     @Override
     public Wallet getUserWallet(String requesterUserId, String targetUserId) {
-        SessionManager session = SessionManager.getInstance();
-        session.requireAuthentication();
-
-        if (requesterUserId != null && !requesterUserId.trim().isEmpty()) {
-            session.requireActiveSessionFor(requesterUserId.trim());
-        }
-
-        User requester = session.getCurrentUser();
+        User requester = requireAuthenticatedCaller(requesterUserId);
         String reqId = requester.getUserId();
 
         if (targetUserId == null || targetUserId.trim().isEmpty()) {

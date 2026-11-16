@@ -7,6 +7,7 @@ import com.otog.exception.WalletException;
 import com.otog.model.*;
 import com.otog.repository.AdminActionRepository;
 import com.otog.service.*;
+import com.otog.ui.Main;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -15,6 +16,7 @@ import org.junit.jupiter.api.Test;
 import java.math.BigDecimal;
 import java.util.List;
 import java.util.Optional;
+import java.util.concurrent.TimeUnit;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -358,5 +360,87 @@ public class AdminPermissionsAndAccountControlTest {
         assertEquals(adminUser.getUserId(), action.getAdminUserId());
         assertEquals(regularUserBob.getUserId(), action.getTargetUserId());
         assertTrue(action.getDetails().contains("Suspended user " + regularUserBob.getUserId()));
+    }
+
+    @Test
+    @DisplayName("Reactivation resets PIN failed attempts and mid-session DB suspension blocks admin")
+    void testReactivationResetsPinAttemptsAndMidSessionDbSuspensionBlocksAdmin() {
+        // Alice sets a PIN and fails 3 times -> PIN-locked
+        loginAsAlice();
+        authService.setPin(regularUserAlice.getUserId(), "AlicePass123", "4321");
+        assertFalse(authService.verifyPin(regularUserAlice.getUserId(), "0000"));
+        assertFalse(authService.verifyPin(regularUserAlice.getUserId(), "0000"));
+        assertFalse(authService.verifyPin(regularUserAlice.getUserId(), "0000"));
+        assertEquals(SessionManager.MAX_PIN_ATTEMPTS,
+                authService.getCredentialRepository().findByUserId(regularUserAlice.getUserId())
+                        .orElseThrow().getPinFailedAttempts());
+
+        // Admin suspends and reactivates Alice -> both login and PIN failed attempts reset
+        loginAsAdmin();
+        adminService.suspendUser(adminUser.getUserId(), regularUserAlice.getUserId(), "PIN lockout review");
+        adminService.reactivateUser(adminUser.getUserId(), regularUserAlice.getUserId(), "Identity verified");
+
+        assertEquals(0, authService.getCredentialRepository().findByUserId(regularUserAlice.getUserId())
+                .orElseThrow().getPinFailedAttempts(), "Admin reactivation must reset pin_failed_attempts");
+        loginAsAlice();
+        assertTrue(authService.verifyPin(regularUserAlice.getUserId(), "4321"),
+                "Reactivated user must be able to verify PIN after attempt counter reset");
+
+        // Admin inspects Bob's wallet via WalletService.getTransactionHistory -> logs INSPECT_USER_HISTORY
+        loginAsAdmin();
+        walletService.getTransactionHistory(adminUser.getUserId(), bobWallet.getWalletId());
+        List<AdminAction> bobAudit = adminActionRepository.findByTargetUserId(bobWallet.getUserId());
+        assertTrue(bobAudit.stream().anyMatch(a -> "INSPECT_USER_HISTORY".equals(a.getActionType())),
+                "WalletService.getTransactionHistory must log INSPECT_USER_HISTORY for cross-user admin inspection");
+
+        // Mid-session DB suspension blocks already-logged-in admin
+        User tempAdmin = authService.registerUser("Temp Admin", "09171110099", "tempadmin@otog.ph", "TempPass123", UserRole.USER);
+        adminService.changeUserRole(adminUser.getUserId(), tempAdmin.getUserId(), UserRole.ADMIN, "Temporary admin");
+        User promotedTempAdmin = walletService.getUserRepository().findById(tempAdmin.getUserId()).orElseThrow();
+        loginAs(promotedTempAdmin, walletService.getWalletByUserId(tempAdmin.getUserId()));
+
+        // Simulate external DB suspension while session is still active
+        walletService.getUserRepository().updateStatus(promotedTempAdmin.getUserId(), UserStatus.SUSPENDED);
+        SecurityException suspendedEx = assertThrows(SecurityException.class, () ->
+                adminService.getAllUsers(promotedTempAdmin.getUserId()));
+        assertTrue(suspendedEx.getMessage().contains("SUSPENDED"));
+    }
+
+    @Test
+    @DisplayName("Dashboard renders Admin Controls tab only for ADMIN and loads admin records off EDT")
+    void testDashboardAdminTabVisibilityAndOffEdtLoad() throws Exception {
+        // Regular user & Merchant must NOT see Admin Controls tab
+        loginAsAlice();
+        Main userDashboard = new Main(walletService, authService);
+        try {
+            userDashboard.getInitialLoadFuture().get(5, TimeUnit.SECONDS);
+            assertFalse(userDashboard.getVisibleTabTitles().contains("Admin Controls"));
+        } finally {
+            userDashboard.dispose();
+        }
+
+        loginAsCharlie();
+        Main merchantDashboard = new Main(walletService, authService);
+        try {
+            merchantDashboard.getInitialLoadFuture().get(5, TimeUnit.SECONDS);
+            assertFalse(merchantDashboard.getVisibleTabTitles().contains("Admin Controls"));
+        } finally {
+            merchantDashboard.dispose();
+        }
+
+        // Admin MUST see Admin Controls tab and load records off the Swing EDT
+        loginAsAdmin();
+        Main adminDashboard = new Main(walletService, authService);
+        try {
+            adminDashboard.getInitialLoadFuture().get(5, TimeUnit.SECONDS);
+            assertTrue(adminDashboard.getVisibleTabTitles().contains("Admin Controls"));
+            for (int i = 0; i < 50 && !adminDashboard.isLastAdminLoadExecutedOffEdt(); i++) {
+                Thread.sleep(25);
+            }
+            assertTrue(adminDashboard.isLastAdminLoadExecutedOffEdt(),
+                    "Admin Controls data load must run off the Swing EDT");
+        } finally {
+            adminDashboard.dispose();
+        }
     }
 }

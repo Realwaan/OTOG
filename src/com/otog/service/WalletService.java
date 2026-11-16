@@ -639,7 +639,9 @@ public class WalletService implements WalletOperations {
             session.requireActiveSessionFor(requesterUserId.trim());
         }
 
-        User requester = session.getCurrentUser();
+        User sessionUser = session.getCurrentUser();
+        User requester = userRepository.findById(sessionUser.getUserId())
+                .orElseThrow(() -> new SecurityException("Access denied: Unknown user " + sessionUser.getUserId()));
         if (requester.getStatus() != UserStatus.ACTIVE) {
             throw new SecurityException("Access denied: Requester account is " + requester.getStatus() + ".");
         }
@@ -650,7 +652,19 @@ public class WalletService implements WalletOperations {
         if (requester.getRole() != UserRole.ADMIN && !wallet.getUserId().equals(requester.getUserId())) {
             throw new SecurityException("Access denied: Ordinary users cannot inspect another user's transaction history.");
         }
-        return transactionRepository.findByWalletId(wallet.getWalletId());
+        List<Transaction> txns = transactionRepository.findByWalletId(wallet.getWalletId());
+        if (requester.getRole() == UserRole.ADMIN && !wallet.getUserId().equals(requester.getUserId())) {
+            AdminAction action = new AdminAction(
+                    IdGenerator.nextAdminActionId(),
+                    requester.getUserId(),
+                    "INSPECT_USER_HISTORY",
+                    wallet.getUserId(),
+                    "Administrative inspection",
+                    "Inspected transaction history of wallet " + wallet.getWalletId()
+            );
+            adminActionRepository.save(action);
+        }
+        return txns;
     }
 
     public List<AdminAction> getAdminActions(String requesterUserId) {
