@@ -2,12 +2,10 @@
 setlocal
 pushd "%~dp0"
 
-if not exist "out\production\OTOG\UserLogin.class" (
-    call build.bat
-    if %ERRORLEVEL% NEQ 0 (
-        popd
-        exit /b %ERRORLEVEL%
-    )
+call build.bat
+if %ERRORLEVEL% NEQ 0 (
+    popd
+    exit /b %ERRORLEVEL%
 )
 
 echo Running OTOG test suite...

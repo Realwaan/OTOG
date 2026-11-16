@@ -29,6 +29,10 @@ public final class IdGenerator {
         return "LED-" + shortUuid();
     }
 
+    public static String nextAdminActionId() {
+        return "ACT-" + shortUuid();
+    }
+
     public static String nextReferenceNumber() {
         return "REQ-" + System.currentTimeMillis() + "-" + shortUuid().substring(0, 6);
     }

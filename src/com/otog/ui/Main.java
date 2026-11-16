@@ -30,7 +30,8 @@ public class Main extends JFrame {
         root.setBorder(BorderFactory.createEmptyBorder(15, 15, 15, 15));
 
         JPanel header = new JPanel(new BorderLayout());
-        JLabel welcomeLabel = new JLabel("Welcome, " + displayName + "   |   Balance: " + balance);
+        String roleBadge = (user != null && user.isAdmin()) ? " [ADMIN]" : "";
+        JLabel welcomeLabel = new JLabel("Welcome, " + displayName + roleBadge + "   |   Balance: " + balance);
         welcomeLabel.setFont(new Font("SansSerif", Font.BOLD, 14));
         header.add(welcomeLabel, BorderLayout.WEST);
 
@@ -45,6 +46,9 @@ public class Main extends JFrame {
         tabs.addTab("Cash In / Out", makePlaceholder("Cash In / Out — coming soon"));
         tabs.addTab("Loans", makePlaceholder("Loans — coming soon"));
         tabs.addTab("Investments", makePlaceholder("Investments — coming soon"));
+        if (user != null && user.isAdmin()) {
+            tabs.addTab("Admin Controls", makePlaceholder("Admin Controls — Account suspension/reactivation & system audit"));
+        }
 
         root.add(tabs, BorderLayout.CENTER);
         setContentPane(root);

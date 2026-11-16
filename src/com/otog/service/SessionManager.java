@@ -228,6 +228,9 @@ public class SessionManager {
         if (currentUser == null) {
             throw new WalletException("Active authenticated session required for outgoing payments.");
         }
+        if (currentUser.getStatus() == com.otog.model.UserStatus.SUSPENDED) {
+            throw new WalletException("Suspended accounts cannot initiate payments: User " + currentUser.getUserId() + " is suspended.");
+        }
         if (expectedUserId != null && !expectedUserId.equals(currentUser.getUserId())) {
             throw new WalletException("Wallet ownership mismatch: active session user cannot authorize this wallet.");
         }

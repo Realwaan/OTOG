@@ -67,6 +67,86 @@ public class UserRepository {
         }
     }
 
+    public void updateStatus(String userId, UserStatus status) {
+        try (Connection conn = databaseManager.getConnection()) {
+            updateStatus(userId, status, conn);
+        } catch (SQLException e) {
+            throw new OtogException("Failed to update user status: " + e.getMessage(), e);
+        }
+    }
+
+    public void updateStatus(String userId, UserStatus status, Connection conn) throws SQLException {
+        String sql = "UPDATE users SET status = ?, updated_at = ? WHERE user_id = ?";
+        try (PreparedStatement ps = conn.prepareStatement(sql)) {
+            ps.setString(1, status.name());
+            ps.setString(2, LocalDateTime.now().toString());
+            ps.setString(3, userId);
+            ps.executeUpdate();
+        }
+    }
+
+    public void updateRole(String userId, UserRole role) {
+        try (Connection conn = databaseManager.getConnection()) {
+            updateRole(userId, role, conn);
+        } catch (SQLException e) {
+            throw new OtogException("Failed to update user role: " + e.getMessage(), e);
+        }
+    }
+
+    public void updateRole(String userId, UserRole role, Connection conn) throws SQLException {
+        String sql = "UPDATE users SET role = ?, updated_at = ? WHERE user_id = ?";
+        try (PreparedStatement ps = conn.prepareStatement(sql)) {
+            ps.setString(1, role.name());
+            ps.setString(2, LocalDateTime.now().toString());
+            ps.setString(3, userId);
+            ps.executeUpdate();
+        }
+    }
+
+    public List<User> findByRole(UserRole role) {
+        try (Connection conn = databaseManager.getConnection()) {
+            return findByRole(role, conn);
+        } catch (SQLException e) {
+            throw new OtogException("Failed to query users by role: " + e.getMessage(), e);
+        }
+    }
+
+    public List<User> findByRole(UserRole role, Connection conn) throws SQLException {
+        String sql = "SELECT user_id, name, mobile_number, email, role, status, created_at, updated_at FROM users WHERE role = ?";
+        List<User> list = new ArrayList<>();
+        try (PreparedStatement ps = conn.prepareStatement(sql)) {
+            ps.setString(1, role.name());
+            try (ResultSet rs = ps.executeQuery()) {
+                while (rs.next()) {
+                    list.add(mapRow(rs));
+                }
+            }
+        }
+        return list;
+    }
+
+    public List<User> findByStatus(UserStatus status) {
+        try (Connection conn = databaseManager.getConnection()) {
+            return findByStatus(status, conn);
+        } catch (SQLException e) {
+            throw new OtogException("Failed to query users by status: " + e.getMessage(), e);
+        }
+    }
+
+    public List<User> findByStatus(UserStatus status, Connection conn) throws SQLException {
+        String sql = "SELECT user_id, name, mobile_number, email, role, status, created_at, updated_at FROM users WHERE status = ?";
+        List<User> list = new ArrayList<>();
+        try (PreparedStatement ps = conn.prepareStatement(sql)) {
+            ps.setString(1, status.name());
+            try (ResultSet rs = ps.executeQuery()) {
+                while (rs.next()) {
+                    list.add(mapRow(rs));
+                }
+            }
+        }
+        return list;
+    }
+
     public Optional<User> findById(String userId) {
         try (Connection conn = databaseManager.getConnection()) {
             return findById(userId, conn);

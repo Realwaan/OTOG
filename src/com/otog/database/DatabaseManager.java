@@ -158,7 +158,19 @@ public class DatabaseManager implements AutoCloseable {
                         "pin_failed_attempts INTEGER NOT NULL DEFAULT 0, " +
                         "updated_at TEXT NOT NULL, " +
                         "FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE CASCADE);",
-                "CREATE INDEX IF NOT EXISTS idx_cred_user ON credentials(user_id);"
+                "CREATE INDEX IF NOT EXISTS idx_cred_user ON credentials(user_id);",
+
+                "CREATE TABLE IF NOT EXISTS admin_actions (" +
+                        "action_id TEXT PRIMARY KEY, " +
+                        "admin_user_id TEXT NOT NULL, " +
+                        "action_type TEXT NOT NULL, " +
+                        "target_user_id TEXT, " +
+                        "reason TEXT, " +
+                        "details TEXT, " +
+                        "created_at TEXT NOT NULL, " +
+                        "FOREIGN KEY (admin_user_id) REFERENCES users(user_id) ON DELETE RESTRICT);",
+                "CREATE INDEX IF NOT EXISTS idx_admin_act_admin ON admin_actions(admin_user_id);",
+                "CREATE INDEX IF NOT EXISTS idx_admin_act_target ON admin_actions(target_user_id);"
         };
 
         try (Connection conn = getConnection();
@@ -210,14 +222,16 @@ public class DatabaseManager implements AutoCloseable {
             if (!rs.next()) {
                 String salt = "a1b2c3d4e5f60718293a4b5c6d7e8f90";
                 String hash = com.otog.util.PasswordUtil.hashPassword("password", salt);
+                String pinSalt = "f0e1d2c3b4a5968778695a4b3c2d1e0f";
+                String pinHash = com.otog.util.PasswordUtil.hashPassword("123456", pinSalt);
                 String now = java.time.LocalDateTime.now().toString();
 
                 String insertUser = "INSERT INTO users (user_id, name, mobile_number, email, role, status, created_at, updated_at) " +
                         "VALUES ('USR-ADMIN-01', 'admin', '09000000000', 'admin@otog.ph', 'ADMIN', 'ACTIVE', '" + now + "', '" + now + "')";
                 stmt.executeUpdate(insertUser);
 
-                String insertCred = "INSERT INTO credentials (user_id, password_hash, salt, failed_attempts, locked_until, updated_at) " +
-                        "VALUES ('USR-ADMIN-01', '" + hash + "', '" + salt + "', 0, NULL, '" + now + "')";
+                String insertCred = "INSERT INTO credentials (user_id, password_hash, salt, failed_attempts, locked_until, pin_hash, pin_salt, pin_failed_attempts, updated_at) " +
+                        "VALUES ('USR-ADMIN-01', '" + hash + "', '" + salt + "', 0, NULL, '" + pinHash + "', '" + pinSalt + "', 0, '" + now + "')";
                 stmt.executeUpdate(insertCred);
 
                 String insertWallet = "INSERT INTO wallets (wallet_id, user_id, balance, currency, status, created_at, updated_at) " +
