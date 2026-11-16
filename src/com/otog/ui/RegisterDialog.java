@@ -57,12 +57,23 @@ public class RegisterDialog extends JDialog {
         add(formPanel, BorderLayout.CENTER);
 
         JPanel buttonPanel = new JPanel(new FlowLayout(FlowLayout.RIGHT, 10, 10));
-        btnCancel = new JButton("Cancel");
+        btnCancel = new JButton("Back to Login");
         btnSubmit = new JButton("Register");
 
         buttonPanel.add(btnCancel);
         buttonPanel.add(btnSubmit);
         add(buttonPanel, BorderLayout.SOUTH);
+
+        getRootPane().setDefaultButton(btnSubmit);
+        getRootPane().registerKeyboardAction(
+                e -> {
+                    if (btnCancel.isEnabled()) {
+                        dispose();
+                    }
+                },
+                KeyStroke.getKeyStroke(java.awt.event.KeyEvent.VK_ESCAPE, 0),
+                JComponent.WHEN_IN_FOCUSED_WINDOW
+        );
 
         btnCancel.addActionListener(e -> dispose());
 
@@ -70,6 +81,10 @@ public class RegisterDialog extends JDialog {
     }
 
     private void handleRegistration() {
+        if (authService == null) {
+            showRegistrationError("Registration service is unavailable.");
+            return;
+        }
         String name = txtName.getText().trim();
         String mobile = txtMobile.getText().trim();
         String email = txtEmail.getText().trim();
@@ -79,6 +94,13 @@ public class RegisterDialog extends JDialog {
         if (name.isEmpty() || mobile.isEmpty() || password.isEmpty()) {
             showDialogMessage("Validation Error",
                     "Name, Mobile Number, and Password are required.",
+                    JOptionPane.WARNING_MESSAGE);
+            return;
+        }
+
+        if (password.trim().length() < 6) {
+            showDialogMessage("Validation Error",
+                    "Password must be at least 6 characters long.",
                     JOptionPane.WARNING_MESSAGE);
             return;
         }

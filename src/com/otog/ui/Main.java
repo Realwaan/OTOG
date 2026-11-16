@@ -12,6 +12,7 @@ import com.otog.service.AuthService;
 import com.otog.service.AuthServiceImpl;
 import com.otog.service.InvestmentService;
 import com.otog.service.LoanService;
+import com.otog.service.SendMoneyService;
 import com.otog.service.SessionManager;
 import com.otog.service.WalletOperations;
 import com.otog.service.WalletService;
@@ -21,6 +22,8 @@ import com.otog.util.MoneyUtil;
 import javax.swing.*;
 import javax.swing.table.DefaultTableModel;
 import java.awt.*;
+import java.awt.event.MouseAdapter;
+import java.awt.event.MouseEvent;
 import java.math.BigDecimal;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayDeque;
@@ -34,7 +37,9 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
 import java.util.concurrent.ExecutionException;
+import java.util.function.Consumer;
 
 public class Main extends JFrame {
 
@@ -97,6 +102,7 @@ public class Main extends JFrame {
     private JTextField txtCashNote;
     private JPasswordField txtCashPin;
     private JButton btnSubmitCashOp;
+    private JButton btnCashBackToOverview;
     private JLabel lblCashFeedback;
 
     private JTextField txtRecipient;
@@ -104,6 +110,7 @@ public class Main extends JFrame {
     private JTextField txtSendNote;
     private JPasswordField txtSendPin;
     private JButton btnSubmitSendMoney;
+    private JButton btnSendBackToOverview;
     private JLabel lblSendFeedback;
 
     private Timer sessionMonitorTimer;
@@ -226,10 +233,7 @@ public class Main extends JFrame {
         btnBack.addActionListener(e -> navigateBack());
 
         btnRefresh = new JButton("Refresh");
-        btnRefresh.addActionListener(e -> {
-            SessionManager.getInstance().touchActivity();
-            refreshDashboardAsync();
-        });
+        btnRefresh.addActionListener(e -> handleInteractiveRefresh());
 
         btnPinSettings = new JButton("Transaction PIN");
         btnPinSettings.setEnabled(authService != null);
@@ -239,7 +243,7 @@ public class Main extends JFrame {
         btnPinSettings.addActionListener(e -> openPinSettingsDialog());
 
         btnLogout = new JButton("Logout");
-        btnLogout.addActionListener(e -> handleLogout());
+        btnLogout.addActionListener(e -> confirmAndLogout());
 
         balanceAndActions.add(balanceBox);
         balanceAndActions.add(Box.createHorizontalStrut(8));
@@ -369,7 +373,7 @@ public class Main extends JFrame {
         lblErrorState.setFont(new Font("SansSerif", Font.PLAIN, 13));
         lblErrorState.setForeground(new Color(176, 38, 38));
         btnRetryLoad = new JButton("Retry");
-        btnRetryLoad.addActionListener(e -> refreshDashboardAsync());
+        btnRetryLoad.addActionListener(e -> handleInteractiveRefresh());
         JPanel retryWrapper = new JPanel(new FlowLayout(FlowLayout.CENTER));
         retryWrapper.add(btnRetryLoad);
         errorInner.add(lblErrorState, BorderLayout.CENTER);
@@ -387,6 +391,14 @@ public class Main extends JFrame {
         tblTransactions.setSelectionMode(ListSelectionModel.SINGLE_SELECTION);
         tblTransactions.setRowHeight(24);
         tblTransactions.getTableHeader().setReorderingAllowed(false);
+        tblTransactions.addMouseListener(new MouseAdapter() {
+            @Override
+            public void mouseClicked(MouseEvent e) {
+                if (e.getClickCount() == 2 && tblTransactions.getSelectedRow() >= 0) {
+                    showSelectedReceipt();
+                }
+            }
+        });
 
         JPanel readyCard = new JPanel(new BorderLayout(6, 6));
         readyCard.add(new JScrollPane(tblTransactions), BorderLayout.CENTER);
@@ -424,6 +436,7 @@ public class Main extends JFrame {
         txtCashPin.setEnabled(false);
         txtCashPin.setToolTipText("Required for Cash Out transactions");
         btnSubmitCashOp = new JButton("Submit Cash Transaction");
+        btnCashBackToOverview = new JButton("\u2190 Back to Overview");
         lblCashFeedback = new JLabel(" ");
         lblCashFeedback.setFont(new Font("SansSerif", Font.PLAIN, 12));
 
@@ -441,11 +454,15 @@ public class Main extends JFrame {
             }
         });
 
+        JPanel cashActions = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 0));
+        cashActions.add(btnSubmitCashOp);
+        cashActions.add(btnCashBackToOverview);
+
         gbc.gridx = 1;
         gbc.gridy = 5;
         gbc.weightx = 1.0;
         gbc.fill = GridBagConstraints.NONE;
-        form.add(btnSubmitCashOp, gbc);
+        form.add(cashActions, gbc);
 
         gbc.gridx = 0;
         gbc.gridy = 6;
@@ -453,18 +470,11 @@ public class Main extends JFrame {
         gbc.fill = GridBagConstraints.HORIZONTAL;
         form.add(lblCashFeedback, gbc);
 
-        btnSubmitCashOp.addActionListener(e -> {
-            String op = (String) cmbCashOperation.getSelectedItem();
-            String pin = new String(txtCashPin.getPassword());
-            txtCashPin.setText("");
-            submitCashOperationAsync(
-                    op,
-                    (String) cmbCashChannel.getSelectedItem(),
-                    txtCashAmount.getText(),
-                    txtCashNote.getText(),
-                    pin
-            );
-        });
+        btnCashBackToOverview.addActionListener(e -> navigateToTab("Overview"));
+        btnSubmitCashOp.addActionListener(e -> handleInteractiveCashSubmit());
+        txtCashAmount.addActionListener(e -> handleInteractiveCashSubmit());
+        txtCashNote.addActionListener(e -> handleInteractiveCashSubmit());
+        txtCashPin.addActionListener(e -> handleInteractiveCashSubmit());
 
         wrapper.add(form, BorderLayout.NORTH);
         return wrapper;
@@ -486,6 +496,7 @@ public class Main extends JFrame {
         txtSendPin = new JPasswordField(22);
         txtSendPin.setToolTipText("Enter your 4-6 digit Transaction PIN to authorize outgoing transfer");
         btnSubmitSendMoney = new JButton("Send Money");
+        btnSendBackToOverview = new JButton("\u2190 Back to Overview");
         lblSendFeedback = new JLabel(" ");
         lblSendFeedback.setFont(new Font("SansSerif", Font.PLAIN, 12));
 
@@ -494,11 +505,15 @@ public class Main extends JFrame {
         addFormRow(form, gbc, 2, "Note (Optional):", txtSendNote);
         addFormRow(form, gbc, 3, "Transaction PIN:", txtSendPin);
 
+        JPanel sendActions = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 0));
+        sendActions.add(btnSubmitSendMoney);
+        sendActions.add(btnSendBackToOverview);
+
         gbc.gridx = 1;
         gbc.gridy = 4;
         gbc.weightx = 1.0;
         gbc.fill = GridBagConstraints.NONE;
-        form.add(btnSubmitSendMoney, gbc);
+        form.add(sendActions, gbc);
 
         gbc.gridx = 0;
         gbc.gridy = 5;
@@ -506,16 +521,12 @@ public class Main extends JFrame {
         gbc.fill = GridBagConstraints.HORIZONTAL;
         form.add(lblSendFeedback, gbc);
 
-        btnSubmitSendMoney.addActionListener(e -> {
-            String pin = new String(txtSendPin.getPassword());
-            txtSendPin.setText("");
-            submitSendMoneyAsync(
-                    txtRecipient.getText(),
-                    txtSendAmount.getText(),
-                    txtSendNote.getText(),
-                    pin
-            );
-        });
+        btnSendBackToOverview.addActionListener(e -> navigateToTab("Overview"));
+        btnSubmitSendMoney.addActionListener(e -> handleInteractiveSendMoneySubmit());
+        txtRecipient.addActionListener(e -> handleInteractiveSendMoneySubmit());
+        txtSendAmount.addActionListener(e -> handleInteractiveSendMoneySubmit());
+        txtSendNote.addActionListener(e -> handleInteractiveSendMoneySubmit());
+        txtSendPin.addActionListener(e -> handleInteractiveSendMoneySubmit());
 
         wrapper.add(form, BorderLayout.NORTH);
         return wrapper;
@@ -624,7 +635,7 @@ public class Main extends JFrame {
         statusLbl.setFont(new Font("SansSerif", Font.PLAIN, 11));
         root.add(statusLbl, BorderLayout.SOUTH);
 
-        Runnable reloadAll = () -> {
+        Consumer<Boolean> reloadAll = showErrorPopup -> {
             btnRefreshAll.setEnabled(false);
             statusLbl.setText("Loading admin records...");
             new SwingWorker<AdminPanelSnapshot, Void>() {
@@ -673,19 +684,23 @@ public class Main extends JFrame {
                                 .format(java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss")));
                     } catch (Exception ex) {
                         Throwable cause = unwrapCause(ex);
-                        statusLbl.setText("Error loading admin data: " + cause.getMessage());
+                        String message = extractErrorMessage(cause);
+                        statusLbl.setText("Error loading admin data: " + message);
+                        if (showErrorPopup) {
+                            showDialogMessage(root, "Admin Refresh Failed", message, JOptionPane.ERROR_MESSAGE);
+                        }
                     }
                 }
             }.execute();
         };
 
-        reloadAll.run();
+        reloadAll.accept(false);
 
         btnSuspend.addActionListener(e -> executeAdminStatusAction(
-                ws, adminId, userTable, userModel, statusLbl, reloadAll, true));
+                ws, adminId, userTable, userModel, statusLbl, () -> reloadAll.accept(false), true));
 
         btnReactivate.addActionListener(e -> executeAdminStatusAction(
-                ws, adminId, userTable, userModel, statusLbl, reloadAll, false));
+                ws, adminId, userTable, userModel, statusLbl, () -> reloadAll.accept(false), false));
 
         btnChangeRole.addActionListener(e -> {
             int row = userTable.getSelectedRow();
@@ -722,14 +737,14 @@ public class Main extends JFrame {
                 protected void done() {
                     try {
                         get();
-                        JOptionPane.showMessageDialog(root, "Role updated to " + selectedRole + ".",
-                                "Done", JOptionPane.INFORMATION_MESSAGE);
+                        showDialogMessage(root, "Done", "Role updated to " + selectedRole + ".",
+                                JOptionPane.INFORMATION_MESSAGE);
                     } catch (Exception ex) {
                         Throwable cause = unwrapCause(ex);
-                        JOptionPane.showMessageDialog(root, "Error: " + cause.getMessage(),
-                                "Role Update Failed", JOptionPane.ERROR_MESSAGE);
+                        showDialogMessage(root, "Role Update Failed", "Error: " + extractErrorMessage(cause),
+                                JOptionPane.ERROR_MESSAGE);
                     } finally {
-                        reloadAll.run();
+                        reloadAll.accept(false);
                     }
                 }
             }.execute();
@@ -742,14 +757,15 @@ public class Main extends JFrame {
             String targetId = (String) userModel.getValueAt(modelRow, 0);
             String targetName = (String) userModel.getValueAt(modelRow, 1);
             loadAndShowAdminTransactions(ws, adminId, targetId,
-                    "Transactions — " + targetName + " (" + targetId + ")", root, statusLbl, reloadAll);
+                    "Transactions — " + targetName + " (" + targetId + ")", root, statusLbl,
+                    () -> reloadAll.accept(false));
         });
 
         btnViewAllTxns.addActionListener(e ->
                 loadAndShowAdminTransactions(ws, adminId, null,
-                        "All System Transactions", root, statusLbl, reloadAll));
+                        "All System Transactions", root, statusLbl, () -> reloadAll.accept(false)));
 
-        btnRefreshAll.addActionListener(e -> reloadAll.run());
+        btnRefreshAll.addActionListener(e -> reloadAll.accept(true));
 
         return root;
     }
@@ -786,13 +802,15 @@ public class Main extends JFrame {
             protected void done() {
                 try {
                     get();
-                    JOptionPane.showMessageDialog(userTable,
+                    showDialogMessage(userTable, "Done",
                             suspend ? "Account suspended." : "Account reactivated.",
-                            "Done", JOptionPane.INFORMATION_MESSAGE);
+                            JOptionPane.INFORMATION_MESSAGE);
                 } catch (Exception ex) {
                     Throwable cause = unwrapCause(ex);
-                    JOptionPane.showMessageDialog(userTable, "Error: " + cause.getMessage(),
-                            suspend ? "Suspend Failed" : "Reactivate Failed", JOptionPane.ERROR_MESSAGE);
+                    showDialogMessage(userTable,
+                            suspend ? "Suspend Failed" : "Reactivate Failed",
+                            "Error: " + extractErrorMessage(cause),
+                            JOptionPane.ERROR_MESSAGE);
                 } finally {
                     reloadAll.run();
                 }
@@ -807,7 +825,7 @@ public class Main extends JFrame {
         }
         String trimmed = reason.trim();
         if (trimmed.isEmpty()) {
-            JOptionPane.showMessageDialog(parent, "A reason is required.", "Validation Error", JOptionPane.ERROR_MESSAGE);
+            showDialogMessage(parent, "Validation Error", "A reason is required.", JOptionPane.ERROR_MESSAGE);
             return null;
         }
         return trimmed;
@@ -854,9 +872,10 @@ public class Main extends JFrame {
                     reloadAll.run();
                 } catch (Exception ex) {
                     Throwable cause = unwrapCause(ex);
-                    statusLbl.setText("Error loading transactions: " + cause.getMessage());
-                    JOptionPane.showMessageDialog(parent, "Error: " + cause.getMessage(),
-                            "Transaction Inspection Failed", JOptionPane.ERROR_MESSAGE);
+                    String message = extractErrorMessage(cause);
+                    statusLbl.setText("Error loading transactions: " + message);
+                    showDialogMessage(parent, "Transaction Inspection Failed", "Error: " + message,
+                            JOptionPane.ERROR_MESSAGE);
                 }
             }
         }.execute();
@@ -1111,12 +1130,287 @@ public class Main extends JFrame {
         return future;
     }
 
+    private boolean ensureActiveSessionForInteraction() {
+        SessionManager session = SessionManager.getInstance();
+        if (!session.isLoggedIn()) {
+            String reason = session.isLockedOutByPin()
+                    ? "Session terminated after maximum failed PIN attempts."
+                    : "Session expired due to inactivity. Please log in again.";
+            handleSessionTermination(reason);
+            return false;
+        }
+        session.touchActivity();
+        return true;
+    }
+
+    private void handleInteractiveRefresh() {
+        if (!ensureActiveSessionForInteraction()) {
+            return;
+        }
+        refreshDashboardAsync().whenComplete((v, err) -> runOnEdt(() -> {
+            if (!logoutHandled && currentState == DashboardState.ERROR) {
+                String msg = lblErrorState != null ? lblErrorState.getText() : "Unable to load wallet data.";
+                showDialogMessage(this, "Dashboard Refresh Error", msg, JOptionPane.ERROR_MESSAGE);
+            }
+        }));
+    }
+
+    private void handleInteractiveCashSubmit() {
+        if (!ensureActiveSessionForInteraction()) {
+            return;
+        }
+
+        String op = (String) cmbCashOperation.getSelectedItem();
+        String opLabel = "CASH_OUT".equals(op) ? "Cash Out" : "Cash In";
+        String channel = (String) cmbCashChannel.getSelectedItem();
+        String amountText = txtCashAmount.getText() != null ? txtCashAmount.getText().trim() : "";
+        String note = txtCashNote.getText() != null ? txtCashNote.getText().trim() : "";
+        String pin = new String(txtCashPin.getPassword()).trim();
+
+        BigDecimal parsedAmount;
+        try {
+            if (amountText.isEmpty()) {
+                throw new IllegalArgumentException("Please enter a transaction amount.");
+            }
+            parsedAmount = MoneyUtil.validatePositiveAmount(MoneyUtil.parse(amountText));
+        } catch (RuntimeException ex) {
+            String msg = extractErrorMessage(ex);
+            lblCashFeedback.setForeground(new Color(176, 38, 38));
+            lblCashFeedback.setText("Failed: " + msg);
+            lblStatus.setText(opLabel + " validation failed: " + msg);
+            showDialogMessage(this, "Invalid Amount", msg, JOptionPane.ERROR_MESSAGE);
+            txtCashAmount.requestFocusInWindow();
+            return;
+        }
+
+        if ("CASH_OUT".equals(op)) {
+            if (authService != null && !cachedHasPin) {
+                txtCashPin.setText("");
+                promptPinSetupIfMissing("A Transaction PIN is required before making a Cash Out.");
+                return;
+            }
+            if (pin.isEmpty()) {
+                String msg = "Please enter your 4-6 digit Transaction PIN to authorize Cash Out.";
+                lblCashFeedback.setForeground(new Color(176, 38, 38));
+                lblCashFeedback.setText("Failed: " + msg);
+                showDialogMessage(this, "PIN Required", msg, JOptionPane.WARNING_MESSAGE);
+                txtCashPin.requestFocusInWindow();
+                return;
+            }
+        }
+
+        txtCashPin.setText("");
+        StringBuilder confirmMsg = new StringBuilder();
+        confirmMsg.append("Operation: ").append(opLabel).append("\n");
+        confirmMsg.append("Channel: ").append(channel != null ? channel : "OTOG Partner").append("\n");
+        confirmMsg.append("Amount: ").append(MoneyUtil.format(parsedAmount, "PHP"));
+        if (!note.isEmpty()) {
+            confirmMsg.append("\nNote: ").append(note);
+        }
+        int choice = showConfirmDialog(
+                this,
+                "Confirm " + opLabel,
+                confirmMsg.toString(),
+                JOptionPane.OK_CANCEL_OPTION,
+                JOptionPane.QUESTION_MESSAGE
+        );
+        if (choice != JOptionPane.OK_OPTION) {
+            lblCashFeedback.setForeground(new Color(90, 98, 110));
+            lblCashFeedback.setText(opLabel + " cancelled.");
+            return;
+        }
+
+        submitCashOperationAsync(op, channel, amountText, note, pin).whenComplete((txn, err) -> runOnEdt(() -> {
+            if (err != null) {
+                if (!logoutHandled) {
+                    Throwable cause = unwrapCause(err);
+                    showDialogMessage(this, opLabel + " Failed", extractErrorMessage(cause), JOptionPane.ERROR_MESSAGE);
+                }
+            } else if (txn != null) {
+                showDialogMessage(
+                        this,
+                        opLabel + " Complete",
+                        opLabel + " successful!\nAmount: "
+                                + MoneyUtil.format(txn.getAmount(), txn.getCurrency())
+                                + "\nReference: " + txn.getReferenceNumber(),
+                        JOptionPane.INFORMATION_MESSAGE
+                );
+            }
+        }));
+    }
+
+    private void handleInteractiveSendMoneySubmit() {
+        if (!ensureActiveSessionForInteraction()) {
+            return;
+        }
+        SessionManager session = SessionManager.getInstance();
+
+        String recipient = txtRecipient.getText() != null ? txtRecipient.getText().trim() : "";
+        String amountText = txtSendAmount.getText() != null ? txtSendAmount.getText().trim() : "";
+        String note = txtSendNote.getText() != null ? txtSendNote.getText().trim() : "";
+        String pin = new String(txtSendPin.getPassword()).trim();
+
+        if (recipient.isEmpty()) {
+            String msg = "Please enter a recipient (mobile number, email, name, or wallet ID).";
+            lblSendFeedback.setForeground(new Color(176, 38, 38));
+            lblSendFeedback.setText("Transfer failed: " + msg);
+            showDialogMessage(this, "Validation Error", msg, JOptionPane.WARNING_MESSAGE);
+            txtRecipient.requestFocusInWindow();
+            return;
+        }
+
+        BigDecimal parsedAmount;
+        try {
+            if (amountText.isEmpty()) {
+                throw new IllegalArgumentException("Please enter an amount to send.");
+            }
+            parsedAmount = MoneyUtil.validatePositiveAmount(MoneyUtil.parse(amountText));
+        } catch (RuntimeException ex) {
+            String msg = extractErrorMessage(ex);
+            lblSendFeedback.setForeground(new Color(176, 38, 38));
+            lblSendFeedback.setText("Transfer failed: " + msg);
+            lblStatus.setText("Transfer validation failed: " + msg);
+            showDialogMessage(this, "Invalid Amount", msg, JOptionPane.ERROR_MESSAGE);
+            txtSendAmount.requestFocusInWindow();
+            return;
+        }
+
+        if (authService != null && !cachedHasPin) {
+            txtSendPin.setText("");
+            promptPinSetupIfMissing("A Transaction PIN is required before sending money.");
+            return;
+        }
+
+        if (pin.isEmpty()) {
+            String msg = "Please enter your 4-6 digit Transaction PIN to authorize Send Money.";
+            lblSendFeedback.setForeground(new Color(176, 38, 38));
+            lblSendFeedback.setText("Transfer failed: " + msg);
+            showDialogMessage(this, "PIN Required", msg, JOptionPane.WARNING_MESSAGE);
+            txtSendPin.requestFocusInWindow();
+            return;
+        }
+
+        txtSendPin.setText("");
+        User currentUser = session.getCurrentUser();
+        if (walletService instanceof WalletService ws && currentUser != null) {
+            btnSubmitSendMoney.setEnabled(false);
+            lblSendFeedback.setForeground(new Color(70, 80, 95));
+            lblSendFeedback.setText("Preparing transfer confirmation...");
+            lblStatus.setText("Validating recipient and balance...");
+
+            SendMoneyService sendMoneyService = new SendMoneyService(ws, ws.getUserRepository(), authService);
+            new SwingWorker<SendMoneyService.SendMoneyPreview, Void>() {
+                @Override
+                protected SendMoneyService.SendMoneyPreview doInBackground() {
+                    return sendMoneyService.preview(currentUser.getUserId(), recipient, parsedAmount, MoneyUtil.ZERO, note);
+                }
+
+                @Override
+                protected void done() {
+                    btnSubmitSendMoney.setEnabled(true);
+                    try {
+                        SendMoneyService.SendMoneyPreview preview = get();
+                        JTextArea previewArea = new JTextArea(preview.toConfirmationText());
+                        previewArea.setEditable(false);
+                        previewArea.setFont(new Font("Monospaced", Font.PLAIN, 12));
+                        previewArea.setMargin(new Insets(6, 8, 6, 8));
+                        JScrollPane previewScroll = new JScrollPane(previewArea);
+                        previewScroll.setPreferredSize(new Dimension(400, 220));
+                        int choice = showConfirmDialog(
+                                Main.this,
+                                "Confirm Send Money",
+                                previewScroll,
+                                JOptionPane.OK_CANCEL_OPTION,
+                                JOptionPane.QUESTION_MESSAGE
+                        );
+                        if (choice != JOptionPane.OK_OPTION) {
+                            lblSendFeedback.setForeground(new Color(90, 98, 110));
+                            lblSendFeedback.setText("Transfer cancelled.");
+                            lblStatus.setText("Transfer cancelled");
+                            return;
+                        }
+                        dispatchConfirmedSendMoney(preview.getReferenceNumber(), recipient, amountText, note, pin);
+                    } catch (Exception ex) {
+                        Throwable cause = unwrapCause(ex);
+                        String message = extractErrorMessage(cause);
+                        lblSendFeedback.setForeground(new Color(176, 38, 38));
+                        lblSendFeedback.setText("Transfer failed: " + message);
+                        lblStatus.setText("Transfer failed: " + message);
+                        showDialogMessage(Main.this, "Transfer Validation Failed", message, JOptionPane.ERROR_MESSAGE);
+                    }
+                }
+            }.execute();
+        } else {
+            StringBuilder confirmMsg = new StringBuilder();
+            confirmMsg.append("Recipient: ").append(recipient).append("\n");
+            confirmMsg.append("Amount: ").append(MoneyUtil.format(parsedAmount, "PHP"));
+            if (!note.isEmpty()) {
+                confirmMsg.append("\nNote: ").append(note);
+            }
+            int choice = showConfirmDialog(
+                    this,
+                    "Confirm Send Money",
+                    confirmMsg.toString(),
+                    JOptionPane.OK_CANCEL_OPTION,
+                    JOptionPane.QUESTION_MESSAGE
+            );
+            if (choice != JOptionPane.OK_OPTION) {
+                lblSendFeedback.setForeground(new Color(90, 98, 110));
+                lblSendFeedback.setText("Transfer cancelled.");
+                lblStatus.setText("Transfer cancelled");
+                return;
+            }
+            dispatchConfirmedSendMoney(null, recipient, amountText, note, pin);
+        }
+    }
+
+    private void dispatchConfirmedSendMoney(String explicitReference, String recipient,
+                                            String amountText, String note, String pin) {
+        executeSendMoneyAsync(explicitReference, recipient, amountText, note, pin)
+                .whenComplete((txn, err) -> runOnEdt(() -> {
+                    if (err != null) {
+                        if (!logoutHandled) {
+                            Throwable cause = unwrapCause(err);
+                            showDialogMessage(this, "Transfer Failed", extractErrorMessage(cause),
+                                    JOptionPane.ERROR_MESSAGE);
+                        }
+                    } else if (txn != null) {
+                        showDialogMessage(
+                                this,
+                                "Transfer Complete",
+                                "Send Money successful!\nAmount: "
+                                        + MoneyUtil.format(txn.getAmount(), txn.getCurrency())
+                                        + "\nReference: " + txn.getReferenceNumber(),
+                                JOptionPane.INFORMATION_MESSAGE
+                        );
+                    }
+                }));
+    }
+
+    private void promptPinSetupIfMissing(String message) {
+        int choice = showConfirmDialog(
+                this,
+                "Transaction PIN Required",
+                message + "\n\nWould you like to set your Transaction PIN now?",
+                JOptionPane.YES_NO_OPTION,
+                JOptionPane.WARNING_MESSAGE
+        );
+        if (choice == JOptionPane.YES_OPTION) {
+            openPinSettingsDialog();
+        }
+    }
+
     public CompletableFuture<Transaction> submitSendMoneyAsync(String recipient, String amountText, String note) {
         return submitSendMoneyAsync(recipient, amountText, note, null);
     }
 
     public CompletableFuture<Transaction> submitSendMoneyAsync(String recipient, String amountText,
                                                               String note, String rawPin) {
+        return executeSendMoneyAsync(null, recipient, amountText, note, rawPin);
+    }
+
+    private CompletableFuture<Transaction> executeSendMoneyAsync(String explicitReference, String recipient,
+                                                               String amountText, String note, String rawPin) {
         CompletableFuture<Transaction> future = new CompletableFuture<>();
 
         runOnEdt(() -> {
@@ -1142,7 +1436,9 @@ public class Main extends JFrame {
                     throw new IllegalArgumentException("Recipient identifier is required.");
                 }
                 BigDecimal amount = MoneyUtil.validatePositiveAmount(MoneyUtil.parse(amountText));
-                String ref = IdGenerator.nextReferenceNumber();
+                String ref = (explicitReference != null && !explicitReference.trim().isEmpty())
+                        ? explicitReference.trim()
+                        : IdGenerator.nextReferenceNumber();
                 String cleanPin = rawPin != null ? rawPin.trim() : "";
                 if (!cleanPin.isEmpty()) {
                     if (authService != null && user != null) {
@@ -1171,9 +1467,7 @@ public class Main extends JFrame {
                     refreshDashboardAsync().whenComplete((v, err) -> future.complete(txn));
                 } catch (Exception ex) {
                     Throwable cause = unwrapCause(ex);
-                    String message = (cause.getMessage() != null && !cause.getMessage().trim().isEmpty())
-                            ? cause.getMessage()
-                            : cause.getClass().getSimpleName();
+                    String message = extractErrorMessage(cause);
                     lblSendFeedback.setForeground(new Color(176, 38, 38));
                     lblSendFeedback.setText("Transfer failed: " + message);
                     lblStatus.setText("Transfer failed: " + message);
@@ -1202,9 +1496,9 @@ public class Main extends JFrame {
 
     private void openPinSettingsDialog() {
         if (authService == null) {
-            JOptionPane.showMessageDialog(this,
-                    "Transaction PIN management is unavailable without AuthService.",
+            showDialogMessage(this,
                     "Transaction PIN",
+                    "Transaction PIN management is unavailable without AuthService.",
                     JOptionPane.INFORMATION_MESSAGE);
             return;
         }
@@ -1279,6 +1573,18 @@ public class Main extends JFrame {
         buttons.add(btnCancel);
         buttons.add(btnSavePin);
 
+        dialog.setDefaultCloseOperation(WindowConstants.DISPOSE_ON_CLOSE);
+        dialog.getRootPane().setDefaultButton(btnSavePin);
+        dialog.getRootPane().registerKeyboardAction(
+                e -> {
+                    if (btnCancel.isEnabled()) {
+                        dialog.dispose();
+                    }
+                },
+                KeyStroke.getKeyStroke(java.awt.event.KeyEvent.VK_ESCAPE, 0),
+                JComponent.WHEN_IN_FOCUSED_WINDOW
+        );
+
         btnCancel.addActionListener(e -> dialog.dispose());
         btnSavePin.addActionListener(e -> {
             String secret = new String(txtSecret.getPassword());
@@ -1286,19 +1592,24 @@ public class Main extends JFrame {
             String confirmPin = new String(txtConfirmPin.getPassword()).trim();
 
             if (secret.isEmpty() || newPin.isEmpty()) {
+                String msg = "Please fill in all fields.";
                 lblPinDialogFeedback.setForeground(new Color(176, 38, 38));
-                lblPinDialogFeedback.setText("Please fill in all fields.");
+                lblPinDialogFeedback.setText(msg);
+                showDialogMessage(dialog, "Validation Error", msg, JOptionPane.WARNING_MESSAGE);
                 return;
             }
             if (!newPin.equals(confirmPin)) {
+                String msg = "New PIN and confirmation do not match.";
                 lblPinDialogFeedback.setForeground(new Color(176, 38, 38));
-                lblPinDialogFeedback.setText("New PIN and confirmation do not match.");
+                lblPinDialogFeedback.setText(msg);
+                showDialogMessage(dialog, "Validation Error", msg, JOptionPane.WARNING_MESSAGE);
                 return;
             }
 
             final boolean useCurrentPin = rbChangePin.isSelected();
             btnSavePin.setEnabled(false);
             btnCancel.setEnabled(false);
+            dialog.setDefaultCloseOperation(WindowConstants.DO_NOTHING_ON_CLOSE);
             lblPinDialogFeedback.setForeground(new Color(70, 80, 95));
             lblPinDialogFeedback.setText("Saving Transaction PIN...");
 
@@ -1317,24 +1628,27 @@ public class Main extends JFrame {
                 protected void done() {
                     btnSavePin.setEnabled(true);
                     btnCancel.setEnabled(true);
+                    dialog.setDefaultCloseOperation(WindowConstants.DISPOSE_ON_CLOSE);
                     try {
                         get();
                         updatePinStatusDisplay(true);
                         lblStatus.setText("Transaction PIN updated.");
-                        JOptionPane.showMessageDialog(dialog,
-                                "Transaction PIN saved successfully.",
+                        showDialogMessage(dialog,
                                 "Transaction PIN",
+                                "Transaction PIN saved successfully.",
                                 JOptionPane.INFORMATION_MESSAGE);
                         dialog.dispose();
                     } catch (Exception ex) {
                         Throwable cause = unwrapCause(ex);
-                        String message = cause.getMessage() != null ? cause.getMessage() : cause.getClass().getSimpleName();
+                        String message = extractErrorMessage(cause);
                         lblPinDialogFeedback.setForeground(new Color(176, 38, 38));
                         lblPinDialogFeedback.setText(message);
                         if (SessionManager.getInstance().isExpiredDueToInactivity()
                                 || SessionManager.getInstance().isLockedOutByPin()) {
                             dialog.dispose();
                             handleSessionTermination(message);
+                        } else {
+                            showDialogMessage(dialog, "Transaction PIN Error", message, JOptionPane.ERROR_MESSAGE);
                         }
                     }
                 }
@@ -1374,7 +1688,7 @@ public class Main extends JFrame {
         }
         logoutHandled = true;
         if (isShowing()) {
-            JOptionPane.showMessageDialog(this, reason, "Session Ended", JOptionPane.WARNING_MESSAGE);
+            showDialogMessage(this, "Session Ended", reason, JOptionPane.WARNING_MESSAGE);
         }
         dispose();
         if (onLogoutCallback != null) {
@@ -1458,9 +1772,9 @@ public class Main extends JFrame {
     private void showSelectedReceipt() {
         Transaction txn = getSelectedTransactionForReceipt();
         if (txn == null) {
-            JOptionPane.showMessageDialog(this,
-                    "Please select a transaction row to view its receipt.",
+            showDialogMessage(this,
                     "No Transaction Selected",
+                    "Please select a transaction row to view its receipt.",
                     JOptionPane.INFORMATION_MESSAGE);
             return;
         }
@@ -1527,21 +1841,59 @@ public class Main extends JFrame {
         handleLogout();
     }
 
+    private void confirmAndLogout() {
+        int choice = showConfirmDialog(
+                this,
+                "Confirm Logout",
+                "Are you sure you want to log out of your OTOG E-Wallet session?",
+                JOptionPane.YES_NO_OPTION,
+                JOptionPane.QUESTION_MESSAGE
+        );
+        if (choice == JOptionPane.YES_OPTION) {
+            handleLogout();
+        }
+    }
+
     private void handleLogout() {
         if (logoutHandled) {
             return;
         }
         logoutHandled = true;
         User currentUser = SessionManager.getInstance().getCurrentUser();
-        if (authService != null && currentUser != null) {
-            authService.logout(currentUser.getUserId());
-        } else {
+        try {
+            if (authService != null && currentUser != null) {
+                authService.logout(currentUser.getUserId());
+            } else {
+                SessionManager.getInstance().logout();
+            }
+        } catch (Exception ex) {
             SessionManager.getInstance().logout();
+            if (isShowing()) {
+                showDialogMessage(this, "Logout Warning",
+                        "Session cleared locally, though server logout reported: " + extractErrorMessage(ex),
+                        JOptionPane.WARNING_MESSAGE);
+            }
         }
         dispose();
         if (onLogoutCallback != null) {
             SwingUtilities.invokeLater(onLogoutCallback);
         }
+    }
+
+    protected void showDialogMessage(Component parent, String title, String message, int messageType) {
+        JOptionPane.showMessageDialog(parent != null ? parent : this, message, title, messageType);
+    }
+
+    protected int showConfirmDialog(Component parent, String title, Object message, int optionType, int messageType) {
+        return JOptionPane.showConfirmDialog(parent != null ? parent : this, message, title, optionType, messageType);
+    }
+
+    private static String extractErrorMessage(Throwable ex) {
+        if (ex == null) {
+            return "An unexpected error occurred.";
+        }
+        String msg = ex.getMessage();
+        return (msg != null && !msg.trim().isEmpty()) ? msg : ex.getClass().getSimpleName();
     }
 
     @Override
@@ -1564,10 +1916,12 @@ public class Main extends JFrame {
     }
 
     private static Throwable unwrapCause(Throwable ex) {
-        if (ex instanceof ExecutionException && ex.getCause() != null) {
-            return ex.getCause();
+        Throwable current = ex;
+        while ((current instanceof ExecutionException || current instanceof CompletionException)
+                && current.getCause() != null) {
+            current = current.getCause();
         }
-        return ex;
+        return current;
     }
 
     public DashboardState getCurrentState() {
@@ -1676,6 +2030,34 @@ public class Main extends JFrame {
 
     public JPasswordField getSendPinField() {
         return txtSendPin;
+    }
+
+    public JButton getSubmitCashButton() {
+        return btnSubmitCashOp;
+    }
+
+    public JButton getCashBackToOverviewButton() {
+        return btnCashBackToOverview;
+    }
+
+    public JButton getSubmitSendMoneyButton() {
+        return btnSubmitSendMoney;
+    }
+
+    public JButton getSendBackToOverviewButton() {
+        return btnSendBackToOverview;
+    }
+
+    public JTextField getCashAmountField() {
+        return txtCashAmount;
+    }
+
+    public JTextField getRecipientField() {
+        return txtRecipient;
+    }
+
+    public JTextField getSendAmountField() {
+        return txtSendAmount;
     }
 
     private static final class DashboardSnapshot {

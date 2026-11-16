@@ -22,24 +22,24 @@ In compliance with the subject CSIT227 - Object Oriented Programming.
 
 ---
 
-## 📋 CAP-01 Project Scope, Inventory & Technical Baseline
+## 📋 Project Scope, Inventory & Technical Baseline
 
-### 1. Code & Feature Inventory (as of CAP-01)
+### 1. Code & Feature Inventory
 
 | Feature / Module | Class Diagram / Ticket Scope | Status | Current Files / Notes |
 | :--- | :--- | :---: | :--- |
 | **Build, Run & Test Baseline** | Reproducible CLI + IDE build | **Implemented** | `build.bat`, `run.bat`, `test.bat`, `.idea/OTOG.iml`, `lib/` |
-| **Login & 2FA Prototype** | `UserLogin` Swing form (`Password` + `2FA` panels) | **Partial** | `src/UserLogin.java`, `src/UserLogin.form` (form init fixed via `$$$setupUI$$$()`; still uses demo `"admin"`/`"password"` credentials until `AuthService` is wired) |
+| **Login & 2FA (`UserLogin`)** | `UserLogin` Swing form (`Password` + `2FA` + `Back to Login`) | **Implemented** | `src/UserLogin.java`, `src/UserLogin.form` — wired to `AuthServiceImpl`, `WalletService`, `SessionManager`, and `RegisterDialog` with `JOptionPane` error/feedback dialogs |
 | **Database & ACID Transactions** | SQLite schema, WAL/busy timeout, rollback | **Implemented** | `src/com/otog/database/DatabaseManager.java`, `TransactionCallback.java` |
 | **User, Wallet & PaymentMethod Domain** | `User`, `Wallet`, `PaymentMethod`, `LedgerEntry` | **Implemented** | `src/com/otog/model/`, `src/com/otog/repository/` |
 | **Core Wallet Operations** | `createWallet`, `transfer`, `cashIn`, `cashOut` | **Implemented** | `src/com/otog/service/WalletOperations.java`, `WalletService.java`, `MoneyUtil.java` |
-| **Shared Service Contracts** | `WalletOperations`, `AuthService`, `LoanService`, `InvestmentService` | **Implemented** | `src/com/otog/service/` (interfaces agreed for parallel module work) |
-| **Automated Domain & Baseline Tests** | JUnit 5 verification suite | **Implemented** | `test/com/otog/*.java` |
+| **Shared Service Contracts** | `WalletOperations`, `AuthService`, `LoanService`, `InvestmentService`, `AdminService` | **Implemented** | `src/com/otog/service/` |
+| **Automated Domain & UI Tests** | JUnit 5 verification suite | **Implemented** | `test/com/otog/*.java` |
 | **Registration & Password Authentication (CAP-03)** | Salted password hashes, account registration, wallet auto-provisioning, lockout limits & SessionManager | **Implemented** | `src/com/otog/service/AuthServiceImpl.java`, `SessionManager.java`, `src/UserLogin.java`, `src/com/otog/ui/RegisterDialog.java` |
-| **Security Domain (`Pin`, `TwoFactorAuth`)** | OTP expiry and PIN lockouts | **Partial** | Defined in `Class Diagram/ewallet_cd.png` and `AuthService.java`; CAP-03 implemented salted hash auth & 2FA issuance |
-| **Main Application Navigation Shell (`Main`)** | Dashboard with balance, recent activity, logout, async worker states & navigation | **Implemented (CAP-05)** | `src/com/otog/ui/Main.java`, `SessionManager.java`, `src/UserLogin.java` (unfinished Loans/Investments tabs hidden unless services are provided) |
-| **CashInOut & SendMoney GUI Workflows** | Swing forms wired to `WalletOperations` off the UI thread | **Implemented (CAP-05)** | Integrated in `src/com/otog/ui/Main.java` (`Cash In / Out` & `Send Money` tabs with post-payment refresh) |
-| **Admin Permissions & Account Controls (CAP-09)** | Role authorization, account suspension/reactivation with recorded reasons, suspended account payment blockage, audit logs without secrets & prohibited direct balance editing | **Implemented** | `src/com/otog/service/AdminService.java`, `AdminServiceImpl.java`, `AdminAction.java`, `AdminActionRepository.java`, `WalletService.java`, `test/com/otog/AdminPermissionsAndAccountControlTest.java` |
+| **Security Domain (`Pin`, `TwoFactorAuth`, `SessionManager`)** | Account-bound OTP expiry/1-time use/cooldown, hashed Transaction PIN lockouts & 15-min session timeout | **Implemented (CAP-04)** | `src/com/otog/service/OtpService.java`, `AuthServiceImpl.java`, `SessionManager.java`, `WalletService.java`, `test/com/otog/OtpPinSessionTest.java` |
+| **Main Application Navigation Shell (`Main`)** | Multi-screen dashboard with balance, recent activity, receipt viewer, PIN settings, async worker states & LIFO back navigation | **Implemented (CAP-05)** | `src/com/otog/ui/Main.java`, `SessionManager.java`, `src/UserLogin.java` (unfinished Loans/Investments tabs hidden unless services are provided) |
+| **CashInOut & SendMoney Workflows (CAP-05 / CAP-06)** | Swing forms, `SendMoneyService` preview/confirmation, Factory/Builder models, PIN authorization & `JOptionPane` error handling | **Implemented** | `src/com/otog/ui/Main.java`, `src/com/otog/service/SendMoneyService.java`, `TransactionBuilder.java`, `TransactionFactory.java`, `test/com/otog/SendMoneyTest.java` |
+| **Admin Permissions & Account Controls (CAP-09)** | Role authorization, account suspension/reactivation with recorded reasons, suspended account payment blockage, audit logs without secrets & prohibited direct balance editing | **Implemented** | `src/com/otog/service/AdminService.java`, `AdminServiceImpl.java`, `AdminAction.java`, `AdminActionRepository.java`, `WalletService.java`, `src/com/otog/ui/Main.java`, `test/com/otog/AdminPermissionsAndAccountControlTest.java` |
 | **Simulated Loans (`Loan`)** | Apply, approve, repay with wallet ledger integration | **Partial** | `LoanTransaction.java` & `LoanService.java` defined; service implementation & UI pending |
 | **Simulated Investments (`InvestMoney`)** | Invest, withdraw, calculate returns with wallet ledger integration | **Partial** | `InvestMoneyTransaction.java` & `InvestmentService.java` defined; service implementation & UI pending |
 
@@ -53,13 +53,14 @@ In compliance with the subject CSIT227 - Object Oriented Programming.
 - **Database**: Embedded **SQLite 3** (`lib/sqlite-jdbc-3.47.0.0.jar`), file path `data/otog.db` (`jdbc:sqlite:data/otog.db`) for runtime and `jdbc:sqlite::memory:` for isolated unit tests, managed by `com.otog.database.DatabaseManager`.
 - **Package Structure**:
   - `src/` (default package): `UserLogin.java` & `UserLogin.form`
-  - `com.otog.database`: SQLite lifecycle & ACID transaction helpers
-  - `com.otog.model`: Domain entities & enums (`User`, `Wallet`, `Transaction`, subclasses, `LedgerEntry`, `PaymentMethod`)
-  - `com.otog.repository`: JDBC repositories
-  - `com.otog.service`: Shared service interfaces (`WalletOperations`, `AuthService`, `LoanService`, `InvestmentService`) & implementations (`WalletService`)
-  - `com.otog.exception`: Typed domain exceptions (`OtogException`, `InsufficientFundsException`, `DuplicateTransactionException`, etc.)
-  - `com.otog.util`: `MoneyUtil` & `IdGenerator`
-  - `test/com/otog`: JUnit 5 test suites
+  - `com.otog.ui`: Swing screens & dialogs (`Main.java`, `RegisterDialog.java`)
+  - `com.otog.database`: SQLite lifecycle & ACID transaction helpers (`DatabaseManager`, `TransactionCallback`)
+  - `com.otog.model`: Domain entities, enums, factory & builder (`User`, `UserRole`, `UserStatus`, `Wallet`, `WalletStatus`, `Transaction`, `SendMoneyTransaction`, `CashInOutTransaction`, `InvestMoneyTransaction`, `LoanTransaction`, `TransactionFactory`, `TransactionBuilder`, `LedgerEntry`, `PaymentMethod`, `Credential`, `AdminAction`)
+  - `com.otog.repository`: JDBC repositories (`UserRepository`, `WalletRepository`, `PaymentMethodRepository`, `TransactionRepository`, `LedgerRepository`, `CredentialRepository`, `AdminActionRepository`)
+  - `com.otog.service`: Shared service interfaces & implementations (`WalletOperations`, `WalletService`, `AuthService`, `AuthServiceImpl`, `OtpService`, `SessionManager`, `SendMoneyService`, `AdminService`, `AdminServiceImpl`, `LoanService`, `InvestmentService`)
+  - `com.otog.exception`: Typed domain exceptions (`OtogException`, `InsufficientFundsException`, `DuplicateTransactionException`, `EntityNotFoundException`, `InvalidAmountException`, `WalletException`)
+  - `com.otog.util`: `MoneyUtil`, `IdGenerator`, `PasswordUtil`
+  - `test/com/otog`: JUnit 5 test suites (`AdminPermissionsAndAccountControlTest`, `AtomicCommitAndRollbackTest`, `BaselineReproducibilityTest`, `BigDecimalMoneyValidationTest`, `ConcurrencyDoubleSpendTest`, `DashboardAndNavigationTest`, `OtpPinSessionTest`, `RegistrationAndAuthTest`, `RestartPersistenceTest`, `SendMoneyTest`, `UserWalletPersistenceTest`)
 - **IntelliJ Form Initialization**:
   - `.idea/uiDesigner.xml` disables binary `.class` instrumentation (`INSTRUMENT_CLASSES=false`), and `UserLogin.java` includes explicit `$$$setupUI$$$()` component initialization invoked when `pnlMain == null`. This guarantees `UserLogin` launches identically whether compiled via `build.bat` (`javac`) or IntelliJ IDEA.
 
@@ -121,6 +122,27 @@ The platform enforces strict role-based access control, account lifecycle govern
 - **Suspended Account Payment Barrier**: Accounts in `SUSPENDED` status are blocked from initiating outgoing payments (`transfer`, `cashOut`, `transferWithPin`, `cashOutWithPin`), throwing `WalletException`.
 - **Traceable Actions Without Secrets**: All administrative actions are recorded in the `admin_actions` table with action ID, administrator ID, action type, target user ID, reason, and sanitized details. Secrets (passwords, PINs, auth salts, hashes, tokens, CVVs) are strictly excluded and automatically redacted.
 - **Prohibited Direct Balance Editing**: Direct arbitrary modification of balances is strictly prohibited (`UnsupportedOperationException`); all balance adjustments must occur through double-entry ledger transactions (`transfer`, `cashIn`, `cashOut`).
+
+---
+
+## 🖥️ Multi-Screen Navigation & `JOptionPane` Error Handling
+
+### 1. Navigable Forms Flow
+- **Authentication & Onboarding (`UserLogin`, `RegisterDialog`)**:
+  - **Login Screen (`pnlPassword`) ↔ Registration (`RegisterDialog`)**: New accounts can register via `Create New Account / Register` and return to Login via `Back to Login` (pre-filling the registered mobile number on completion).
+  - **Login Screen (`pnlPassword`) ↔ Two-Factor Authentication (`pnl2FA`)**: Valid credentials issue a simulated 6-digit SMS OTP and transition to `pnl2FA`; users can verify, resend OTP, or click **Back to Login** to clear pending state and return to `pnlPassword`.
+- **Authenticated Dashboard (`com.otog.ui.Main`)**:
+  - **Protected Entry**: Enforces `SessionManager.getInstance().requireAuthentication()` before opening.
+  - **Tabs & Quick Actions**: `Overview` (with Quick Action shortcuts to `Cash In`, `Cash Out`, `Send Money`, and `Set / Change PIN`), `Cash In / Out`, `Send Money`, and role-gated `Admin Controls` (visible only to `ADMIN`).
+  - **Back Navigation**: Header `← Back` button maintains a LIFO tab navigation history stack, and form tabs (`Cash In / Out`, `Send Money`) include `← Back to Overview` buttons.
+  - **Modal Sub-Screens & Logout**: `Transaction PIN` setup/change dialog, double-click / `View Receipt` transaction receipt viewer, `SendMoneyService` pre-confirmation preview dialog, and `Logout` confirmation returning cleanly to `UserLogin`.
+
+### 2. Error, Validation & Confirmation Handling (`JOptionPane`)
+- **Login & Registration (`UserLogin`, `RegisterDialog`)**: Displays `JOptionPane` alerts for missing/invalid fields, mismatched or short passwords, duplicate mobile/email errors, invalid credentials, account lockouts, 2FA/OTP errors (including resend cooldown), and startup initialization failures.
+- **Dashboard & Payments (`Main`)**:
+  - Validates amounts (`MoneyUtil`), recipient identifiers, and Transaction PIN presence before submitting, surfacing warnings/errors via `JOptionPane` (and prompting first-time users to configure a Transaction PIN if unset).
+  - Uses `SendMoneyService.preview(...)` off the EDT to resolve recipients, verify transfer limits (`PHP 1.00`–`PHP 50,000.00`), check balance, and present a `JOptionPane` confirmation summary before debiting funds.
+  - Surfaces `InsufficientFundsException`, `EntityNotFoundException`, `WalletException`, PIN failures, admin operation errors, refresh failures, and session timeouts/PIN lockouts through `JOptionPane` dialogs while keeping DB and crypto work off the Swing EDT.
 
 ---
 

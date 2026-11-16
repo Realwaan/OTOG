@@ -32,6 +32,7 @@ public class UserLogin extends JFrame {
     private JTextField textField2FA;
     private JButton btnVerify2FA;
     private JButton btnResendOtp;
+    private JButton btnBackToLogin;
 
     private final AuthService authService;
     private final WalletOperations walletService;
@@ -101,10 +102,26 @@ public class UserLogin extends JFrame {
         pnl2FA.setVisible(false);
 
         btnLogin.addActionListener(e -> submitLoginAsync());
+        if (textFieldUsername != null) {
+            textFieldUsername.addActionListener(e -> {
+                if (passwordFieldPasswordInput != null) {
+                    passwordFieldPasswordInput.requestFocusInWindow();
+                }
+            });
+        }
+        if (passwordFieldPasswordInput != null) {
+            passwordFieldPasswordInput.addActionListener(e -> submitLoginAsync());
+        }
 
         if (btnRegister != null) {
             btnRegister.addActionListener(e -> {
-                RegisterDialog dialog = new RegisterDialog(this, this.authService);
+                if (this.authService == null) {
+                    showDialogMessage("Registration Error",
+                            "Registration service is unavailable.",
+                            JOptionPane.ERROR_MESSAGE);
+                    return;
+                }
+                RegisterDialog dialog = new RegisterDialog(resolveOwnerFrame(), this.authService);
                 dialog.setVisible(true);
                 User registered = dialog.getRegisteredUser();
                 if (registered != null) {
@@ -118,10 +135,57 @@ public class UserLogin extends JFrame {
         if (btnVerify2FA != null) {
             btnVerify2FA.addActionListener(e -> submitTwoFactorAsync());
         }
+        if (textField2FA != null) {
+            textField2FA.addActionListener(e -> submitTwoFactorAsync());
+        }
 
         if (btnResendOtp != null) {
             btnResendOtp.addActionListener(e -> submitResendOtpAsync());
         }
+
+        if (btnBackToLogin != null) {
+            btnBackToLogin.addActionListener(e -> returnToPasswordScreen());
+        }
+    }
+
+    private Frame resolveOwnerFrame() {
+        Window ancestor = pnlMain != null ? SwingUtilities.getWindowAncestor(pnlMain) : null;
+        return (ancestor instanceof Frame frame) ? frame : this;
+    }
+
+    public void returnToPasswordScreen() {
+        this.currentAuthenticatedUserId = null;
+        this.pendingUser = null;
+        this.pendingWallet = null;
+        this.lastIssuedOtp = null;
+        this.lastErrorMessage = null;
+        if (textField2FA != null) {
+            textField2FA.setText("");
+        }
+        if (twoFactorHeaderLabel != null) {
+            twoFactorHeaderLabel.setText("Login Successful! Complete Two-Factor Authentication (Simulated SMS):");
+        }
+        if (passwordFieldPasswordInput != null) {
+            passwordFieldPasswordInput.setText("");
+        }
+        if (pnl2FA != null) {
+            pnl2FA.setVisible(false);
+        }
+        if (pnlPassword != null) {
+            pnlPassword.setVisible(true);
+        }
+        setLoginInputsBusy(false);
+        if (pnlMain != null) {
+            pnlMain.revalidate();
+            pnlMain.repaint();
+        }
+        if (textFieldUsername != null) {
+            textFieldUsername.requestFocusInWindow();
+        }
+    }
+
+    protected void showDialogMessage(String title, String message, int messageType) {
+        JOptionPane.showMessageDialog(pnlMain, message, title, messageType);
     }
 
     /**
@@ -168,16 +232,15 @@ public class UserLogin extends JFrame {
         String errorMsg = (lastErrorMessage != null && !lastErrorMessage.trim().isEmpty())
                 ? lastErrorMessage
                 : "Wrong credentials! Please try again.";
-        JOptionPane.showMessageDialog(pnlMain, errorMsg, "Login Error", JOptionPane.ERROR_MESSAGE);
+        showDialogMessage("Login Error", errorMsg, JOptionPane.ERROR_MESSAGE);
     }
 
     /** Verifies the OTP and starts the session off the EDT, then opens the dashboard on the EDT. */
     private void submitTwoFactorAsync() {
         final String code = textField2FA.getText().trim();
         if (code.isEmpty()) {
-            JOptionPane.showMessageDialog(pnlMain,
+            showDialogMessage("2FA Error",
                     "Please enter your 2FA verification code.",
-                    "2FA Error",
                     JOptionPane.WARNING_MESSAGE);
             return;
         }
@@ -202,8 +265,16 @@ public class UserLogin extends JFrame {
                         : "Invalid, expired, reused, or attempt-limited 2FA code.";
                 try {
                     if (get()) {
-                        openDashboard();
-                        return;
+                        try {
+                            openDashboard();
+                            return;
+                        } catch (Exception launchEx) {
+                            failure = (launchEx.getMessage() != null && !launchEx.getMessage().trim().isEmpty())
+                                    ? "Unable to open dashboard: " + launchEx.getMessage()
+                                    : "Unable to open dashboard. Please try logging in again.";
+                            showDialogMessage("Dashboard Error", failure, JOptionPane.ERROR_MESSAGE);
+                            return;
+                        }
                     }
                 } catch (InterruptedException ex) {
                     Thread.currentThread().interrupt();
@@ -214,7 +285,7 @@ public class UserLogin extends JFrame {
                         failure = cause.getMessage();
                     }
                 }
-                JOptionPane.showMessageDialog(pnlMain, failure, "2FA Error", JOptionPane.WARNING_MESSAGE);
+                showDialogMessage("2FA Error", failure, JOptionPane.WARNING_MESSAGE);
             }
         }.execute();
     }
@@ -222,6 +293,9 @@ public class UserLogin extends JFrame {
     private void submitResendOtpAsync() {
         final String userId = currentAuthenticatedUserId;
         if (authService == null || userId == null || userId.trim().isEmpty()) {
+            showDialogMessage("Resend OTP Error",
+                    "No authenticated user is currently pending 2FA.",
+                    JOptionPane.WARNING_MESSAGE);
             return;
         }
         if (btnResendOtp != null) {
@@ -239,18 +313,26 @@ public class UserLogin extends JFrame {
                     btnResendOtp.setEnabled(true);
                 }
                 try {
-                    applySimulatedOtp(get());
+                    String newCode = get();
+                    applySimulatedOtp(newCode);
+                    if (newCode != null && pnlMain.isShowing()) {
+                        showDialogMessage("Two-Factor Authentication",
+                                "[Simulated SMS] A new 2FA code has been issued: " + newCode
+                                        + "\n(Valid for 5 minutes, one-time use)",
+                                JOptionPane.INFORMATION_MESSAGE);
+                    }
                 } catch (InterruptedException ex) {
                     Thread.currentThread().interrupt();
+                    showDialogMessage("Resend OTP Error",
+                            "OTP resend was interrupted. Please try again.",
+                            JOptionPane.ERROR_MESSAGE);
                 } catch (ExecutionException ex) {
                     Throwable cause = ex.getCause() != null ? ex.getCause() : ex;
-                    lastErrorMessage = cause.getMessage();
-                    JOptionPane.showMessageDialog(
-                            pnlMain,
-                            cause.getMessage(),
-                            "Resend OTP Error",
-                            JOptionPane.WARNING_MESSAGE
-                    );
+                    String msg = (cause.getMessage() != null && !cause.getMessage().trim().isEmpty())
+                            ? cause.getMessage()
+                            : "Unable to resend OTP. Please try again.";
+                    lastErrorMessage = msg;
+                    showDialogMessage("Resend OTP Error", msg, JOptionPane.WARNING_MESSAGE);
                 }
             }
         }.execute();
@@ -272,6 +354,9 @@ public class UserLogin extends JFrame {
         btnVerify2FA.setText(busy ? "Verifying..." : "Verify");
         if (btnResendOtp != null) {
             btnResendOtp.setEnabled(!busy);
+        }
+        if (btnBackToLogin != null) {
+            btnBackToLogin.setEnabled(!busy);
         }
         textField2FA.setEnabled(!busy);
         pnlMain.setCursor(busy ? Cursor.getPredefinedCursor(Cursor.WAIT_CURSOR) : Cursor.getDefaultCursor());
@@ -424,11 +509,10 @@ public class UserLogin extends JFrame {
             pnlMain.revalidate();
             pnlMain.repaint();
             if (lastIssuedOtp != null && pnlMain.isShowing()) {
-                JOptionPane.showMessageDialog(
-                        pnlMain,
+                showDialogMessage(
+                        "Two-Factor Authentication",
                         "[Simulated SMS] Your 2FA verification code is: " + lastIssuedOtp
                                 + "\n(Valid for 5 minutes, one-time use)",
-                        "Two-Factor Authentication",
                         JOptionPane.INFORMATION_MESSAGE
                 );
             }
@@ -520,6 +604,10 @@ public class UserLogin extends JFrame {
         return btnResendOtp;
     }
 
+    public JButton getBackToLoginButton() {
+        return btnBackToLogin;
+    }
+
     public JLabel getTwoFactorHeaderLabel() {
         return twoFactorHeaderLabel;
     }
@@ -585,7 +673,7 @@ public class UserLogin extends JFrame {
                 null, null, null, 0, false));
 
         pnl2FA = new JPanel();
-        pnl2FA.setLayout(new GridLayoutManager(4, 2, new Insets(0, 0, 0, 0), -1, -1));
+        pnl2FA.setLayout(new GridLayoutManager(5, 2, new Insets(0, 0, 0, 0), -1, -1));
         pnl2FA.setVisible(false);
         pnlMain.add(pnl2FA, new GridConstraints(3, 0, 1, 3,
                 GridConstraints.ANCHOR_CENTER, GridConstraints.FILL_BOTH,
@@ -623,6 +711,12 @@ public class UserLogin extends JFrame {
                 GridConstraints.ANCHOR_CENTER, GridConstraints.FILL_NONE,
                 GridConstraints.SIZEPOLICY_FIXED, GridConstraints.SIZEPOLICY_FIXED,
                 null, null, null, 0, false));
+
+        btnBackToLogin = new JButton("Back to Login");
+        pnl2FA.add(btnBackToLogin, new GridConstraints(4, 0, 1, 2,
+                GridConstraints.ANCHOR_CENTER, GridConstraints.FILL_NONE,
+                GridConstraints.SIZEPOLICY_FIXED, GridConstraints.SIZEPOLICY_FIXED,
+                null, null, null, 0, false));
     }
 
     public JComponent $$$getRootComponent$$$() {
@@ -643,9 +737,25 @@ public class UserLogin extends JFrame {
         }
 
         // Bootstrap the SQLite schema on the main thread, never on the EDT.
-        final DatabaseManager dbManager = new DatabaseManager();
-        final AuthService authService = new AuthServiceImpl(dbManager);
-        final WalletService walletService = new WalletService(dbManager, authService);
+        final DatabaseManager dbManager;
+        final AuthService authService;
+        final WalletService walletService;
+        try {
+            dbManager = new DatabaseManager();
+            authService = new AuthServiceImpl(dbManager);
+            walletService = new WalletService(dbManager, authService);
+        } catch (Exception ex) {
+            String message = (ex.getMessage() != null && !ex.getMessage().trim().isEmpty())
+                    ? ex.getMessage()
+                    : ex.getClass().getSimpleName();
+            SwingUtilities.invokeLater(() -> JOptionPane.showMessageDialog(
+                    null,
+                    "Unable to initialize OTOG E-Wallet:\n" + message,
+                    "Startup Error",
+                    JOptionPane.ERROR_MESSAGE
+            ));
+            return;
+        }
 
         SwingUtilities.invokeLater(() -> {
             UserLogin app = new UserLogin(authService, walletService);
