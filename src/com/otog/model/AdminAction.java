@@ -49,8 +49,8 @@ public class AdminAction {
         if (text == null) {
             return null;
         }
-        String sanitized = text.replaceAll("(?i)(password|passwd|pin|salt|hash|secret|token|otp|cvv)\\s*[:=]\\s*[^\\s,;]+", "$1=[REDACTED]");
-        sanitized = sanitized.replaceAll("(?i)\\b(pin|otp|code)\\b\\s*:\\s*\\d+", "$1:[REDACTED]");
+        String sanitized = text.replaceAll("(?i)([\"']?(?:password|passwd|pin|salt|hash|secret|token|otp|cvv)[\"']?\\s*[:=]\\s*)(?:\"[^\"]*\"|'[^']*'|[^\\s,;}]+)", "$1[REDACTED]");
+        sanitized = sanitized.replaceAll("(?i)\\b(pin|otp|code)\\b\\s*[:=]\\s*\\d+", "$1:[REDACTED]");
         return sanitized;
     }
 

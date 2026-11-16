@@ -155,6 +155,37 @@ public class TransactionRepository {
         return list;
     }
 
+    /**
+     * Returns at most {@code limit} of the newest transactions touching a wallet.
+     * The cap is applied by SQLite ({@code LIMIT ?}) so the full ledger is never loaded into memory.
+     */
+    public List<Transaction> findRecentByWalletId(String walletId, int limit) {
+        try (Connection conn = databaseManager.getConnection()) {
+            return findRecentByWalletId(walletId, limit, conn);
+        } catch (SQLException e) {
+            throw new OtogException("Failed to query recent transactions for wallet: " + e.getMessage(), e);
+        }
+    }
+
+    public List<Transaction> findRecentByWalletId(String walletId, int limit, Connection conn) throws SQLException {
+        String sql = "SELECT transaction_id, reference_number, source_wallet_id, target_wallet_id, " +
+                "amount, fee, total_amount, currency, type, status, description, created_at, completed_at " +
+                "FROM transactions WHERE source_wallet_id = ? OR target_wallet_id = ? " +
+                "ORDER BY created_at DESC, transaction_id DESC, reference_number ASC LIMIT ?";
+        List<Transaction> list = new ArrayList<>();
+        try (PreparedStatement ps = conn.prepareStatement(sql)) {
+            ps.setString(1, walletId);
+            ps.setString(2, walletId);
+            ps.setInt(3, limit);
+            try (ResultSet rs = ps.executeQuery()) {
+                while (rs.next()) {
+                    list.add(mapRow(rs));
+                }
+            }
+        }
+        return list;
+    }
+
     public List<Transaction> findAll() {
         try (Connection conn = databaseManager.getConnection()) {
             return findAll(conn);

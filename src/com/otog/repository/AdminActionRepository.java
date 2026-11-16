@@ -74,7 +74,7 @@ public class AdminActionRepository {
     }
 
     public List<AdminAction> findAll(Connection conn) throws SQLException {
-        String sql = "SELECT action_id, admin_user_id, action_type, target_user_id, reason, details, created_at FROM admin_actions ORDER BY created_at DESC";
+        String sql = "SELECT action_id, admin_user_id, action_type, target_user_id, reason, details, created_at FROM admin_actions ORDER BY created_at DESC, action_id DESC";
         List<AdminAction> list = new ArrayList<>();
         try (Statement st = conn.createStatement();
              ResultSet rs = st.executeQuery(sql)) {
@@ -94,7 +94,7 @@ public class AdminActionRepository {
     }
 
     public List<AdminAction> findByAdminUserId(String adminUserId, Connection conn) throws SQLException {
-        String sql = "SELECT action_id, admin_user_id, action_type, target_user_id, reason, details, created_at FROM admin_actions WHERE admin_user_id = ? ORDER BY created_at DESC";
+        String sql = "SELECT action_id, admin_user_id, action_type, target_user_id, reason, details, created_at FROM admin_actions WHERE admin_user_id = ? ORDER BY created_at DESC, action_id DESC";
         List<AdminAction> list = new ArrayList<>();
         try (PreparedStatement ps = conn.prepareStatement(sql)) {
             ps.setString(1, adminUserId);
@@ -116,7 +116,7 @@ public class AdminActionRepository {
     }
 
     public List<AdminAction> findByTargetUserId(String targetUserId, Connection conn) throws SQLException {
-        String sql = "SELECT action_id, admin_user_id, action_type, target_user_id, reason, details, created_at FROM admin_actions WHERE target_user_id = ? ORDER BY created_at DESC";
+        String sql = "SELECT action_id, admin_user_id, action_type, target_user_id, reason, details, created_at FROM admin_actions WHERE target_user_id = ? ORDER BY created_at DESC, action_id DESC";
         List<AdminAction> list = new ArrayList<>();
         try (PreparedStatement ps = conn.prepareStatement(sql)) {
             ps.setString(1, targetUserId);

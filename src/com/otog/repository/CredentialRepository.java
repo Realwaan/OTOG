@@ -96,14 +96,18 @@ public class CredentialRepository {
 
     public void resetFailedAttempts(String userId) {
         try (Connection conn = databaseManager.getConnection()) {
-            String sql = "UPDATE credentials SET failed_attempts = 0, updated_at = ? WHERE user_id = ?";
-            try (PreparedStatement ps = conn.prepareStatement(sql)) {
-                ps.setString(1, LocalDateTime.now().toString());
-                ps.setString(2, userId);
-                ps.executeUpdate();
-            }
+            resetFailedAttempts(userId, conn);
         } catch (SQLException e) {
             throw new OtogException("Failed to reset failed login attempts: " + e.getMessage(), e);
+        }
+    }
+
+    public void resetFailedAttempts(String userId, Connection conn) throws SQLException {
+        String sql = "UPDATE credentials SET failed_attempts = 0, locked_until = NULL, updated_at = ? WHERE user_id = ?";
+        try (PreparedStatement ps = conn.prepareStatement(sql)) {
+            ps.setString(1, LocalDateTime.now().toString());
+            ps.setString(2, userId);
+            ps.executeUpdate();
         }
     }
 
@@ -153,14 +157,18 @@ public class CredentialRepository {
 
     public void resetPinFailedAttempts(String userId) {
         try (Connection conn = databaseManager.getConnection()) {
-            String sql = "UPDATE credentials SET pin_failed_attempts = 0, updated_at = ? WHERE user_id = ?";
-            try (PreparedStatement ps = conn.prepareStatement(sql)) {
-                ps.setString(1, LocalDateTime.now().toString());
-                ps.setString(2, userId);
-                ps.executeUpdate();
-            }
+            resetPinFailedAttempts(userId, conn);
         } catch (SQLException e) {
             throw new OtogException("Failed to reset failed PIN attempts: " + e.getMessage(), e);
+        }
+    }
+
+    public void resetPinFailedAttempts(String userId, Connection conn) throws SQLException {
+        String sql = "UPDATE credentials SET pin_failed_attempts = 0, updated_at = ? WHERE user_id = ?";
+        try (PreparedStatement ps = conn.prepareStatement(sql)) {
+            ps.setString(1, LocalDateTime.now().toString());
+            ps.setString(2, userId);
+            ps.executeUpdate();
         }
     }
 

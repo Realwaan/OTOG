@@ -38,6 +38,7 @@ public class AdminPermissionsAndAccountControlTest {
     private User regularUserBob;
     private User merchantUserCharlie;
 
+    private Wallet adminWallet;
     private Wallet aliceWallet;
     private Wallet bobWallet;
     private Wallet charlieWallet;
@@ -55,6 +56,7 @@ public class AdminPermissionsAndAccountControlTest {
         // 1. Verify default admin was seeded automatically by DatabaseManager
         adminUser = walletService.getUserRepository().findById("USR-ADMIN-01")
                 .orElseThrow(() -> new AssertionError("Default admin USR-ADMIN-01 must be automatically seeded"));
+        adminWallet = walletService.getWalletByUserId(adminUser.getUserId());
 
         // 2. Register regular users and merchant
         regularUserAlice = authService.registerUser("Alice Santos", "09171110001", "alice@otog.ph", "AlicePass123", UserRole.USER);
@@ -76,10 +78,31 @@ public class AdminPermissionsAndAccountControlTest {
         databaseManager.close();
     }
 
+    // ─── Helper: log in as the given user ───────────────────────────────────────
+
+    private void loginAs(User user, Wallet wallet) {
+        SessionManager.getInstance().logout();
+        SessionManager.getInstance().login(user, wallet);
+    }
+
+    private void loginAsAdmin() {
+        loginAs(adminUser, adminWallet);
+    }
+
+    private void loginAsAlice() {
+        loginAs(regularUserAlice, aliceWallet);
+    }
+
+    private void loginAsCharlie() {
+        loginAs(merchantUserCharlie, charlieWallet);
+    }
+
+    // ────────────────────────────────────────────────────────────────────────────
+
     @Test
     @DisplayName("Criterion 1: Seed admin account and enforce User/Merchant/Admin permissions")
     void testSeedAdminAccountAndRoleEnforcement() {
-        // Verify seeded admin properties
+        // Verify seeded admin properties (no session needed — just DB read)
         assertEquals("USR-ADMIN-01", adminUser.getUserId());
         assertEquals("admin", adminUser.getName());
         assertEquals(UserRole.ADMIN, adminUser.getRole());
@@ -101,10 +124,13 @@ public class AdminPermissionsAndAccountControlTest {
         assertTrue(merchantUserCharlie.isMerchant());
         assertFalse(merchantUserCharlie.isAdmin());
 
-        // Only Admin can promote/change roles with a recorded reason
+        // Alice (ordinary user) logged in — cannot change roles (wrong role → SecurityException)
+        loginAsAlice();
         assertThrows(SecurityException.class, () ->
                 adminService.changeUserRole(regularUserAlice.getUserId(), regularUserBob.getUserId(), UserRole.MERCHANT, "Promotion attempt by peer"));
 
+        // Admin logged in — can promote Bob
+        loginAsAdmin();
         assertDoesNotThrow(() ->
                 adminService.changeUserRole(adminUser.getUserId(), regularUserBob.getUserId(), UserRole.MERCHANT, "Promoted Bob to Merchant after business KYC approval"));
 
@@ -115,6 +141,8 @@ public class AdminPermissionsAndAccountControlTest {
     @Test
     @DisplayName("Criterion 2: View accounts/transactions and suspend/reactivate users with recorded reason")
     void testViewAccountsAndSuspendReactivateWithRecordedReason() {
+        loginAsAdmin();
+
         // Admin views accounts and transactions
         List<User> allUsers = adminService.getAllUsers(adminUser.getUserId());
         assertTrue(allUsers.size() >= 4, "Admin must be able to view all user accounts");
@@ -142,6 +170,7 @@ public class AdminPermissionsAndAccountControlTest {
         assertEquals(WalletStatus.FROZEN, frozenAliceWallet.getStatus(), "Wallet must be frozen upon user suspension");
 
         // Reactivate user requires a non-empty reason
+        // Note: admin is still logged in here (suspendUser only logs out the *target*)
         assertThrows(IllegalArgumentException.class, () ->
                 adminService.reactivateUser(adminUser.getUserId(), regularUserAlice.getUserId(), ""));
 
@@ -160,10 +189,11 @@ public class AdminPermissionsAndAccountControlTest {
     @Test
     @DisplayName("Criterion 3: Suspended accounts cannot initiate payments; record admin actions without secrets")
     void testSuspendedAccountsCannotInitiatePaymentsAndActionsRecordedWithoutSecrets() {
-        // Suspend Bob
+        // Admin suspends Bob
+        loginAsAdmin();
         adminService.suspendUser(adminUser.getUserId(), regularUserBob.getUserId(), "Suspicious rapid transactions");
 
-        // 1. Direct wallet service rejects payment initiation from suspended user
+        // 1. Direct wallet service (bypasses session gate) rejects payment from suspended user
         WalletService ungatedWalletService = new WalletService(databaseManager);
         WalletException transferEx = assertThrows(WalletException.class, () ->
                 ungatedWalletService.transfer("TX-SUSPEND-01", bobWallet.getWalletId(), aliceWallet.getWalletId(),
@@ -177,6 +207,7 @@ public class AdminPermissionsAndAccountControlTest {
         assertTrue(cashOutEx.getMessage().contains("Suspended accounts cannot initiate payments"));
 
         // 2. Suspended user session is rejected in SessionManager
+        // Re-fetch Bob so his status is SUSPENDED
         User suspendedBob = walletService.getUserRepository().findById(regularUserBob.getUserId()).orElseThrow();
         SessionManager.getInstance().login(suspendedBob, bobWallet);
         SessionManager.getInstance().markPinVerified();
@@ -187,11 +218,13 @@ public class AdminPermissionsAndAccountControlTest {
         assertTrue(sessionPaymentEx.getMessage().contains("Suspended accounts cannot initiate payments"));
 
         // 3. Suspended user cannot authenticate to establish a new session
+        SessionManager.getInstance().reset();
         OtogException loginEx = assertThrows(OtogException.class, () ->
                 authService.authenticatePassword("09171110002", "BobPass123"));
         assertTrue(loginEx.getMessage().contains("Account is suspended"));
 
-        // Verify traceable administrative actions are recorded
+        // 4. Verify traceable administrative actions are recorded — admin must be logged in
+        loginAsAdmin();
         List<AdminAction> actions = adminService.getAdminActions(adminUser.getUserId());
         assertFalse(actions.isEmpty(), "Admin actions must be persisted");
 
@@ -228,30 +261,33 @@ public class AdminPermissionsAndAccountControlTest {
     @Test
     @DisplayName("Criterion 4: Ordinary users cannot invoke admin operations or inspect another user's history; prohibit direct balance editing")
     void testOrdinaryUsersCannotInvokeAdminOperationsOrInspectOtherHistoryAndNoDirectBalanceEdit() {
-        // Ordinary user (Alice) cannot suspend accounts
+        // Alice (ordinary user) logged in — cannot suspend accounts
+        loginAsAlice();
         SecurityException aliceSuspendEx = assertThrows(SecurityException.class, () ->
                 adminService.suspendUser(regularUserAlice.getUserId(), regularUserBob.getUserId(), "Peer revenge suspension"));
         assertTrue(aliceSuspendEx.getMessage().contains("Administrator role required"));
 
-        // Merchant (Charlie) cannot suspend accounts
+        // Charlie (merchant) logged in — cannot suspend accounts
+        loginAsCharlie();
         SecurityException charlieSuspendEx = assertThrows(SecurityException.class, () ->
                 adminService.suspendUser(merchantUserCharlie.getUserId(), regularUserBob.getUserId(), "Merchant suspending customer"));
         assertTrue(charlieSuspendEx.getMessage().contains("Administrator role required"));
 
-        // Ordinary user cannot view all users or all transactions
+        // Alice logged in — cannot view admin-only lists
+        loginAsAlice();
         assertThrows(SecurityException.class, () -> adminService.getAllUsers(regularUserAlice.getUserId()));
         assertThrows(SecurityException.class, () -> adminService.getAllWallets(regularUserAlice.getUserId()));
         assertThrows(SecurityException.class, () -> adminService.getAllTransactions(regularUserAlice.getUserId()));
         assertThrows(SecurityException.class, () -> adminService.getAdminActions(regularUserAlice.getUserId()));
 
-        // Ordinary user CAN view their OWN transaction history
+        // Alice CAN view her OWN transaction history (session matches, same user)
         List<Transaction> aliceOwnTxns = adminService.getUserTransactions(regularUserAlice.getUserId(), regularUserAlice.getUserId());
         assertNotNull(aliceOwnTxns);
 
         List<Transaction> aliceOwnHistory = walletService.getTransactionHistory(regularUserAlice.getUserId(), aliceWallet.getWalletId());
         assertNotNull(aliceOwnHistory);
 
-        // Ordinary user CANNOT inspect another user's transaction history
+        // Alice CANNOT inspect Bob's transaction history
         SecurityException inspectHistoryEx = assertThrows(SecurityException.class, () ->
                 adminService.getUserTransactions(regularUserAlice.getUserId(), regularUserBob.getUserId()));
         assertTrue(inspectHistoryEx.getMessage().contains("Ordinary users cannot inspect another user's transaction history"));
@@ -260,37 +296,47 @@ public class AdminPermissionsAndAccountControlTest {
                 walletService.getTransactionHistory(regularUserAlice.getUserId(), bobWallet.getWalletId()));
         assertTrue(inspectWalletHistoryEx.getMessage().contains("Ordinary users cannot inspect another user's transaction history"));
 
-        // Merchant cannot inspect a user's transaction history
+        // Charlie (merchant) cannot inspect Alice's transaction history
+        loginAsCharlie();
         assertThrows(SecurityException.class, () ->
                 adminService.getUserTransactions(merchantUserCharlie.getUserId(), regularUserAlice.getUserId()));
 
         // Admin CAN inspect any user's transaction history
+        loginAsAdmin();
         List<Transaction> adminInspectedAliceTxns = adminService.getUserTransactions(adminUser.getUserId(), regularUserAlice.getUserId());
         assertNotNull(adminInspectedAliceTxns);
         List<Transaction> adminInspectedWalletTxns = walletService.getTransactionHistory(adminUser.getUserId(), aliceWallet.getWalletId());
         assertNotNull(adminInspectedWalletTxns);
 
-        // Direct balance editing is strictly prohibited
+        // Direct balance editing is strictly prohibited regardless of caller role
         UnsupportedOperationException directEditEx = assertThrows(UnsupportedOperationException.class, () ->
                 walletService.directSetBalance(adminUser.getUserId(), aliceWallet.getWalletId(), new BigDecimal("999999.00")));
         assertTrue(directEditEx.getMessage().contains("Direct balance editing is strictly prohibited"));
 
+        loginAsAlice();
         assertThrows(UnsupportedOperationException.class, () ->
                 adminService.directSetBalance(regularUserAlice.getUserId(), aliceWallet.getWalletId(), new BigDecimal("999999.00")));
     }
 
     @Test
-    @DisplayName("Edge Case: Admin cannot suspend their own account and inactive admin cannot act")
+    @DisplayName("Edge Case: Admin cannot suspend their own account; suspended admin blocked at session check")
     void testAdminSelfSuspensionAndInactiveAdminBlocked() {
         // Admin cannot suspend self
+        loginAsAdmin();
         OtogException selfEx = assertThrows(OtogException.class, () ->
                 adminService.suspendUser(adminUser.getUserId(), adminUser.getUserId(), "Suicide suspension"));
         assertTrue(selfEx.getMessage().contains("cannot suspend their own account"));
 
-        // Create an inactive admin to test authorization gate
+        // A SUSPENDED admin saved directly to the DB cannot act — their session status check blocks them.
+        // We simulate this by: logging in as a freshly-created suspended admin user and verifying the check.
         User inactiveAdmin = new User("USR-ADMIN-INACTIVE", "Inactive Admin", "09000000001",
                 "inactive@otog.ph", UserRole.ADMIN, UserStatus.SUSPENDED);
         walletService.getUserRepository().save(inactiveAdmin);
+
+        // Log in as the suspended admin — SessionManager accepts the login object,
+        // but validateAdminCaller must still check the caller's status.
+        Wallet placeholderWallet = null; // suspended admin has no wallet
+        SessionManager.getInstance().login(inactiveAdmin, placeholderWallet);
 
         SecurityException blockedEx = assertThrows(SecurityException.class, () ->
                 adminService.suspendUser(inactiveAdmin.getUserId(), regularUserAlice.getUserId(), "Attempt from suspended admin"));
@@ -300,6 +346,7 @@ public class AdminPermissionsAndAccountControlTest {
     @Test
     @DisplayName("Traceable administrative actions log review and suspension details in SQLite")
     void testAdminActionTraceabilityPersistence() {
+        loginAsAdmin();
         adminService.suspendUser(adminUser.getUserId(), regularUserBob.getUserId(), "High risk account activity");
 
         List<AdminAction> bobActions = adminActionRepository.findByTargetUserId(regularUserBob.getUserId());

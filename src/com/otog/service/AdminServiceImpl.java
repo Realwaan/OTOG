@@ -48,19 +48,17 @@ public class AdminServiceImpl implements AdminService {
     }
 
     private User validateAdminCaller(String adminUserId, String operationDescription) {
-        String effectiveAdminId = adminUserId;
-        if (effectiveAdminId == null || effectiveAdminId.trim().isEmpty()) {
-            SessionManager session = SessionManager.getInstance();
-            if (session.isLoggedIn() && session.getCurrentUser() != null) {
-                effectiveAdminId = session.getCurrentUser().getUserId();
-            } else {
-                throw new SecurityException("Access denied: Active administrator identity required to " + operationDescription + ".");
-            }
+        SessionManager session = SessionManager.getInstance();
+        session.requireAuthentication();
+
+        if (adminUserId != null && !adminUserId.trim().isEmpty()) {
+            session.requireActiveSessionFor(adminUserId.trim());
         }
 
-        String trimmedId = effectiveAdminId.trim();
-        User caller = userRepository.findById(trimmedId)
-                .orElseThrow(() -> new SecurityException("Access denied: Unknown user identity: " + trimmedId));
+        User caller = session.getCurrentUser();
+        if (caller == null) {
+            throw new SecurityException("Access denied: Active administrator identity required to " + operationDescription + ".");
+        }
 
         if (caller.getStatus() != UserStatus.ACTIVE) {
             throw new SecurityException("Access denied: Administrator account is " + caller.getStatus() + ".");
@@ -85,18 +83,37 @@ public class AdminServiceImpl implements AdminService {
             throw new IllegalArgumentException("A recorded reason is mandatory for account suspension.");
         }
 
-        User targetUser = userRepository.findById(targetId)
-                .orElseThrow(() -> new EntityNotFoundException("User", targetId));
+        // Atomic multi-table write boundary
+        databaseManager.executeInTransaction(conn -> {
+            User targetUser = userRepository.findById(targetId, conn)
+                    .orElseThrow(() -> new EntityNotFoundException("User", targetId));
 
-        targetUser.setStatus(UserStatus.SUSPENDED);
-        targetUser.setUpdatedAt(LocalDateTime.now());
-        userRepository.update(targetUser);
+            targetUser.setStatus(UserStatus.SUSPENDED);
+            targetUser.setUpdatedAt(LocalDateTime.now());
+            userRepository.update(targetUser, conn);
 
-        // Freeze associated wallet
-        walletRepository.findByUserId(targetId).ifPresent(wallet -> {
-            wallet.setStatus(WalletStatus.FROZEN);
-            wallet.setUpdatedAt(LocalDateTime.now());
-            walletRepository.update(wallet);
+            // Freeze associated wallet
+            walletRepository.findByUserId(targetId, conn).ifPresent(wallet -> {
+                wallet.setStatus(WalletStatus.FROZEN);
+                wallet.setUpdatedAt(LocalDateTime.now());
+                try {
+                    walletRepository.update(wallet, conn);
+                } catch (Exception e) {
+                    throw new OtogException("Failed to freeze wallet for suspended user: " + e.getMessage(), e);
+                }
+            });
+
+            // Record traceable administrative action without secrets
+            String actionId = IdGenerator.nextAdminActionId();
+            String safeReason = AdminAction.sanitizeWithoutSecrets(reason.trim());
+            String safeDetails = AdminAction.sanitizeWithoutSecrets("Suspended user " + targetId + " (" + targetUser.getName() + "). Reason: " + safeReason);
+            AdminAction action = new AdminAction(actionId, admin.getUserId(), "SUSPEND_USER", targetId, safeReason, safeDetails);
+            try {
+                adminActionRepository.save(action, conn);
+            } catch (Exception e) {
+                throw new OtogException("Failed to record admin suspension action: " + e.getMessage(), e);
+            }
+            return null;
         });
 
         // Terminate any active session for the suspended user
@@ -104,13 +121,6 @@ public class AdminServiceImpl implements AdminService {
         if (session.isSessionActive(targetId)) {
             session.logout();
         }
-
-        // Record traceable administrative action without secrets
-        String actionId = IdGenerator.nextAdminActionId();
-        String safeReason = AdminAction.sanitizeWithoutSecrets(reason.trim());
-        String safeDetails = AdminAction.sanitizeWithoutSecrets("Suspended user " + targetId + " (" + targetUser.getName() + "). Reason: " + safeReason);
-        AdminAction action = new AdminAction(actionId, admin.getUserId(), "SUSPEND_USER", targetId, safeReason, safeDetails);
-        adminActionRepository.save(action);
     }
 
     @Override
@@ -124,29 +134,46 @@ public class AdminServiceImpl implements AdminService {
             throw new IllegalArgumentException("A recorded reason is mandatory for account reactivation.");
         }
 
-        User targetUser = userRepository.findById(targetId)
-                .orElseThrow(() -> new EntityNotFoundException("User", targetId));
+        // Atomic multi-table write boundary
+        databaseManager.executeInTransaction(conn -> {
+            User targetUser = userRepository.findById(targetId, conn)
+                    .orElseThrow(() -> new EntityNotFoundException("User", targetId));
 
-        targetUser.setStatus(UserStatus.ACTIVE);
-        targetUser.setUpdatedAt(LocalDateTime.now());
-        userRepository.update(targetUser);
+            targetUser.setStatus(UserStatus.ACTIVE);
+            targetUser.setUpdatedAt(LocalDateTime.now());
+            userRepository.update(targetUser, conn);
 
-        // Unfreeze associated wallet
-        walletRepository.findByUserId(targetId).ifPresent(wallet -> {
-            wallet.setStatus(WalletStatus.ACTIVE);
-            wallet.setUpdatedAt(LocalDateTime.now());
-            walletRepository.update(wallet);
+            // Unfreeze associated wallet
+            walletRepository.findByUserId(targetId, conn).ifPresent(wallet -> {
+                wallet.setStatus(WalletStatus.ACTIVE);
+                wallet.setUpdatedAt(LocalDateTime.now());
+                try {
+                    walletRepository.update(wallet, conn);
+                } catch (Exception e) {
+                    throw new OtogException("Failed to unfreeze wallet for reactivated user: " + e.getMessage(), e);
+                }
+            });
+
+            // Reset failed login attempts AND failed PIN attempts upon admin reactivation
+            try {
+                credentialRepository.resetFailedAttempts(targetId, conn);
+                credentialRepository.resetPinFailedAttempts(targetId, conn);
+            } catch (Exception e) {
+                throw new OtogException("Failed to reset credential attempts upon reactivation: " + e.getMessage(), e);
+            }
+
+            // Record traceable administrative action without secrets
+            String actionId = IdGenerator.nextAdminActionId();
+            String safeReason = AdminAction.sanitizeWithoutSecrets(reason.trim());
+            String safeDetails = AdminAction.sanitizeWithoutSecrets("Reactivated user " + targetId + " (" + targetUser.getName() + "). Reason: " + safeReason);
+            AdminAction action = new AdminAction(actionId, admin.getUserId(), "REACTIVATE_USER", targetId, safeReason, safeDetails);
+            try {
+                adminActionRepository.save(action, conn);
+            } catch (Exception e) {
+                throw new OtogException("Failed to record admin reactivation action: " + e.getMessage(), e);
+            }
+            return null;
         });
-
-        // Reset failed login attempts and pin attempts upon admin reactivation
-        credentialRepository.resetFailedAttempts(targetId);
-
-        // Record traceable administrative action without secrets
-        String actionId = IdGenerator.nextAdminActionId();
-        String safeReason = AdminAction.sanitizeWithoutSecrets(reason.trim());
-        String safeDetails = AdminAction.sanitizeWithoutSecrets("Reactivated user " + targetId + " (" + targetUser.getName() + "). Reason: " + safeReason);
-        AdminAction action = new AdminAction(actionId, admin.getUserId(), "REACTIVATE_USER", targetId, safeReason, safeDetails);
-        adminActionRepository.save(action);
     }
 
     @Override
@@ -190,17 +217,20 @@ public class AdminServiceImpl implements AdminService {
 
     @Override
     public List<Transaction> getUserTransactions(String requesterUserId, String targetUserId) {
-        if (requesterUserId == null || requesterUserId.trim().isEmpty()) {
-            throw new SecurityException("Access denied: Requester identity required.");
+        SessionManager session = SessionManager.getInstance();
+        session.requireAuthentication();
+
+        if (requesterUserId != null && !requesterUserId.trim().isEmpty()) {
+            session.requireActiveSessionFor(requesterUserId.trim());
         }
+
+        User requester = session.getCurrentUser();
+        String reqId = requester.getUserId();
+
         if (targetUserId == null || targetUserId.trim().isEmpty()) {
             throw new IllegalArgumentException("Target user ID must not be null or empty.");
         }
-        String reqId = requesterUserId.trim();
         String tgtId = targetUserId.trim();
-
-        User requester = userRepository.findById(reqId)
-                .orElseThrow(() -> new SecurityException("Access denied: Unknown requester user: " + reqId));
 
         if (requester.getStatus() != UserStatus.ACTIVE) {
             throw new SecurityException("Access denied: Requester account is " + requester.getStatus() + ".");
@@ -228,17 +258,20 @@ public class AdminServiceImpl implements AdminService {
 
     @Override
     public Wallet getUserWallet(String requesterUserId, String targetUserId) {
-        if (requesterUserId == null || requesterUserId.trim().isEmpty()) {
-            throw new SecurityException("Access denied: Requester identity required.");
+        SessionManager session = SessionManager.getInstance();
+        session.requireAuthentication();
+
+        if (requesterUserId != null && !requesterUserId.trim().isEmpty()) {
+            session.requireActiveSessionFor(requesterUserId.trim());
         }
+
+        User requester = session.getCurrentUser();
+        String reqId = requester.getUserId();
+
         if (targetUserId == null || targetUserId.trim().isEmpty()) {
             throw new IllegalArgumentException("Target user ID must not be null or empty.");
         }
-        String reqId = requesterUserId.trim();
         String tgtId = targetUserId.trim();
-
-        User requester = userRepository.findById(reqId)
-                .orElseThrow(() -> new SecurityException("Access denied: Unknown requester user: " + reqId));
 
         if (requester.getStatus() != UserStatus.ACTIVE) {
             throw new SecurityException("Access denied: Requester account is " + requester.getStatus() + ".");
@@ -248,8 +281,17 @@ public class AdminServiceImpl implements AdminService {
             throw new SecurityException("Access denied: Ordinary users cannot inspect another user's wallet.");
         }
 
-        return walletRepository.findByUserId(tgtId)
+        Wallet wallet = walletRepository.findByUserId(tgtId)
                 .orElseThrow(() -> new EntityNotFoundException("Wallet for user", tgtId));
+
+        if (requester.getRole() == UserRole.ADMIN && !reqId.equals(tgtId)) {
+            String actionId = IdGenerator.nextAdminActionId();
+            AdminAction action = new AdminAction(actionId, reqId, "INSPECT_USER_WALLET", tgtId,
+                    "Administrative inspection", "Inspected wallet of user " + tgtId);
+            adminActionRepository.save(action);
+        }
+
+        return wallet;
     }
 
     @Override
@@ -266,19 +308,26 @@ public class AdminServiceImpl implements AdminService {
         }
 
         String targetId = targetUserId.trim();
-        User targetUser = userRepository.findById(targetId)
-                .orElseThrow(() -> new EntityNotFoundException("User", targetId));
+        databaseManager.executeInTransaction(conn -> {
+            User targetUser = userRepository.findById(targetId, conn)
+                    .orElseThrow(() -> new EntityNotFoundException("User", targetId));
 
-        UserRole oldRole = targetUser.getRole();
-        targetUser.setRole(newRole);
-        targetUser.setUpdatedAt(LocalDateTime.now());
-        userRepository.update(targetUser);
+            UserRole oldRole = targetUser.getRole();
+            targetUser.setRole(newRole);
+            targetUser.setUpdatedAt(LocalDateTime.now());
+            userRepository.update(targetUser, conn);
 
-        String actionId = IdGenerator.nextAdminActionId();
-        String safeReason = AdminAction.sanitizeWithoutSecrets(reason.trim());
-        String safeDetails = AdminAction.sanitizeWithoutSecrets("Changed role of user " + targetId + " from " + oldRole + " to " + newRole + ". Reason: " + safeReason);
-        AdminAction action = new AdminAction(actionId, admin.getUserId(), "ROLE_CHANGE", targetId, safeReason, safeDetails);
-        adminActionRepository.save(action);
+            String actionId = IdGenerator.nextAdminActionId();
+            String safeReason = AdminAction.sanitizeWithoutSecrets(reason.trim());
+            String safeDetails = AdminAction.sanitizeWithoutSecrets("Changed role of user " + targetId + " from " + oldRole + " to " + newRole + ". Reason: " + safeReason);
+            AdminAction action = new AdminAction(actionId, admin.getUserId(), "ROLE_CHANGE", targetId, safeReason, safeDetails);
+            try {
+                adminActionRepository.save(action, conn);
+            } catch (Exception e) {
+                throw new OtogException("Failed to record admin role change action: " + e.getMessage(), e);
+            }
+            return null;
+        });
     }
 
     @Override
