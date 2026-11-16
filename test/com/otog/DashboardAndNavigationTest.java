@@ -831,4 +831,145 @@ public class DashboardAndNavigationTest {
         assertEquals(new BigDecimal("0.00"),
                 walletService.getWalletByUserId(marco.getUserId()).getBalance());
     }
+
+    @Test
+    void testUserLoginBackToLoginFromTwoFactorScreen() throws Exception {
+        authService.registerUser("Nora Tan", "09171001040", "nora@otog.ph", "Secret123");
+        Class<?> loginClass = Class.forName("UserLogin");
+        JFrame loginWindow = (JFrame) loginClass.getConstructor(AuthService.class, WalletService.class)
+                .newInstance(authService, walletService);
+        try {
+            Method attemptLogin = loginClass.getMethod("attemptLogin", String.class, String.class);
+            JPanel pnlPassword = (JPanel) loginClass.getMethod("getPasswordPanel").invoke(loginWindow);
+            JPanel pnl2FA = (JPanel) loginClass.getMethod("getTwoFactorPanel").invoke(loginWindow);
+            JButton btnBackToLogin = (JButton) loginClass.getMethod("getBackToLoginButton").invoke(loginWindow);
+            JTextField twoFactorField = (JTextField) loginClass.getMethod("getTwoFactorField").invoke(loginWindow);
+            assertNotNull(btnBackToLogin, "2FA panel must expose a Back to Login button");
+
+            assertTrue((Boolean) attemptLogin.invoke(loginWindow, "09171001040", "Secret123"));
+            assertFalse(pnlPassword.isVisible());
+            assertTrue(pnl2FA.isVisible());
+            assertNotNull(loginClass.getMethod("getLastIssuedOtp").invoke(loginWindow));
+
+            SwingUtilities.invokeAndWait(() -> {
+                twoFactorField.setText("123456");
+                btnBackToLogin.doClick();
+            });
+
+            assertTrue(pnlPassword.isVisible(), "Back to Login must restore password screen");
+            assertFalse(pnl2FA.isVisible(), "Back to Login must hide 2FA screen");
+            assertEquals("", twoFactorField.getText());
+            assertNull(loginClass.getMethod("getLastIssuedOtp").invoke(loginWindow));
+        } finally {
+            SwingUtilities.invokeAndWait(loginWindow::dispose);
+        }
+    }
+
+    @Test
+    void testDashboardFormBackButtonsAndInteractiveJOptionPaneErrorHandling() throws Exception {
+        User oscar = authService.registerUser("Oscar Lee", "09171001050", "oscar@otog.ph", "Secret123");
+        User paula = authService.registerUser("Paula Go", "09171001051", "paula@otog.ph", "Secret123");
+        Wallet oscarWallet = walletService.getWalletByUserId(oscar.getUserId());
+        walletService.cashIn("REQ-OSCAR-SEED", oscarWallet.getWalletId(), null,
+                new BigDecimal("1000.00"), "Seed");
+        SessionManager.getInstance().login(oscar, walletService.getWallet(oscarWallet.getWalletId()));
+        authService.setPin(oscar.getUserId(), "Secret123", "1234");
+
+        List<String> shownDialogs = java.util.Collections.synchronizedList(new java.util.ArrayList<>());
+        List<String> shownConfirmTitles = java.util.Collections.synchronizedList(new java.util.ArrayList<>());
+        CountDownLatch validationPopupLatch = new CountDownLatch(1);
+        CountDownLatch transferCompleteLatch = new CountDownLatch(1);
+
+        Main spyDashboard = new Main(walletService, authService) {
+            @Override
+            protected void showDialogMessage(java.awt.Component parent, String title, String message, int messageType) {
+                shownDialogs.add(title + "|" + messageType + "|" + message);
+                if ("Transfer Validation Failed".equals(title)) {
+                    validationPopupLatch.countDown();
+                } else if ("Transfer Complete".equals(title)) {
+                    transferCompleteLatch.countDown();
+                }
+            }
+
+            @Override
+            protected int showConfirmDialog(java.awt.Component parent, String title, Object message,
+                                            int optionType, int messageType) {
+                shownConfirmTitles.add(title);
+                return JOptionPane.OK_OPTION;
+            }
+        };
+        activeDashboard = spyDashboard;
+        activeDashboard.getInitialLoadFuture().get(5, TimeUnit.SECONDS);
+
+        SwingUtilities.invokeAndWait(() -> {
+            // 1. Navigate to Cash In / Out and back to Overview via form back button
+            activeDashboard.getCashInQuickNavButton().doClick();
+            assertEquals("Cash In / Out", activeDashboard.getTabs().getTitleAt(activeDashboard.getTabs().getSelectedIndex()));
+            activeDashboard.getCashBackToOverviewButton().doClick();
+            assertEquals("Overview", activeDashboard.getTabs().getTitleAt(activeDashboard.getTabs().getSelectedIndex()));
+
+            // 2. Navigate to Send Money and back to Overview via form back button
+            activeDashboard.getSendMoneyQuickNavButton().doClick();
+            assertEquals("Send Money", activeDashboard.getTabs().getTitleAt(activeDashboard.getTabs().getSelectedIndex()));
+            activeDashboard.getSendBackToOverviewButton().doClick();
+            assertEquals("Overview", activeDashboard.getTabs().getTitleAt(activeDashboard.getTabs().getSelectedIndex()));
+
+            // 3. Invalid Cash amount triggers JOptionPane error dialog
+            activeDashboard.getCashInQuickNavButton().doClick();
+            activeDashboard.getCashAmountField().setText("abc");
+            activeDashboard.getSubmitCashButton().doClick();
+            assertTrue(shownDialogs.stream().anyMatch(d -> d.startsWith("Invalid Amount|" + JOptionPane.ERROR_MESSAGE)));
+
+            // 4. Cash Out with missing PIN triggers JOptionPane warning dialog
+            shownDialogs.clear();
+            activeDashboard.getCashOutQuickNavButton().doClick();
+            activeDashboard.getCashAmountField().setText("100.00");
+            activeDashboard.getCashPinField().setText("");
+            activeDashboard.getSubmitCashButton().doClick();
+            assertTrue(shownDialogs.stream().anyMatch(d -> d.startsWith("PIN Required|" + JOptionPane.WARNING_MESSAGE)));
+
+            // 5. Send Money validation errors trigger JOptionPane dialogs
+            shownDialogs.clear();
+            activeDashboard.getSendMoneyQuickNavButton().doClick();
+            activeDashboard.getRecipientField().setText("");
+            activeDashboard.getSendAmountField().setText("50.00");
+            activeDashboard.getSendPinField().setText("1234");
+            activeDashboard.getSubmitSendMoneyButton().doClick();
+            assertTrue(shownDialogs.stream().anyMatch(d -> d.startsWith("Validation Error|" + JOptionPane.WARNING_MESSAGE)));
+
+            shownDialogs.clear();
+            activeDashboard.getRecipientField().setText("09171001051");
+            activeDashboard.getSendAmountField().setText("-25");
+            activeDashboard.getSubmitSendMoneyButton().doClick();
+            assertTrue(shownDialogs.stream().anyMatch(d -> d.startsWith("Invalid Amount|" + JOptionPane.ERROR_MESSAGE)));
+
+            // 6. Unknown recipient fails SendMoneyService.preview and triggers JOptionPane error dialog
+            shownDialogs.clear();
+            activeDashboard.getRecipientField().setText("09990000000");
+            activeDashboard.getSendAmountField().setText("100.00");
+            activeDashboard.getSendPinField().setText("1234");
+            activeDashboard.getSubmitSendMoneyButton().doClick();
+        });
+
+        assertTrue(validationPopupLatch.await(5, TimeUnit.SECONDS),
+                "Unknown recipient preview error must show JOptionPane error dialog");
+        assertTrue(shownDialogs.stream().anyMatch(d -> d.startsWith("Transfer Validation Failed|" + JOptionPane.ERROR_MESSAGE)));
+
+        // 7. Valid Send Money shows confirmation preview dialog and completes transfer with JOptionPane confirmation
+        shownDialogs.clear();
+        shownConfirmTitles.clear();
+        SwingUtilities.invokeAndWait(() -> {
+            activeDashboard.getRecipientField().setText(paula.getMobileNumber());
+            activeDashboard.getSendAmountField().setText("200.00");
+            activeDashboard.getSendPinField().setText("1234");
+            activeDashboard.getSubmitSendMoneyButton().doClick();
+        });
+
+        assertTrue(transferCompleteLatch.await(5, TimeUnit.SECONDS),
+                "Confirmed Send Money must complete and show JOptionPane completion dialog");
+        assertTrue(shownConfirmTitles.contains("Confirm Send Money"));
+        assertTrue(shownDialogs.stream().anyMatch(d -> d.startsWith("Transfer Complete|" + JOptionPane.INFORMATION_MESSAGE)));
+        assertEquals(new BigDecimal("800.00"), walletService.getBalance(oscarWallet.getWalletId()));
+        assertEquals(new BigDecimal("200.00"), walletService.getWalletByUserId(paula.getUserId()).getBalance());
+    }
 }
