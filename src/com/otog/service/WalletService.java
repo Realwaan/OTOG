@@ -271,6 +271,20 @@ public class WalletService implements WalletOperations {
     public Transaction sendMoneyToRecipient(String referenceNumber, String sourceWalletId,
                                             String recipientIdentifier, BigDecimal amount,
                                             BigDecimal fee, String description) {
+        RecipientResolution resolved = resolveRecipient(recipientIdentifier, description);
+        return transfer(referenceNumber, sourceWalletId, resolved.targetWalletId, amount, fee, resolved.description);
+    }
+
+    @Override
+    public Transaction sendMoneyToRecipientWithPin(String referenceNumber, String sourceWalletId,
+                                                   String recipientIdentifier, BigDecimal amount,
+                                                   BigDecimal fee, String description, String rawPin) {
+        RecipientResolution resolved = resolveRecipient(recipientIdentifier, description);
+        return transferWithPin(referenceNumber, sourceWalletId, resolved.targetWalletId,
+                amount, fee, resolved.description, rawPin);
+    }
+
+    private RecipientResolution resolveRecipient(String recipientIdentifier, String description) {
         if (recipientIdentifier == null || recipientIdentifier.trim().isEmpty()) {
             throw new IllegalArgumentException("Recipient identifier must not be null or empty");
         }
@@ -296,7 +310,17 @@ public class WalletService implements WalletOperations {
         String effectiveDescription = (description != null && !description.trim().isEmpty())
                 ? description.trim()
                 : "Transfer to " + recipientLabel;
-        return transfer(referenceNumber, sourceWalletId, targetWalletId, amount, fee, effectiveDescription);
+        return new RecipientResolution(targetWalletId, effectiveDescription);
+    }
+
+    private static final class RecipientResolution {
+        private final String targetWalletId;
+        private final String description;
+
+        private RecipientResolution(String targetWalletId, String description) {
+            this.targetWalletId = targetWalletId;
+            this.description = description;
+        }
     }
 
     /**

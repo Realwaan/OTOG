@@ -51,6 +51,13 @@ public interface WalletOperations {
                                              BigDecimal fee, String description) {
         return transfer(referenceNumber, sourceWalletId, recipientIdentifier, amount, fee, description);
     }
+
+    default Transaction sendMoneyToRecipientWithPin(String referenceNumber, String sourceWalletId,
+                                                    String recipientIdentifier, BigDecimal amount,
+                                                    BigDecimal fee, String description, String rawPin) {
+        return transferWithPin(referenceNumber, sourceWalletId, recipientIdentifier, amount, fee, description, rawPin);
+    }
+
     Transaction cashOutWithPin(String referenceNumber, String sourceWalletId, String paymentMethodId,
                                BigDecimal amount, BigDecimal fee, String description, String rawPin);
 }

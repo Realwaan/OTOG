@@ -1,10 +1,13 @@
 package com.otog.ui;
 
 import com.otog.database.DatabaseManager;
+import com.otog.exception.WalletException;
 import com.otog.model.Transaction;
 import com.otog.model.TransactionType;
 import com.otog.model.User;
 import com.otog.model.Wallet;
+import com.otog.service.AuthService;
+import com.otog.service.AuthServiceImpl;
 import com.otog.service.InvestmentService;
 import com.otog.service.LoanService;
 import com.otog.service.SessionManager;
@@ -40,10 +43,12 @@ public class Main extends JFrame {
     }
 
     private static final int RECENT_TRANSACTION_LIMIT = 50;
+    private static final int SESSION_POLL_INTERVAL_MS = 15_000;
     private static final DateTimeFormatter DATE_FORMATTER = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm");
     private static final Map<TransactionType, String> FIXED_DIRECTION_BY_TYPE = createDirectionMap();
 
     private final WalletOperations walletService;
+    private final AuthService authService;
     private final LoanService loanService;
     private final InvestmentService investmentService;
     private final DatabaseManager ownedDatabaseManager;
@@ -54,13 +59,16 @@ public class Main extends JFrame {
     private long refreshGeneration;
     private String lastSelectedTabTitle;
     private boolean suppressHistoryRecording;
+    private boolean logoutHandled;
 
     private JLabel lblWelcome;
-    private JLabel lblBalance;
     private JLabel lblWalletId;
+    private JLabel lblPinStatus;
+    private JLabel lblBalance;
     private JLabel lblStatus;
-    private JButton btnRefresh;
     private JButton btnBack;
+    private JButton btnRefresh;
+    private JButton btnPinSettings;
     private JButton btnLogout;
 
     private JTabbedPane tabs;
@@ -68,6 +76,7 @@ public class Main extends JFrame {
     private JButton btnNavCashIn;
     private JButton btnNavCashOut;
     private JButton btnNavSendMoney;
+    private JButton btnNavPinSettings;
 
     private CardLayout activityCardLayout;
     private JPanel activityCardPanel;
@@ -83,18 +92,22 @@ public class Main extends JFrame {
     private JComboBox<String> cmbCashChannel;
     private JTextField txtCashAmount;
     private JTextField txtCashNote;
+    private JPasswordField txtCashPin;
     private JButton btnSubmitCashOp;
     private JLabel lblCashFeedback;
 
     private JTextField txtRecipient;
     private JTextField txtSendAmount;
     private JTextField txtSendNote;
+    private JPasswordField txtSendPin;
     private JButton btnSubmitSendMoney;
     private JLabel lblSendFeedback;
 
+    private Timer sessionMonitorTimer;
     private volatile DashboardState currentState = DashboardState.LOADING;
     private volatile boolean lastLoadExecutedOffEdt;
     private volatile boolean lastPaymentExecutedOffEdt;
+    private volatile boolean cachedHasPin;
     private CompletableFuture<Void> initialLoadFuture;
     private List<Transaction> loadedTransactions = Collections.emptyList();
     private Runnable onLogoutCallback;
@@ -105,40 +118,60 @@ public class Main extends JFrame {
      * call; the UI constructor never constructs a database itself.
      */
     public static Main withOwnedDatabase(DatabaseManager initializedDatabaseManager) {
+        return withOwnedDatabase(initializedDatabaseManager, null);
+    }
+
+    public static Main withOwnedDatabase(DatabaseManager initializedDatabaseManager, AuthService authService) {
         if (initializedDatabaseManager == null) {
             throw new IllegalArgumentException("DatabaseManager must not be null");
         }
-        return new Main(new WalletService(initializedDatabaseManager), null, null, initializedDatabaseManager);
+        AuthService effectiveAuth = authService != null
+                ? authService
+                : new AuthServiceImpl(initializedDatabaseManager);
+        return new Main(new WalletService(initializedDatabaseManager, effectiveAuth),
+                effectiveAuth, null, null, initializedDatabaseManager);
     }
 
     public Main(WalletOperations walletService) {
-        this(walletService, null, null, null);
+        this(walletService, null, null, null, null);
+    }
+
+    public Main(WalletOperations walletService, AuthService authService) {
+        this(walletService, authService, null, null, null);
     }
 
     public Main(WalletOperations walletService, LoanService loanService, InvestmentService investmentService) {
-        this(walletService, loanService, investmentService, null);
+        this(walletService, null, loanService, investmentService, null);
     }
 
-    private Main(WalletOperations walletService, LoanService loanService, InvestmentService investmentService,
+    public Main(WalletOperations walletService, AuthService authService,
+                LoanService loanService, InvestmentService investmentService) {
+        this(walletService, authService, loanService, investmentService, null);
+    }
+
+    private Main(WalletOperations walletService, AuthService authService,
+                 LoanService loanService, InvestmentService investmentService,
                  DatabaseManager ownedDatabaseManager) {
         SessionManager.getInstance().requireAuthentication();
         if (walletService == null) {
             throw new IllegalArgumentException("WalletOperations service must not be null");
         }
         this.walletService = walletService;
+        this.authService = authService;
         this.loanService = loanService;
         this.investmentService = investmentService;
         this.ownedDatabaseManager = ownedDatabaseManager;
 
         initUI();
+        startSessionMonitor();
         this.initialLoadFuture = refreshDashboardAsync();
     }
 
     private void initUI() {
         setTitle("OTOG E-Wallet — Dashboard");
         setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
-        setSize(900, 620);
-        setMinimumSize(new Dimension(820, 540));
+        setSize(940, 640);
+        setMinimumSize(new Dimension(840, 560));
         setLocationRelativeTo(null);
 
         JPanel root = new JPanel(new BorderLayout(12, 12));
@@ -159,16 +192,20 @@ public class Main extends JFrame {
                 BorderFactory.createEmptyBorder(0, 0, 10, 0)
         ));
 
-        JPanel identityPanel = new JPanel(new GridLayout(2, 1, 0, 2));
+        JPanel identityPanel = new JPanel(new GridLayout(3, 1, 0, 2));
         lblWelcome = new JLabel("Welcome");
         lblWelcome.setFont(new Font("SansSerif", Font.BOLD, 16));
         lblWalletId = new JLabel("Wallet: --");
         lblWalletId.setFont(new Font("SansSerif", Font.PLAIN, 12));
         lblWalletId.setForeground(new Color(90, 98, 110));
+        lblPinStatus = new JLabel("Transaction PIN: Checking...");
+        lblPinStatus.setFont(new Font("SansSerif", Font.PLAIN, 11));
+        lblPinStatus.setForeground(new Color(90, 98, 110));
         identityPanel.add(lblWelcome);
         identityPanel.add(lblWalletId);
+        identityPanel.add(lblPinStatus);
 
-        JPanel balanceAndActions = new JPanel(new FlowLayout(FlowLayout.RIGHT, 10, 0));
+        JPanel balanceAndActions = new JPanel(new FlowLayout(FlowLayout.RIGHT, 8, 0));
         JPanel balanceBox = new JPanel(new GridLayout(2, 1, 0, 1));
         JLabel balanceCaption = new JLabel("Available Balance", SwingConstants.RIGHT);
         balanceCaption.setFont(new Font("SansSerif", Font.PLAIN, 11));
@@ -185,7 +222,17 @@ public class Main extends JFrame {
         btnBack.addActionListener(e -> navigateBack());
 
         btnRefresh = new JButton("Refresh");
-        btnRefresh.addActionListener(e -> refreshDashboardAsync());
+        btnRefresh.addActionListener(e -> {
+            SessionManager.getInstance().touchActivity();
+            refreshDashboardAsync();
+        });
+
+        btnPinSettings = new JButton("Transaction PIN");
+        btnPinSettings.setEnabled(authService != null);
+        btnPinSettings.setToolTipText(authService != null
+                ? "Set or change your 4-6 digit Transaction PIN"
+                : "PIN management requires AuthService");
+        btnPinSettings.addActionListener(e -> openPinSettingsDialog());
 
         btnLogout = new JButton("Logout");
         btnLogout.addActionListener(e -> handleLogout());
@@ -194,6 +241,7 @@ public class Main extends JFrame {
         balanceAndActions.add(Box.createHorizontalStrut(8));
         balanceAndActions.add(btnBack);
         balanceAndActions.add(btnRefresh);
+        balanceAndActions.add(btnPinSettings);
         balanceAndActions.add(btnLogout);
 
         header.add(identityPanel, BorderLayout.WEST);
@@ -222,6 +270,7 @@ public class Main extends JFrame {
     }
 
     private void onTabSelectionChanged() {
+        SessionManager.getInstance().touchActivity();
         int selected = tabs.getSelectedIndex();
         String newTitle = selected >= 0 ? tabs.getTitleAt(selected) : null;
         if (!suppressHistoryRecording && lastSelectedTabTitle != null
@@ -271,9 +320,14 @@ public class Main extends JFrame {
             txtRecipient.requestFocusInWindow();
         });
 
+        btnNavPinSettings = new JButton("Set / Change PIN");
+        btnNavPinSettings.setEnabled(authService != null);
+        btnNavPinSettings.addActionListener(e -> openPinSettingsDialog());
+
         quickActions.add(btnNavCashIn);
         quickActions.add(btnNavCashOut);
         quickActions.add(btnNavSendMoney);
+        quickActions.add(btnNavPinSettings);
 
         overview.add(quickActions, BorderLayout.NORTH);
         overview.add(buildRecentActivityPanel(), BorderLayout.CENTER);
@@ -355,6 +409,9 @@ public class Main extends JFrame {
         cmbCashChannel = new JComboBox<>(new String[]{"GCash", "Maya", "BDO", "BPI", "7-Eleven OTC"});
         txtCashAmount = new JTextField(20);
         txtCashNote = new JTextField(20);
+        txtCashPin = new JPasswordField(20);
+        txtCashPin.setEnabled(false);
+        txtCashPin.setToolTipText("Required for Cash Out transactions");
         btnSubmitCashOp = new JButton("Submit Cash Transaction");
         lblCashFeedback = new JLabel(" ");
         lblCashFeedback.setFont(new Font("SansSerif", Font.PLAIN, 12));
@@ -363,25 +420,40 @@ public class Main extends JFrame {
         addFormRow(form, gbc, 1, "Channel / Provider:", cmbCashChannel);
         addFormRow(form, gbc, 2, "Amount (PHP):", txtCashAmount);
         addFormRow(form, gbc, 3, "Note (Optional):", txtCashNote);
+        addFormRow(form, gbc, 4, "Transaction PIN (Cash Out):", txtCashPin);
+
+        cmbCashOperation.addActionListener(e -> {
+            boolean isCashOut = "CASH_OUT".equals(cmbCashOperation.getSelectedItem());
+            txtCashPin.setEnabled(isCashOut);
+            if (!isCashOut) {
+                txtCashPin.setText("");
+            }
+        });
 
         gbc.gridx = 1;
-        gbc.gridy = 4;
+        gbc.gridy = 5;
         gbc.weightx = 1.0;
         gbc.fill = GridBagConstraints.NONE;
         form.add(btnSubmitCashOp, gbc);
 
         gbc.gridx = 0;
-        gbc.gridy = 5;
+        gbc.gridy = 6;
         gbc.gridwidth = 2;
         gbc.fill = GridBagConstraints.HORIZONTAL;
         form.add(lblCashFeedback, gbc);
 
-        btnSubmitCashOp.addActionListener(e -> submitCashOperationAsync(
-                (String) cmbCashOperation.getSelectedItem(),
-                (String) cmbCashChannel.getSelectedItem(),
-                txtCashAmount.getText(),
-                txtCashNote.getText()
-        ));
+        btnSubmitCashOp.addActionListener(e -> {
+            String op = (String) cmbCashOperation.getSelectedItem();
+            String pin = new String(txtCashPin.getPassword());
+            txtCashPin.setText("");
+            submitCashOperationAsync(
+                    op,
+                    (String) cmbCashChannel.getSelectedItem(),
+                    txtCashAmount.getText(),
+                    txtCashNote.getText(),
+                    pin
+            );
+        });
 
         wrapper.add(form, BorderLayout.NORTH);
         return wrapper;
@@ -400,6 +472,8 @@ public class Main extends JFrame {
         txtRecipient = new JTextField(22);
         txtSendAmount = new JTextField(22);
         txtSendNote = new JTextField(22);
+        txtSendPin = new JPasswordField(22);
+        txtSendPin.setToolTipText("Enter your 4-6 digit Transaction PIN to authorize outgoing transfer");
         btnSubmitSendMoney = new JButton("Send Money");
         lblSendFeedback = new JLabel(" ");
         lblSendFeedback.setFont(new Font("SansSerif", Font.PLAIN, 12));
@@ -407,24 +481,30 @@ public class Main extends JFrame {
         addFormRow(form, gbc, 0, "Recipient (Mobile / Email / Name / Wallet ID):", txtRecipient);
         addFormRow(form, gbc, 1, "Amount (PHP):", txtSendAmount);
         addFormRow(form, gbc, 2, "Note (Optional):", txtSendNote);
+        addFormRow(form, gbc, 3, "Transaction PIN:", txtSendPin);
 
         gbc.gridx = 1;
-        gbc.gridy = 3;
+        gbc.gridy = 4;
         gbc.weightx = 1.0;
         gbc.fill = GridBagConstraints.NONE;
         form.add(btnSubmitSendMoney, gbc);
 
         gbc.gridx = 0;
-        gbc.gridy = 4;
+        gbc.gridy = 5;
         gbc.gridwidth = 2;
         gbc.fill = GridBagConstraints.HORIZONTAL;
         form.add(lblSendFeedback, gbc);
 
-        btnSubmitSendMoney.addActionListener(e -> submitSendMoneyAsync(
-                txtRecipient.getText(),
-                txtSendAmount.getText(),
-                txtSendNote.getText()
-        ));
+        btnSubmitSendMoney.addActionListener(e -> {
+            String pin = new String(txtSendPin.getPassword());
+            txtSendPin.setText("");
+            submitSendMoneyAsync(
+                    txtRecipient.getText(),
+                    txtSendAmount.getText(),
+                    txtSendNote.getText(),
+                    pin
+            );
+        });
 
         wrapper.add(form, BorderLayout.NORTH);
         return wrapper;
@@ -463,10 +543,10 @@ public class Main extends JFrame {
     private void applyInitialSessionSnapshot() {
         User user = SessionManager.getInstance().getCurrentUser();
         Wallet wallet = SessionManager.getInstance().getCurrentWallet();
-        updateHeaderFromSession(user, wallet);
+        updateHeaderFromSession(user, wallet, false);
     }
 
-    private void updateHeaderFromSession(User user, Wallet wallet) {
+    private void updateHeaderFromSession(User user, Wallet wallet, boolean hasPin) {
         String displayName = (user != null && user.getName() != null && !user.getName().trim().isEmpty())
                 ? user.getName().trim()
                 : "User";
@@ -481,6 +561,40 @@ public class Main extends JFrame {
         } else {
             lblBalance.setText("PHP 0.00");
             lblWalletId.setText("Wallet: Not provisioned");
+        }
+
+        updatePinStatusDisplay(hasPin);
+    }
+
+    private void updatePinStatusDisplay(boolean hasPin) {
+        this.cachedHasPin = hasPin;
+        if (lblPinStatus == null) {
+            return;
+        }
+        if (authService == null) {
+            lblPinStatus.setText("Transaction PIN: Session-gated");
+            lblPinStatus.setForeground(new Color(90, 98, 110));
+            return;
+        }
+        boolean pinVerified = SessionManager.getInstance().isPinVerified();
+        if (!hasPin) {
+            lblPinStatus.setText("Transaction PIN: Not Set (required for Cash Out & Send Money)");
+            lblPinStatus.setForeground(new Color(180, 95, 10));
+            if (btnPinSettings != null) {
+                btnPinSettings.setText("Set PIN");
+            }
+        } else if (pinVerified) {
+            lblPinStatus.setText("Transaction PIN: Set & Verified for active session");
+            lblPinStatus.setForeground(new Color(17, 102, 68));
+            if (btnPinSettings != null) {
+                btnPinSettings.setText("Change PIN");
+            }
+        } else {
+            lblPinStatus.setText("Transaction PIN: Set (enter PIN on outgoing payments)");
+            lblPinStatus.setForeground(new Color(45, 90, 140));
+            if (btnPinSettings != null) {
+                btnPinSettings.setText("Change PIN");
+            }
         }
     }
 
@@ -508,7 +622,8 @@ public class Main extends JFrame {
                 Wallet wallet = session.refreshWallet(walletService);
                 List<Transaction> transactions = walletService.getRecentTransactions(
                         wallet.getWalletId(), RECENT_TRANSACTION_LIMIT);
-                return new DashboardSnapshot(user, wallet, transactions);
+                boolean hasPin = authService != null && user != null && authService.hasPin(user.getUserId());
+                return new DashboardSnapshot(user, wallet, transactions, hasPin);
             }
 
             @Override
@@ -520,7 +635,7 @@ public class Main extends JFrame {
                 }
                 try {
                     DashboardSnapshot snapshot = get();
-                    updateHeaderFromSession(snapshot.user, snapshot.wallet);
+                    updateHeaderFromSession(snapshot.user, snapshot.wallet, snapshot.hasPin);
                     populateTransactionsTable(snapshot.wallet.getWalletId(), snapshot.transactions);
                     if (snapshot.transactions.isEmpty()) {
                         currentState = DashboardState.EMPTY;
@@ -540,6 +655,7 @@ public class Main extends JFrame {
                     lblErrorState.setText("Unable to load wallet data: " + message);
                     activityCardLayout.show(activityCardPanel, DashboardState.ERROR.name());
                     lblStatus.setText("Error loading dashboard: " + message);
+                    checkSessionTerminatedOnError(message);
                 }
                 completeRefreshIfLatest(generation);
             }
@@ -581,6 +697,11 @@ public class Main extends JFrame {
 
     public CompletableFuture<Transaction> submitCashOperationAsync(String operationType, String channel,
                                                                     String amountText, String note) {
+        return submitCashOperationAsync(operationType, channel, amountText, note, null);
+    }
+
+    public CompletableFuture<Transaction> submitCashOperationAsync(String operationType, String channel,
+                                                                    String amountText, String note, String rawPin) {
         CompletableFuture<Transaction> future = new CompletableFuture<>();
         String op = operationType != null ? operationType.trim().toUpperCase() : "CASH_IN";
         String opLabel = "CASH_OUT".equals(op) ? "Cash Out" : "Cash In";
@@ -598,6 +719,7 @@ public class Main extends JFrame {
                 lastPaymentExecutedOffEdt = !SwingUtilities.isEventDispatchThread();
                 SessionManager session = SessionManager.getInstance();
                 session.requireAuthentication();
+                User user = session.getCurrentUser();
                 Wallet wallet = session.getCurrentWallet();
                 if (wallet == null) {
                     wallet = session.refreshWallet(walletService);
@@ -614,6 +736,15 @@ public class Main extends JFrame {
                     return walletService.cashIn(ref, wallet.getWalletId(), null, amount, desc);
                 } else if ("CASH_OUT".equals(op)) {
                     String desc = cleanNote != null ? cleanChannel + " - " + cleanNote : "Cash Out to " + cleanChannel;
+                    String cleanPin = rawPin != null ? rawPin.trim() : "";
+                    if (!cleanPin.isEmpty()) {
+                        if (authService != null && user != null) {
+                            verifyPinOrThrow(user.getUserId(), cleanPin);
+                            return walletService.cashOut(ref, wallet.getWalletId(), null, amount, MoneyUtil.ZERO, desc);
+                        }
+                        return walletService.cashOutWithPin(
+                                ref, wallet.getWalletId(), null, amount, MoneyUtil.ZERO, desc, cleanPin);
+                    }
                     return walletService.cashOut(ref, wallet.getWalletId(), null, amount, MoneyUtil.ZERO, desc);
                 }
                 throw new IllegalArgumentException("Unsupported cash operation: " + operationType);
@@ -639,6 +770,7 @@ public class Main extends JFrame {
                     lblCashFeedback.setForeground(new Color(176, 38, 38));
                     lblCashFeedback.setText("Failed: " + message);
                     lblStatus.setText(opLabel + " failed: " + message);
+                    checkSessionTerminatedOnError(message);
                     future.completeExceptionally(cause);
                 }
             }
@@ -648,6 +780,11 @@ public class Main extends JFrame {
     }
 
     public CompletableFuture<Transaction> submitSendMoneyAsync(String recipient, String amountText, String note) {
+        return submitSendMoneyAsync(recipient, amountText, note, null);
+    }
+
+    public CompletableFuture<Transaction> submitSendMoneyAsync(String recipient, String amountText,
+                                                              String note, String rawPin) {
         CompletableFuture<Transaction> future = new CompletableFuture<>();
 
         runOnEdt(() -> {
@@ -663,6 +800,7 @@ public class Main extends JFrame {
                 lastPaymentExecutedOffEdt = !SwingUtilities.isEventDispatchThread();
                 SessionManager session = SessionManager.getInstance();
                 session.requireAuthentication();
+                User user = session.getCurrentUser();
                 Wallet wallet = session.getCurrentWallet();
                 if (wallet == null) {
                     wallet = session.refreshWallet(walletService);
@@ -673,6 +811,16 @@ public class Main extends JFrame {
                 }
                 BigDecimal amount = MoneyUtil.validatePositiveAmount(MoneyUtil.parse(amountText));
                 String ref = IdGenerator.nextReferenceNumber();
+                String cleanPin = rawPin != null ? rawPin.trim() : "";
+                if (!cleanPin.isEmpty()) {
+                    if (authService != null && user != null) {
+                        verifyPinOrThrow(user.getUserId(), cleanPin);
+                        return walletService.sendMoneyToRecipient(
+                                ref, wallet.getWalletId(), recipient.trim(), amount, MoneyUtil.ZERO, note);
+                    }
+                    return walletService.sendMoneyToRecipientWithPin(
+                            ref, wallet.getWalletId(), recipient.trim(), amount, MoneyUtil.ZERO, note, cleanPin);
+                }
                 return walletService.sendMoneyToRecipient(
                         ref, wallet.getWalletId(), recipient.trim(), amount, MoneyUtil.ZERO, note);
             }
@@ -697,12 +845,209 @@ public class Main extends JFrame {
                     lblSendFeedback.setForeground(new Color(176, 38, 38));
                     lblSendFeedback.setText("Transfer failed: " + message);
                     lblStatus.setText("Transfer failed: " + message);
+                    checkSessionTerminatedOnError(message);
                     future.completeExceptionally(cause);
                 }
             }
         };
         worker.execute();
         return future;
+    }
+
+    private void verifyPinOrThrow(String userId, String rawPin) {
+        try {
+            if (!authService.verifyPin(userId, rawPin)) {
+                SessionManager session = SessionManager.getInstance();
+                if (session.isLockedOutByPin()) {
+                    throw new WalletException("Session terminated after maximum failed PIN attempts.");
+                }
+                throw new WalletException("Invalid transaction PIN. Outgoing payment blocked.");
+            }
+        } catch (SecurityException ex) {
+            throw new WalletException(ex.getMessage(), ex);
+        }
+    }
+
+    private void openPinSettingsDialog() {
+        if (authService == null) {
+            JOptionPane.showMessageDialog(this,
+                    "Transaction PIN management is unavailable without AuthService.",
+                    "Transaction PIN",
+                    JOptionPane.INFORMATION_MESSAGE);
+            return;
+        }
+        User currentUser = SessionManager.getInstance().getCurrentUser();
+        if (currentUser == null) {
+            handleSessionTermination("Session expired. Please log in again.");
+            return;
+        }
+        SessionManager.getInstance().touchActivity();
+
+        JDialog dialog = new JDialog(this, cachedHasPin ? "Change Transaction PIN" : "Set Transaction PIN", true);
+        dialog.setSize(420, 270);
+        dialog.setLocationRelativeTo(this);
+        dialog.setResizable(false);
+
+        JPanel form = new JPanel(new GridBagLayout());
+        form.setBorder(BorderFactory.createEmptyBorder(14, 16, 10, 16));
+        GridBagConstraints gbc = new GridBagConstraints();
+        gbc.insets = new Insets(5, 5, 5, 5);
+        gbc.fill = GridBagConstraints.HORIZONTAL;
+        gbc.anchor = GridBagConstraints.WEST;
+
+        JRadioButton rbChangePin = new JRadioButton("Use Current PIN", cachedHasPin);
+        JRadioButton rbResetWithPassword = new JRadioButton(
+                cachedHasPin ? "Reset with Account Password" : "Verify with Account Password", !cachedHasPin);
+        ButtonGroup modeGroup = new ButtonGroup();
+        modeGroup.add(rbChangePin);
+        modeGroup.add(rbResetWithPassword);
+        rbChangePin.setEnabled(cachedHasPin);
+
+        JLabel lblSecret = new JLabel(cachedHasPin ? "Current PIN:" : "Account Password:");
+        JPasswordField txtSecret = new JPasswordField(18);
+        JPasswordField txtNewPin = new JPasswordField(18);
+        JPasswordField txtConfirmPin = new JPasswordField(18);
+        JLabel lblPinDialogFeedback = new JLabel(" ");
+        lblPinDialogFeedback.setFont(new Font("SansSerif", Font.PLAIN, 11));
+
+        if (cachedHasPin) {
+            JPanel modePanel = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 0));
+            modePanel.add(rbChangePin);
+            modePanel.add(rbResetWithPassword);
+            gbc.gridx = 0;
+            gbc.gridy = 0;
+            gbc.gridwidth = 2;
+            form.add(modePanel, gbc);
+        }
+
+        rbChangePin.addActionListener(e -> lblSecret.setText("Current PIN:"));
+        rbResetWithPassword.addActionListener(e -> lblSecret.setText("Account Password:"));
+
+        int row = cachedHasPin ? 1 : 0;
+        gbc.gridwidth = 1;
+        gbc.gridx = 0;
+        gbc.gridy = row;
+        gbc.weightx = 0.0;
+        form.add(lblSecret, gbc);
+        gbc.gridx = 1;
+        gbc.weightx = 1.0;
+        form.add(txtSecret, gbc);
+
+        addFormRow(form, gbc, row + 1, "New PIN (4-6 digits):", txtNewPin);
+        addFormRow(form, gbc, row + 2, "Confirm New PIN:", txtConfirmPin);
+
+        gbc.gridx = 0;
+        gbc.gridy = row + 3;
+        gbc.gridwidth = 2;
+        form.add(lblPinDialogFeedback, gbc);
+
+        JPanel buttons = new JPanel(new FlowLayout(FlowLayout.RIGHT, 8, 10));
+        JButton btnCancel = new JButton("Cancel");
+        JButton btnSavePin = new JButton("Save PIN");
+        buttons.add(btnCancel);
+        buttons.add(btnSavePin);
+
+        btnCancel.addActionListener(e -> dialog.dispose());
+        btnSavePin.addActionListener(e -> {
+            String secret = new String(txtSecret.getPassword());
+            String newPin = new String(txtNewPin.getPassword()).trim();
+            String confirmPin = new String(txtConfirmPin.getPassword()).trim();
+
+            if (secret.isEmpty() || newPin.isEmpty()) {
+                lblPinDialogFeedback.setForeground(new Color(176, 38, 38));
+                lblPinDialogFeedback.setText("Please fill in all fields.");
+                return;
+            }
+            if (!newPin.equals(confirmPin)) {
+                lblPinDialogFeedback.setForeground(new Color(176, 38, 38));
+                lblPinDialogFeedback.setText("New PIN and confirmation do not match.");
+                return;
+            }
+
+            final boolean useCurrentPin = rbChangePin.isSelected();
+            btnSavePin.setEnabled(false);
+            btnCancel.setEnabled(false);
+            lblPinDialogFeedback.setForeground(new Color(70, 80, 95));
+            lblPinDialogFeedback.setText("Saving Transaction PIN...");
+
+            new SwingWorker<Void, Void>() {
+                @Override
+                protected Void doInBackground() {
+                    if (useCurrentPin) {
+                        authService.changePin(currentUser.getUserId(), secret, newPin);
+                    } else {
+                        authService.setPin(currentUser.getUserId(), secret, newPin);
+                    }
+                    return null;
+                }
+
+                @Override
+                protected void done() {
+                    btnSavePin.setEnabled(true);
+                    btnCancel.setEnabled(true);
+                    try {
+                        get();
+                        updatePinStatusDisplay(true);
+                        lblStatus.setText("Transaction PIN updated.");
+                        JOptionPane.showMessageDialog(dialog,
+                                "Transaction PIN saved successfully.",
+                                "Transaction PIN",
+                                JOptionPane.INFORMATION_MESSAGE);
+                        dialog.dispose();
+                    } catch (Exception ex) {
+                        Throwable cause = unwrapCause(ex);
+                        String message = cause.getMessage() != null ? cause.getMessage() : cause.getClass().getSimpleName();
+                        lblPinDialogFeedback.setForeground(new Color(176, 38, 38));
+                        lblPinDialogFeedback.setText(message);
+                        if (SessionManager.getInstance().isExpiredDueToInactivity()
+                                || SessionManager.getInstance().isLockedOutByPin()) {
+                            dialog.dispose();
+                            handleSessionTermination(message);
+                        }
+                    }
+                }
+            }.execute();
+        });
+
+        dialog.setLayout(new BorderLayout());
+        dialog.add(form, BorderLayout.CENTER);
+        dialog.add(buttons, BorderLayout.SOUTH);
+        dialog.setVisible(true);
+    }
+
+    private void startSessionMonitor() {
+        sessionMonitorTimer = new Timer(SESSION_POLL_INTERVAL_MS, e -> {
+            SessionManager session = SessionManager.getInstance();
+            if (!session.isLoggedIn() && (session.isExpiredDueToInactivity() || session.isLockedOutByPin())) {
+                String reason = session.isLockedOutByPin()
+                        ? "Session terminated after maximum failed PIN attempts."
+                        : "Session expired due to inactivity. Please log in again.";
+                handleSessionTermination(reason);
+            }
+        });
+        sessionMonitorTimer.setRepeats(true);
+        sessionMonitorTimer.start();
+    }
+
+    private void checkSessionTerminatedOnError(String message) {
+        SessionManager session = SessionManager.getInstance();
+        if (!session.isLoggedIn() && (session.isExpiredDueToInactivity() || session.isLockedOutByPin())) {
+            handleSessionTermination(message);
+        }
+    }
+
+    private void handleSessionTermination(String reason) {
+        if (logoutHandled) {
+            return;
+        }
+        logoutHandled = true;
+        if (isShowing()) {
+            JOptionPane.showMessageDialog(this, reason, "Session Ended", JOptionPane.WARNING_MESSAGE);
+        }
+        dispose();
+        if (onLogoutCallback != null) {
+            SwingUtilities.invokeLater(onLogoutCallback);
+        }
     }
 
     private void setLoadingState(String message) {
@@ -851,7 +1196,16 @@ public class Main extends JFrame {
     }
 
     private void handleLogout() {
-        SessionManager.getInstance().logout();
+        if (logoutHandled) {
+            return;
+        }
+        logoutHandled = true;
+        User currentUser = SessionManager.getInstance().getCurrentUser();
+        if (authService != null && currentUser != null) {
+            authService.logout(currentUser.getUserId());
+        } else {
+            SessionManager.getInstance().logout();
+        }
         dispose();
         if (onLogoutCallback != null) {
             SwingUtilities.invokeLater(onLogoutCallback);
@@ -860,6 +1214,9 @@ public class Main extends JFrame {
 
     @Override
     public void dispose() {
+        if (sessionMonitorTimer != null) {
+            sessionMonitorTimer.stop();
+        }
         if (ownedDatabaseManager != null) {
             ownedDatabaseManager.close();
         }
@@ -899,6 +1256,10 @@ public class Main extends JFrame {
 
     public JLabel getWalletIdLabel() {
         return lblWalletId;
+    }
+
+    public JLabel getPinStatusLabel() {
+        return lblPinStatus;
     }
 
     public JLabel getStatusLabel() {
@@ -953,6 +1314,10 @@ public class Main extends JFrame {
         return btnNavSendMoney;
     }
 
+    public JButton getPinSettingsButton() {
+        return btnPinSettings;
+    }
+
     public JButton getRetryLoadButton() {
         return btnRetryLoad;
     }
@@ -969,15 +1334,25 @@ public class Main extends JFrame {
         return cmbCashOperation;
     }
 
+    public JPasswordField getCashPinField() {
+        return txtCashPin;
+    }
+
+    public JPasswordField getSendPinField() {
+        return txtSendPin;
+    }
+
     private static final class DashboardSnapshot {
         private final User user;
         private final Wallet wallet;
         private final List<Transaction> transactions;
+        private final boolean hasPin;
 
-        private DashboardSnapshot(User user, Wallet wallet, List<Transaction> transactions) {
+        private DashboardSnapshot(User user, Wallet wallet, List<Transaction> transactions, boolean hasPin) {
             this.user = user;
             this.wallet = wallet;
             this.transactions = transactions;
+            this.hasPin = hasPin;
         }
     }
 }
