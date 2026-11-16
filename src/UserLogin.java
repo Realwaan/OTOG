@@ -29,8 +29,10 @@ public class UserLogin extends JFrame {
     private JPanel pnlPassword;
     private JPanel pnl2FA;
     private JLabel lblTwoFactorHeader;
+    private JLabel twoFactorHeaderLabel;
     private JTextField textField2FA;
     private JButton btnVerify2FA;
+    private JButton btnResendOtp;
 
     private final AuthService authService;
     private final WalletOperations walletService;
@@ -44,6 +46,12 @@ public class UserLogin extends JFrame {
     private volatile Wallet pendingWallet;
     private volatile DatabaseManager preparedDashboardDatabase;
     private volatile String lastIssuedOtp;
+    private String currentAuthenticatedUserId;
+    private String lastErrorMessage;
+    private String lastIssuedOtp;
+    private final Map<String, Integer> failedAttemptsByIdentifier = new HashMap<>();
+    private User pendingUser;
+    private Wallet pendingWallet;
 
     private static final class LoginOutcome {
         final boolean success;
@@ -55,6 +63,8 @@ public class UserLogin extends JFrame {
 
         private LoginOutcome(boolean success, User user, Wallet wallet, String errorMessage,
                              String identifierKey, String issuedOtp) {
+        private LoginOutcome(boolean success, User user, Wallet wallet,
+                             String errorMessage, String identifierKey, String issuedOtp) {
             this.success = success;
             this.user = user;
             this.wallet = wallet;
@@ -89,6 +99,9 @@ public class UserLogin extends JFrame {
             this.ownedDatabaseManager = new DatabaseManager();
             this.authService = new AuthServiceImpl(this.ownedDatabaseManager);
             this.walletService = new WalletService(this.ownedDatabaseManager);
+            DatabaseManager dbManager = new DatabaseManager();
+            this.authService = new AuthServiceImpl(dbManager);
+            this.walletService = new WalletService(dbManager, this.authService);
         }
 
         if (pnlMain == null) {
@@ -209,6 +222,97 @@ public class UserLogin extends JFrame {
                 JOptionPane.showMessageDialog(pnlMain, failure, "2FA Error", JOptionPane.WARNING_MESSAGE);
             }
         }.execute();
+                    @Override
+                    protected void done() {
+                        btnVerify2FA.setEnabled(true);
+                        try {
+                            if (get()) {
+                                String displayName = (pendingUser != null && pendingUser.getName() != null)
+                                        ? pendingUser.getName() : "User";
+                                JOptionPane.showMessageDialog(
+                                        pnlMain,
+                                        "Two-Factor Authentication successful! Welcome, " + displayName + ".",
+                                        "Success",
+                                        JOptionPane.INFORMATION_MESSAGE
+                                );
+                                SwingUtilities.invokeLater(() -> {
+                                    com.otog.ui.Main dashboard = new com.otog.ui.Main();
+                                    dashboard.setOnLogoutCallback(() -> {
+                                        JFrame frame = new JFrame("User Login - OTOG E-Wallet");
+                                        UserLogin fresh = new UserLogin();
+                                        frame.setContentPane(fresh.getMainPanel());
+                                        frame.setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
+                                        frame.setSize(750, 420);
+                                        frame.setLocationRelativeTo(null);
+                                        frame.setResizable(false);
+                                        frame.setVisible(true);
+                                    });
+                                    dashboard.setVisible(true);
+                                    Window ancestor = SwingUtilities.getWindowAncestor(pnlMain);
+                                    if (ancestor != null) {
+                                        ancestor.dispose();
+                                    }
+                                });
+                            } else {
+                                String msg = (lastErrorMessage != null && !lastErrorMessage.trim().isEmpty())
+                                        ? lastErrorMessage
+                                        : "Please enter a valid 2FA verification code.";
+                                JOptionPane.showMessageDialog(
+                                        pnlMain,
+                                        msg,
+                                        "2FA Error",
+                                        JOptionPane.WARNING_MESSAGE
+                                );
+                            }
+                        } catch (InterruptedException ex) {
+                            Thread.currentThread().interrupt();
+                        } catch (ExecutionException ex) {
+                            Throwable cause = ex.getCause() != null ? ex.getCause() : ex;
+                            JOptionPane.showMessageDialog(
+                                    pnlMain,
+                                    cause.getMessage(),
+                                    "2FA Error",
+                                    JOptionPane.ERROR_MESSAGE
+                            );
+                        }
+                    }
+                }.execute();
+            });
+        }
+
+        if (btnResendOtp != null) {
+            btnResendOtp.addActionListener(e -> {
+                if (currentAuthenticatedUserId == null || currentAuthenticatedUserId.trim().isEmpty()) {
+                    return;
+                }
+                btnResendOtp.setEnabled(false);
+                new SwingWorker<String, Void>() {
+                    @Override
+                    protected String doInBackground() {
+                        return authService.issueTwoFactorOtp(currentAuthenticatedUserId);
+                    }
+
+                    @Override
+                    protected void done() {
+                        btnResendOtp.setEnabled(true);
+                        try {
+                            applySimulatedOtp(get());
+                        } catch (InterruptedException ex) {
+                            Thread.currentThread().interrupt();
+                        } catch (ExecutionException ex) {
+                            Throwable cause = ex.getCause() != null ? ex.getCause() : ex;
+                            lastErrorMessage = cause.getMessage();
+                            JOptionPane.showMessageDialog(
+                                    pnlMain,
+                                    cause.getMessage(),
+                                    "Resend OTP Error",
+                                    JOptionPane.WARNING_MESSAGE
+                            );
+                        }
+                    }
+                }.execute();
+            });
+        }
     }
 
     private void setLoginInputsBusy(boolean busy) {
@@ -329,6 +433,9 @@ public class UserLogin extends JFrame {
                     String issuedOtp = authService.issueTwoFactorOtp(user.getUserId());
                     return LoginOutcome.success(user, wallet, identifierKey, issuedOtp);
                 }
+                String issuedOtp = authService.issueTwoFactorOtp(user.getUserId());
+                return LoginOutcome.success(user, wallet, identifierKey, issuedOtp);
+            }
 
                 return recordFailedAttempt(identifierKey);
             } catch (Exception ex) {
@@ -380,6 +487,10 @@ public class UserLogin extends JFrame {
                     lblTwoFactorHeader.setText("Login Successful! Complete Two-Factor Authentication:");
                 }
             }
+            if (textField2FA != null) {
+                textField2FA.setText("");
+            }
+            applySimulatedOtp(outcome.issuedOtp);
             pnlPassword.setVisible(false);
             pnl2FA.setVisible(true);
             pnlMain.revalidate();
@@ -403,6 +514,27 @@ public class UserLogin extends JFrame {
         return false;
     }
 
+    public String resendTwoFactorOtp() {
+        if (authService == null || currentAuthenticatedUserId == null || currentAuthenticatedUserId.trim().isEmpty()) {
+            throw new IllegalStateException("No authenticated user pending 2FA.");
+        }
+        String newCode = authService.issueTwoFactorOtp(currentAuthenticatedUserId);
+        applySimulatedOtp(newCode);
+        return newCode;
+    }
+
+    private void applySimulatedOtp(String code) {
+        this.lastIssuedOtp = code;
+        this.lastErrorMessage = null;
+        if (twoFactorHeaderLabel != null) {
+            twoFactorHeaderLabel.setText(buildSimulatedOtpBanner(code));
+        }
+    }
+
+    private String buildSimulatedOtpBanner(String code) {
+        return "[Simulated SMS] OTP code: " + (code != null ? code : "") + " (valid 5 min, 1-time use):";
+    }
+
     public boolean verifyTwoFactorCode(String code) {
         if (code == null || code.trim().isEmpty()) {
             return false;
@@ -415,6 +547,19 @@ public class UserLogin extends JFrame {
             return verified;
         }
         return true;
+        if (code == null || code.trim().isEmpty() || authService == null) {
+            lastErrorMessage = "Please enter a valid 2FA verification code.";
+            return false;
+        }
+        boolean verified = authService.verifyTwoFactorOtp(currentAuthenticatedUserId, code.trim());
+        if (verified && pendingUser != null) {
+            lastErrorMessage = null;
+            lastIssuedOtp = null;
+            SessionManager.getInstance().login(pendingUser, pendingWallet);
+            return true;
+        }
+        lastErrorMessage = "Invalid, expired, reused, or attempt-limited 2FA code.";
+        return false;
     }
 
     public JPanel getMainPanel() {
@@ -451,6 +596,18 @@ public class UserLogin extends JFrame {
 
     public JButton getVerify2FAButton() {
         return btnVerify2FA;
+    }
+
+    public JButton getResendOtpButton() {
+        return btnResendOtp;
+    }
+
+    public JLabel getTwoFactorHeaderLabel() {
+        return twoFactorHeaderLabel;
+    }
+
+    public String getLastIssuedOtp() {
+        return lastIssuedOtp;
     }
 
     public String getLastErrorMessage() {
@@ -518,7 +675,7 @@ public class UserLogin extends JFrame {
                 null, null, null, 0, false));
 
         pnl2FA = new JPanel();
-        pnl2FA.setLayout(new GridLayoutManager(3, 2, new Insets(0, 0, 0, 0), -1, -1));
+        pnl2FA.setLayout(new GridLayoutManager(4, 2, new Insets(0, 0, 0, 0), -1, -1));
         pnl2FA.setVisible(false);
         pnlMain.add(pnl2FA, new GridConstraints(3, 0, 1, 3,
                 GridConstraints.ANCHOR_CENTER, GridConstraints.FILL_BOTH,
@@ -528,6 +685,8 @@ public class UserLogin extends JFrame {
 
         lblTwoFactorHeader = new JLabel("Login Successful! Complete Two-Factor Authentication:");
         pnl2FA.add(lblTwoFactorHeader, new GridConstraints(0, 0, 1, 2,
+        twoFactorHeaderLabel = new JLabel("Login Successful! Complete Two-Factor Authentication (Simulated SMS):");
+        pnl2FA.add(twoFactorHeaderLabel, new GridConstraints(0, 0, 1, 2,
                 GridConstraints.ANCHOR_CENTER, GridConstraints.FILL_NONE,
                 GridConstraints.SIZEPOLICY_FIXED, GridConstraints.SIZEPOLICY_FIXED,
                 null, null, null, 0, false));
@@ -547,6 +706,12 @@ public class UserLogin extends JFrame {
 
         btnVerify2FA = new JButton("Verify");
         pnl2FA.add(btnVerify2FA, new GridConstraints(2, 0, 1, 2,
+                GridConstraints.ANCHOR_CENTER, GridConstraints.FILL_NONE,
+                GridConstraints.SIZEPOLICY_FIXED, GridConstraints.SIZEPOLICY_FIXED,
+                null, null, null, 0, false));
+
+        btnResendOtp = new JButton("Resend Simulated OTP");
+        pnl2FA.add(btnResendOtp, new GridConstraints(3, 0, 1, 2,
                 GridConstraints.ANCHOR_CENTER, GridConstraints.FILL_NONE,
                 GridConstraints.SIZEPOLICY_FIXED, GridConstraints.SIZEPOLICY_FIXED,
                 null, null, null, 0, false));

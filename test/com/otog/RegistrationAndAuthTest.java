@@ -239,8 +239,15 @@ public class RegistrationAndAuthTest {
             assertTrue((Boolean) attemptLogin.invoke(loginWindow, "09257778899", "GeneralGabriela"));
             assertFalse(SessionManager.getInstance().isLoggedIn(), "Session must NOT be active until 2FA succeeds");
 
+            // Reject non-issued fallback codes and accept the issued simulated OTP
+            String issuedOtp = (String) loginClass.getMethod("getLastIssuedOtp").invoke(loginWindow);
+            assertNotNull(issuedOtp, "Simulated OTP must be issued");
+            String wrongCode = "123456".equals(issuedOtp) ? "654321" : "123456";
+            assertFalse((Boolean) verifyTwoFactor.invoke(loginWindow, wrongCode),
+                    "Random or hardcoded fallback OTP must be rejected");
+
             // Two-Factor verification completes login and establishes session
-            assertTrue((Boolean) verifyTwoFactor.invoke(loginWindow, "123456"));
+            assertTrue((Boolean) verifyTwoFactor.invoke(loginWindow, issuedOtp));
             assertTrue(SessionManager.getInstance().isLoggedIn(), "Session must be active after successful 2FA");
             assertEquals("Gabriela Silang", SessionManager.getInstance().getCurrentUser().getName());
             assertNotNull(SessionManager.getInstance().getCurrentWallet());
