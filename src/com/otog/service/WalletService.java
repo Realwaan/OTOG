@@ -311,10 +311,8 @@ public class WalletService implements WalletOperations {
                         throw new InsufficientFundsException(sourceWalletId, sourceBalance, totalDebit);
                     }
 
-                    String txnId = IdGenerator.nextTransactionId();
                     String txnDesc = description != null ? description : "Transfer to wallet " + targetWalletId;
-                    SendMoneyTransaction txn = new SendMoneyTransaction(
-                            txnId,
+                    SendMoneyTransaction txn = TransactionFactory.createSendMoney(
                             referenceNumber,
                             sourceWalletId,
                             targetWalletId,
@@ -333,7 +331,7 @@ public class WalletService implements WalletOperations {
 
                     LedgerEntry debitEntry = new LedgerEntry(
                             IdGenerator.nextLedgerEntryId(),
-                            txnId,
+                            txn.getTransactionId(),
                             sourceWalletId,
                             LedgerEntryType.DEBIT,
                             totalDebit,
@@ -352,7 +350,7 @@ public class WalletService implements WalletOperations {
 
                     LedgerEntry creditEntry = new LedgerEntry(
                             IdGenerator.nextLedgerEntryId(),
-                            txnId,
+                            txn.getTransactionId(),
                             targetWalletId,
                             LedgerEntryType.CREDIT,
                             validAmount,
