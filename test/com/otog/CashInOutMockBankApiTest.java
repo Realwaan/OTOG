@@ -537,6 +537,89 @@ public class CashInOutMockBankApiTest {
                 .get(5, TimeUnit.SECONDS);
         assertEquals(TransactionStatus.COMPLETED, settledTxn.getStatus());
         assertTrue(activeDashboard.getCashFeedbackLabel().getText().contains("settled COMPLETED"));
+        assertTrue(activeDashboard.getActivityFeedbackLabel().getText().contains("settled COMPLETED"));
+        assertTrue(activeDashboard.getStatusLabel().getText().contains("Status sync: COMPLETED"));
         assertEquals("PHP 500.00", activeDashboard.getBalanceLabel().getText());
+    }
+
+    @Test
+    @DisplayName("QA2-1: Explicit channel mode (pmId=null) records chosen channel without defaulting to BDO")
+    void testExplicitChannelModeRespectsChannel() throws Exception {
+        AuthServiceImpl authService = new AuthServiceImpl(databaseManager);
+        User chUser = authService.registerUser("Channel User", "09176665544", "ch@otog.ph", "Secret123");
+        Wallet chWallet = walletService.getWalletByUserId(chUser.getUserId());
+        SessionManager.getInstance().login(chUser, chWallet);
+
+        activeDashboard = new Main(walletService, authService);
+        activeDashboard.getInitialLoadFuture().get(5, TimeUnit.SECONDS);
+
+        // User selects "Use Selected Channel" (index 0) and GCash
+        activeDashboard.getPaymentMethodComboBox().setSelectedIndex(0);
+        assertNull(activeDashboard.getSelectedPaymentMethodId());
+
+        Transaction gcashTxn = activeDashboard.submitCashOperationAsync(
+                "CASH_IN", "GCash", null, "250.00", "", null)
+                .get(5, TimeUnit.SECONDS);
+
+        assertInstanceOf(CashInOutTransaction.class, gcashTxn);
+        CashInOutTransaction cio = (CashInOutTransaction) gcashTxn;
+        assertEquals("GCash", cio.getChannel());
+        assertTrue(cio.getProviderReference().contains("GCASH"),
+                "Provider reference should reflect selected channel GCash, was: " + cio.getProviderReference());
+    }
+
+    @Test
+    @DisplayName("QA2-2: statusLookup and handleProviderResponse reject non-cash transactions (e.g. SEND_MONEY)")
+    void testStatusLookupRejectsNonCashTransactions() {
+        User recipient = new User(IdGenerator.nextUserId(), "Recipient", "09171112233");
+        userRepository.save(recipient);
+        Wallet recipientWallet = walletService.createWallet(recipient.getUserId(), BigDecimal.ZERO, "PHP");
+
+        walletService.transfer("TX-SEND-01", testWallet.getWalletId(), recipientWallet.getWalletId(),
+                new BigDecimal("100.00"), BigDecimal.ZERO, "Non-cash transfer");
+
+        assertThrows(WalletException.class, () -> walletService.statusLookup("TX-SEND-01"));
+        assertThrows(WalletException.class, () ->
+                walletService.handleProviderResponse("TX-SEND-01", BankApiResponse.success("BNK-X", "Ignored")));
+    }
+
+    @Test
+    @DisplayName("QA2-4: Main syncs Mock Bank Mode dropdown from WalletService across logout/re-login")
+    void testMainSyncsProviderModeAcrossLogins() throws Exception {
+        AuthServiceImpl authService = new AuthServiceImpl(databaseManager);
+        User userA = authService.registerUser("User A", "09171110001", "usera@otog.ph", "Secret123");
+        Wallet walletA = walletService.getWalletByUserId(userA.getUserId());
+
+        // Pre-configure shared walletService to TIMEOUT before opening Main
+        walletService.setPaymentProviderFactory(PaymentProviderFactory.timeoutFactory());
+        SessionManager.getInstance().login(userA, walletA);
+
+        activeDashboard = new Main(walletService, authService);
+        activeDashboard.getInitialLoadFuture().get(5, TimeUnit.SECONDS);
+
+        assertEquals("TIMEOUT", activeDashboard.getProviderModeComboBox().getSelectedItem());
+    }
+
+    @Test
+    @DisplayName("QA2-6 & QA2-7: Null argument guards throw IllegalArgumentException and seedDemoBankAccountsForUser is idempotent")
+    void testNullGuardsAndIdempotentSeeding() {
+        assertThrows(IllegalArgumentException.class, () ->
+                walletService.cashIn("REF-NULL-WLT", null, null, new BigDecimal("50.00"), "Null wallet"));
+        assertThrows(IllegalArgumentException.class, () ->
+                walletService.cashOut("REF-NULL-WLT2", " ", null, new BigDecimal("50.00"), BigDecimal.ZERO, "Blank wallet"));
+        assertThrows(IllegalArgumentException.class, () ->
+                walletService.linkPaymentMethod(testUser.getUserId(), null, "BDO", "Name", "1234"));
+
+        MockBankAdapter adapter = new MockBankAdapter();
+        assertThrows(IllegalArgumentException.class, () ->
+                adapter.processCashIn(null, testBankMethod, new BigDecimal("10.00")));
+        assertThrows(IllegalArgumentException.class, () ->
+                adapter.queryStatus(" ", "BNK-123"));
+
+        // Idempotent demo seeding for user with existing accounts
+        int before = walletService.getPaymentMethodsByUserId(testUser.getUserId()).size();
+        List<PaymentMethod> seeded = walletService.seedDemoBankAccountsForUser(testUser.getUserId());
+        assertEquals(before, seeded.size());
+        assertEquals(before, walletService.getPaymentMethodsByUserId(testUser.getUserId()).size());
     }
 }

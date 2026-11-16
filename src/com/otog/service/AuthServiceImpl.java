@@ -73,6 +73,16 @@ public class AuthServiceImpl implements AuthService {
 
     @Override
     public User registerUser(String name, String mobileNumber, String email, String rawPassword) {
+        return registerUser(name, mobileNumber, email, rawPassword, UserRole.USER);
+    }
+
+    @Override
+    public User registerUser(String name, String mobileNumber, String email, String rawPassword, UserRole role) {
+        if (role == UserRole.ADMIN) {
+            throw new OtogException("Self-registration as ADMIN is prohibited. Admin accounts must be provisioned by an administrator.");
+        }
+        UserRole effectiveRole = (role != null) ? role : UserRole.USER;
+
         if (name == null || name.trim().isEmpty()) {
             throw new OtogException("Name is required for registration.");
         }
@@ -97,7 +107,7 @@ public class AuthServiceImpl implements AuthService {
         }
 
         String userId = IdGenerator.nextUserId();
-        User user = new User(userId, name.trim(), cleanMobile, cleanEmail, UserRole.USER, UserStatus.ACTIVE);
+        User user = new User(userId, name.trim(), cleanMobile, cleanEmail, effectiveRole, UserStatus.ACTIVE);
 
         String salt = PasswordUtil.generateSalt();
         String hash = PasswordUtil.hashPassword(rawPassword, salt);
@@ -319,5 +329,9 @@ public class AuthServiceImpl implements AuthService {
 
     public WalletService getWalletService() {
         return walletService;
+    }
+
+    public AdminService getAdminService() {
+        return walletService != null ? walletService.getAdminService() : null;
     }
 }

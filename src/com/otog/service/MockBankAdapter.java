@@ -76,6 +76,9 @@ public class MockBankAdapter implements BankAdapter {
     }
 
     private String getOrCreateProviderReference(String referenceNumber, PaymentMethod paymentMethod) {
+        if (referenceNumber == null || referenceNumber.trim().isEmpty()) {
+            throw new IllegalArgumentException("Reference number must not be null or empty");
+        }
         return recordedProviderReferences.computeIfAbsent(referenceNumber, ref -> {
             String prefix = "DEMO-BANK";
             if (paymentMethod != null && paymentMethod.getProviderName() != null) {
@@ -123,6 +126,9 @@ public class MockBankAdapter implements BankAdapter {
 
     @Override
     public BankApiResponse queryStatus(String referenceNumber, String providerReference) {
+        if (referenceNumber == null || referenceNumber.trim().isEmpty()) {
+            throw new IllegalArgumentException("Reference number must not be null or empty");
+        }
         callCount.incrementAndGet();
         recordedRequests.add("QUERY_STATUS:" + referenceNumber + ":" + providerReference);
         String effectiveProviderRef = providerReference != null ? providerReference

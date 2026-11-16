@@ -186,6 +186,11 @@ public class DashboardAndNavigationTest {
             }
 
             @Override
+            public User registerUser(String name, String mobileNumber, String email, String rawPassword, com.otog.model.UserRole role) {
+                return authService.registerUser(name, mobileNumber, email, rawPassword, role);
+            }
+
+            @Override
             public java.util.Optional<User> authenticatePassword(String identifier, String rawPassword) {
                 authRanOffEdt.set(!SwingUtilities.isEventDispatchThread());
                 return authService.authenticatePassword(identifier, rawPassword);

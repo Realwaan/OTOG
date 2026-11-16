@@ -2,12 +2,14 @@ package com.otog.ui;
 
 import com.otog.database.DatabaseManager;
 import com.otog.exception.WalletException;
+import com.otog.model.AdminAction;
 import com.otog.model.PaymentMethod;
 import com.otog.model.PaymentMethodStatus;
 import com.otog.model.Transaction;
 import com.otog.model.TransactionStatus;
 import com.otog.model.TransactionType;
 import com.otog.model.User;
+import com.otog.model.UserRole;
 import com.otog.model.Wallet;
 import com.otog.service.AuthService;
 import com.otog.service.AuthServiceImpl;
@@ -31,6 +33,7 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Deque;
 import java.util.EnumMap;
+import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
@@ -93,6 +96,7 @@ public class Main extends JFrame {
     private JTable tblTransactions;
     private JButton btnViewReceipt;
     private JButton btnCheckStatus;
+    private JLabel lblActivityFeedback;
 
     private JComboBox<String> cmbCashOperation;
     private JComboBox<String> cmbPaymentMethod;
@@ -116,6 +120,7 @@ public class Main extends JFrame {
     private volatile DashboardState currentState = DashboardState.LOADING;
     private volatile boolean lastLoadExecutedOffEdt;
     private volatile boolean lastPaymentExecutedOffEdt;
+    private volatile boolean lastAdminLoadExecutedOffEdt;
     private volatile boolean cachedHasPin;
     private CompletableFuture<Void> initialLoadFuture;
     private List<Transaction> loadedTransactions = Collections.emptyList();
@@ -272,6 +277,13 @@ public class Main extends JFrame {
         if (investmentService != null) {
             registerTab("Investments", buildServiceReadyNotice("Investments module active"));
         }
+
+        // CAP-09: Admin Controls tab — only visible to administrators
+        User sessionUser = SessionManager.getInstance().getCurrentUser();
+        if (sessionUser != null && sessionUser.isAdmin() && walletService instanceof WalletService) {
+            registerTab("Admin Controls", buildAdminControlsPanel((WalletService) walletService));
+        }
+
         lastSelectedTabTitle = tabs.getTabCount() > 0 ? tabs.getTitleAt(tabs.getSelectedIndex()) : null;
         // Record every tab switch (manual click or programmatic) on the LIFO back-stack.
         tabs.addChangeListener(e -> onTabSelectionChanged());
@@ -389,13 +401,24 @@ public class Main extends JFrame {
         JPanel readyCard = new JPanel(new BorderLayout(6, 6));
         readyCard.add(new JScrollPane(tblTransactions), BorderLayout.CENTER);
 
-        JPanel tableActions = new JPanel(new FlowLayout(FlowLayout.RIGHT, 8, 0));
+        JPanel tableActions = new JPanel(new BorderLayout(8, 0));
+        lblActivityFeedback = new JLabel(" ");
+        lblActivityFeedback.setFont(new Font("SansSerif", Font.PLAIN, 12));
+        JPanel tableActionButtons = new JPanel(new FlowLayout(FlowLayout.RIGHT, 8, 0));
         btnCheckStatus = new JButton("Lookup Status");
+        btnCheckStatus.setEnabled(false);
         btnCheckStatus.addActionListener(e -> lookupSelectedTransactionStatus());
         btnViewReceipt = new JButton("View Receipt");
         btnViewReceipt.addActionListener(e -> showSelectedReceipt());
-        tableActions.add(btnCheckStatus);
-        tableActions.add(btnViewReceipt);
+        tableActionButtons.add(btnCheckStatus);
+        tableActionButtons.add(btnViewReceipt);
+        tableActions.add(lblActivityFeedback, BorderLayout.WEST);
+        tableActions.add(tableActionButtons, BorderLayout.EAST);
+        tblTransactions.getSelectionModel().addListSelectionListener(e -> {
+            if (!e.getValueIsAdjusting()) {
+                updateTableActionButtonsState();
+            }
+        });
         readyCard.add(tableActions, BorderLayout.SOUTH);
 
         activityCardPanel.add(loadingCard, DashboardState.LOADING.name());
@@ -421,6 +444,10 @@ public class Main extends JFrame {
         cmbPaymentMethod = new JComboBox<>(new String[]{"Use Selected Channel"});
         cmbCashChannel = new JComboBox<>(new String[]{"GCash", "Maya", "BDO", "BPI", "7-Eleven OTC"});
         cmbProviderMode = new JComboBox<>(new String[]{"SUCCESS", "REJECTED", "FAILED", "TIMEOUT", "PENDING", "UNKNOWN"});
+        BankResponseStatus initialMode = walletService.getCurrentProviderMode();
+        if (initialMode != null) {
+            cmbProviderMode.setSelectedItem(initialMode.name());
+        }
         txtCashAmount = new JTextField(20);
         txtCashNote = new JTextField(20);
         txtCashPin = new JPasswordField(20);
@@ -437,6 +464,9 @@ public class Main extends JFrame {
         addFormRow(form, gbc, 4, "Amount (PHP):", txtCashAmount);
         addFormRow(form, gbc, 5, "Note (Optional):", txtCashNote);
         addFormRow(form, gbc, 6, "Transaction PIN (Cash Out):", txtCashPin);
+
+        cmbPaymentMethod.addActionListener(e ->
+                cmbCashChannel.setEnabled(cmbPaymentMethod.getSelectedIndex() <= 0));
 
         cmbProviderMode.addActionListener(e -> {
             String modeName = (String) cmbProviderMode.getSelectedItem();
@@ -553,6 +583,327 @@ public class Main extends JFrame {
         JPanel panel = new JPanel(new BorderLayout());
         panel.add(new JLabel(text, SwingConstants.CENTER), BorderLayout.CENTER);
         return panel;
+    }
+
+    // ─── CAP-09: Admin Controls Panel ───────────────────────────────────────────
+
+    /**
+     * Builds the Admin Controls tab: user account and wallet overview, suspend/reactivate/role
+     * actions (with mandatory recorded reasons), transaction inspection, and audit log viewer.
+     * Only rendered when the session user has role ADMIN; all DB calls execute off the EDT.
+     */
+    private JPanel buildAdminControlsPanel(WalletService ws) {
+        User admin = SessionManager.getInstance().getCurrentUser();
+        String adminId = admin.getUserId();
+
+        JPanel root = new JPanel(new BorderLayout(8, 8));
+        root.setBorder(BorderFactory.createEmptyBorder(10, 12, 10, 12));
+
+        JLabel title = new JLabel("Admin Controls — Account Management & Audit Log");
+        title.setFont(new Font("SansSerif", Font.BOLD, 14));
+        root.add(title, BorderLayout.NORTH);
+
+        JSplitPane split = new JSplitPane(JSplitPane.VERTICAL_SPLIT);
+        split.setResizeWeight(0.55);
+
+        String[] userCols = {"User ID", "Name", "Mobile", "Role", "Status", "Wallet", "Balance"};
+        DefaultTableModel userModel = new DefaultTableModel(userCols, 0) {
+            @Override public boolean isCellEditable(int r, int c) { return false; }
+        };
+        JTable userTable = new JTable(userModel);
+        userTable.setSelectionMode(ListSelectionModel.SINGLE_SELECTION);
+        userTable.setAutoCreateRowSorter(true);
+
+        JScrollPane userScroll = new JScrollPane(userTable);
+        userScroll.setBorder(BorderFactory.createTitledBorder("Registered Accounts & Wallets"));
+
+        JButton btnSuspend = new JButton("Suspend User");
+        JButton btnReactivate = new JButton("Reactivate User");
+        JButton btnChangeRole = new JButton("Change Role");
+        JButton btnViewUserTxns = new JButton("View User Txns");
+        JButton btnViewAllTxns = new JButton("All System Txns");
+        JButton btnRefreshAll = new JButton("Refresh");
+        btnSuspend.setEnabled(false);
+        btnReactivate.setEnabled(false);
+        btnChangeRole.setEnabled(false);
+        btnViewUserTxns.setEnabled(false);
+
+        userTable.getSelectionModel().addListSelectionListener(e -> {
+            if (!e.getValueIsAdjusting()) {
+                boolean hasSelection = userTable.getSelectedRow() >= 0;
+                btnSuspend.setEnabled(hasSelection);
+                btnReactivate.setEnabled(hasSelection);
+                btnChangeRole.setEnabled(hasSelection);
+                btnViewUserTxns.setEnabled(hasSelection);
+            }
+        });
+
+        JPanel btnPanel = new JPanel(new FlowLayout(FlowLayout.LEFT, 6, 4));
+        btnPanel.add(btnSuspend);
+        btnPanel.add(btnReactivate);
+        btnPanel.add(btnChangeRole);
+        btnPanel.add(btnViewUserTxns);
+        btnPanel.add(btnViewAllTxns);
+        btnPanel.add(btnRefreshAll);
+
+        JPanel usersPanel = new JPanel(new BorderLayout(4, 4));
+        usersPanel.add(userScroll, BorderLayout.CENTER);
+        usersPanel.add(btnPanel, BorderLayout.SOUTH);
+        split.setTopComponent(usersPanel);
+
+        String[] auditCols = {"Action ID", "Type", "Target", "Reason", "Timestamp"};
+        DefaultTableModel auditModel = new DefaultTableModel(auditCols, 0) {
+            @Override public boolean isCellEditable(int r, int c) { return false; }
+        };
+        JTable auditTable = new JTable(auditModel);
+        auditTable.setAutoCreateRowSorter(true);
+
+        JScrollPane auditScroll = new JScrollPane(auditTable);
+        auditScroll.setBorder(BorderFactory.createTitledBorder("Admin Action Audit Log"));
+        split.setBottomComponent(auditScroll);
+
+        root.add(split, BorderLayout.CENTER);
+
+        JLabel statusLbl = new JLabel("Loading admin records...");
+        statusLbl.setFont(new Font("SansSerif", Font.PLAIN, 11));
+        root.add(statusLbl, BorderLayout.SOUTH);
+
+        Runnable reloadAll = () -> {
+            btnRefreshAll.setEnabled(false);
+            statusLbl.setText("Loading admin records...");
+            new SwingWorker<AdminPanelSnapshot, Void>() {
+                @Override
+                protected AdminPanelSnapshot doInBackground() {
+                    lastAdminLoadExecutedOffEdt = !SwingUtilities.isEventDispatchThread();
+                    List<User> users = ws.getAllUsers(adminId);
+                    List<Wallet> wallets = ws.getAllWallets(adminId);
+                    List<AdminAction> actions = ws.getAdminActions(adminId);
+                    Map<String, Wallet> walletsByUser = new HashMap<>();
+                    for (Wallet w : wallets) {
+                        walletsByUser.put(w.getUserId(), w);
+                    }
+                    return new AdminPanelSnapshot(users, walletsByUser, actions);
+                }
+
+                @Override
+                protected void done() {
+                    btnRefreshAll.setEnabled(true);
+                    try {
+                        AdminPanelSnapshot snap = get();
+                        userModel.setRowCount(0);
+                        for (User u : snap.users) {
+                            Wallet w = snap.walletsByUser.get(u.getUserId());
+                            userModel.addRow(new Object[]{
+                                    u.getUserId(),
+                                    u.getName(),
+                                    u.getMobileNumber(),
+                                    u.getRole(),
+                                    u.getStatus(),
+                                    w != null ? w.getWalletId() + " (" + w.getStatus() + ")" : "--",
+                                    w != null ? MoneyUtil.format(w.getBalance(), w.getCurrency()) : "--"
+                            });
+                        }
+                        auditModel.setRowCount(0);
+                        for (AdminAction a : snap.actions) {
+                            auditModel.addRow(new Object[]{
+                                    a.getActionId(),
+                                    a.getActionType(),
+                                    a.getTargetUserId(),
+                                    a.getReason(),
+                                    a.getCreatedAt()
+                            });
+                        }
+                        statusLbl.setText("Last refreshed: " + java.time.LocalDateTime.now()
+                                .format(java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss")));
+                    } catch (Exception ex) {
+                        Throwable cause = unwrapCause(ex);
+                        statusLbl.setText("Error loading admin data: " + cause.getMessage());
+                    }
+                }
+            }.execute();
+        };
+
+        reloadAll.run();
+
+        btnSuspend.addActionListener(e -> executeAdminStatusAction(
+                ws, adminId, userTable, userModel, statusLbl, reloadAll, true));
+
+        btnReactivate.addActionListener(e -> executeAdminStatusAction(
+                ws, adminId, userTable, userModel, statusLbl, reloadAll, false));
+
+        btnChangeRole.addActionListener(e -> {
+            int row = userTable.getSelectedRow();
+            if (row < 0) return;
+            int modelRow = userTable.convertRowIndexToModel(row);
+            String targetId = (String) userModel.getValueAt(modelRow, 0);
+            String targetName = (String) userModel.getValueAt(modelRow, 1);
+            UserRole currentRole = (UserRole) userModel.getValueAt(modelRow, 3);
+
+            UserRole selectedRole = (UserRole) JOptionPane.showInputDialog(
+                    root,
+                    "Select new role for " + targetName + " (" + targetId + "):",
+                    "Change User Role",
+                    JOptionPane.QUESTION_MESSAGE,
+                    null,
+                    UserRole.values(),
+                    currentRole
+            );
+            if (selectedRole == null) return;
+            String reason = promptMandatoryAdminReason(root,
+                    "Enter reason for changing role of " + targetName + " to " + selectedRole + ":",
+                    "Change User Role");
+            if (reason == null) return;
+
+            statusLbl.setText("Updating role for " + targetId + "...");
+            new SwingWorker<Void, Void>() {
+                @Override
+                protected Void doInBackground() {
+                    ws.getAdminService().changeUserRole(adminId, targetId, selectedRole, reason);
+                    return null;
+                }
+
+                @Override
+                protected void done() {
+                    try {
+                        get();
+                        JOptionPane.showMessageDialog(root, "Role updated to " + selectedRole + ".",
+                                "Done", JOptionPane.INFORMATION_MESSAGE);
+                    } catch (Exception ex) {
+                        Throwable cause = unwrapCause(ex);
+                        JOptionPane.showMessageDialog(root, "Error: " + cause.getMessage(),
+                                "Role Update Failed", JOptionPane.ERROR_MESSAGE);
+                    } finally {
+                        reloadAll.run();
+                    }
+                }
+            }.execute();
+        });
+
+        btnViewUserTxns.addActionListener(e -> {
+            int row = userTable.getSelectedRow();
+            if (row < 0) return;
+            int modelRow = userTable.convertRowIndexToModel(row);
+            String targetId = (String) userModel.getValueAt(modelRow, 0);
+            String targetName = (String) userModel.getValueAt(modelRow, 1);
+            loadAndShowAdminTransactions(ws, adminId, targetId,
+                    "Transactions — " + targetName + " (" + targetId + ")", root, statusLbl, reloadAll);
+        });
+
+        btnViewAllTxns.addActionListener(e ->
+                loadAndShowAdminTransactions(ws, adminId, null,
+                        "All System Transactions", root, statusLbl, reloadAll));
+
+        btnRefreshAll.addActionListener(e -> reloadAll.run());
+
+        return root;
+    }
+
+    private void executeAdminStatusAction(WalletService ws, String adminId, JTable userTable,
+                                          DefaultTableModel userModel, JLabel statusLbl,
+                                          Runnable reloadAll, boolean suspend) {
+        int row = userTable.getSelectedRow();
+        if (row < 0) return;
+        int modelRow = userTable.convertRowIndexToModel(row);
+        String targetId = (String) userModel.getValueAt(modelRow, 0);
+        String targetName = (String) userModel.getValueAt(modelRow, 1);
+
+        String verb = suspend ? "suspending" : "reactivating";
+        String dialogTitle = suspend ? "Suspend Account" : "Reactivate Account";
+        String reason = promptMandatoryAdminReason(userTable,
+                "Enter reason for " + verb + " " + targetName + " (" + targetId + "):",
+                dialogTitle);
+        if (reason == null) return;
+
+        statusLbl.setText((suspend ? "Suspending " : "Reactivating ") + targetId + "...");
+        new SwingWorker<Void, Void>() {
+            @Override
+            protected Void doInBackground() {
+                if (suspend) {
+                    ws.suspendUser(adminId, targetId, reason);
+                } else {
+                    ws.reactivateUser(adminId, targetId, reason);
+                }
+                return null;
+            }
+
+            @Override
+            protected void done() {
+                try {
+                    get();
+                    JOptionPane.showMessageDialog(userTable,
+                            suspend ? "Account suspended." : "Account reactivated.",
+                            "Done", JOptionPane.INFORMATION_MESSAGE);
+                } catch (Exception ex) {
+                    Throwable cause = unwrapCause(ex);
+                    JOptionPane.showMessageDialog(userTable, "Error: " + cause.getMessage(),
+                            suspend ? "Suspend Failed" : "Reactivate Failed", JOptionPane.ERROR_MESSAGE);
+                } finally {
+                    reloadAll.run();
+                }
+            }
+        }.execute();
+    }
+
+    private String promptMandatoryAdminReason(Component parent, String message, String title) {
+        String reason = JOptionPane.showInputDialog(parent, message, title, JOptionPane.QUESTION_MESSAGE);
+        if (reason == null) {
+            return null;
+        }
+        String trimmed = reason.trim();
+        if (trimmed.isEmpty()) {
+            JOptionPane.showMessageDialog(parent, "A reason is required.", "Validation Error", JOptionPane.ERROR_MESSAGE);
+            return null;
+        }
+        return trimmed;
+    }
+
+    private void loadAndShowAdminTransactions(WalletService ws, String adminId, String targetUserId,
+                                              String dialogTitle, Component parent,
+                                              JLabel statusLbl, Runnable reloadAll) {
+        statusLbl.setText("Loading transactions...");
+        new SwingWorker<List<Transaction>, Void>() {
+            @Override
+            protected List<Transaction> doInBackground() {
+                return targetUserId != null
+                        ? ws.getUserTransactions(adminId, targetUserId)
+                        : ws.getAllTransactions(adminId);
+            }
+
+            @Override
+            protected void done() {
+                try {
+                    List<Transaction> txns = get();
+                    String[] cols = {"Date", "Ref #", "Type", "Source", "Target", "Amount", "Fee", "Status", "Description"};
+                    DefaultTableModel model = new DefaultTableModel(cols, 0) {
+                        @Override public boolean isCellEditable(int r, int c) { return false; }
+                    };
+                    for (Transaction t : txns) {
+                        model.addRow(new Object[]{
+                                t.getCreatedAt() != null ? t.getCreatedAt().format(DATE_FORMATTER) : "-",
+                                t.getReferenceNumber(),
+                                t.getType(),
+                                t.getSourceWalletId() != null ? t.getSourceWalletId() : "-",
+                                t.getTargetWalletId() != null ? t.getTargetWalletId() : "-",
+                                MoneyUtil.format(t.getAmount(), t.getCurrency()),
+                                MoneyUtil.format(t.getFee(), t.getCurrency()),
+                                t.getStatus(),
+                                t.getDescription() != null ? t.getDescription() : ""
+                        });
+                    }
+                    JTable table = new JTable(model);
+                    table.setAutoCreateRowSorter(true);
+                    JScrollPane scroll = new JScrollPane(table);
+                    scroll.setPreferredSize(new Dimension(760, 320));
+                    JOptionPane.showMessageDialog(parent, scroll, dialogTitle, JOptionPane.INFORMATION_MESSAGE);
+                    reloadAll.run();
+                } catch (Exception ex) {
+                    Throwable cause = unwrapCause(ex);
+                    statusLbl.setText("Error loading transactions: " + cause.getMessage());
+                    JOptionPane.showMessageDialog(parent, "Error: " + cause.getMessage(),
+                            "Transaction Inspection Failed", JOptionPane.ERROR_MESSAGE);
+                }
+            }
+        }.execute();
     }
 
     private JPanel buildFooterPanel() {
@@ -768,10 +1119,14 @@ public class Main extends JFrame {
                 String pmId = (paymentMethodId != null && !paymentMethodId.trim().isEmpty()) ? paymentMethodId.trim() : null;
 
                 if ("CASH_IN".equals(op)) {
-                    String desc = cleanNote != null ? cleanChannel + " - " + cleanNote : null;
+                    String desc = pmId == null
+                            ? (cleanNote != null ? cleanChannel + " - " + cleanNote : "Cash In via " + cleanChannel)
+                            : cleanNote;
                     return walletService.cashIn(ref, wallet.getWalletId(), pmId, amount, desc);
                 } else if ("CASH_OUT".equals(op)) {
-                    String desc = cleanNote != null ? cleanChannel + " - " + cleanNote : null;
+                    String desc = pmId == null
+                            ? (cleanNote != null ? cleanChannel + " - " + cleanNote : "Cash Out to " + cleanChannel)
+                            : cleanNote;
                     String cleanPin = rawPin != null ? rawPin.trim() : "";
                     if (!cleanPin.isEmpty()) {
                         if (authService != null && user != null) {
@@ -850,33 +1205,47 @@ public class Main extends JFrame {
 
             @Override
             protected void done() {
-                if (btnCheckStatus != null) {
-                    btnCheckStatus.setEnabled(true);
-                }
+                updateTableActionButtonsState();
                 try {
                     Transaction txn = get();
                     String provRef = txn.getProviderReference() != null ? " | Bank Ref: " + txn.getProviderReference() : "";
                     String provStatus = txn.getProviderStatus() != null ? " [" + txn.getProviderStatus() + "]" : "";
+                    Color color;
+                    String msg;
                     if (txn.getStatus() == TransactionStatus.COMPLETED) {
-                        lblCashFeedback.setForeground(new Color(17, 102, 68));
-                        lblCashFeedback.setText("Status lookup settled COMPLETED: "
-                                + txn.getReferenceNumber() + provRef + provStatus);
+                        color = new Color(17, 102, 68);
+                        msg = "Status lookup settled COMPLETED: "
+                                + txn.getReferenceNumber() + provRef + provStatus;
                     } else if (txn.getStatus() == TransactionStatus.FAILED) {
-                        lblCashFeedback.setForeground(new Color(176, 38, 38));
-                        lblCashFeedback.setText("Status lookup confirmed FAILED: "
-                                + txn.getReferenceNumber() + provRef + provStatus);
+                        color = new Color(176, 38, 38);
+                        msg = "Status lookup confirmed FAILED: "
+                                + txn.getReferenceNumber() + provRef + provStatus;
                     } else {
-                        lblCashFeedback.setForeground(new Color(180, 95, 10));
-                        lblCashFeedback.setText("Status lookup remains PENDING: "
-                                + txn.getReferenceNumber() + provRef + provStatus);
+                        color = new Color(180, 95, 10);
+                        msg = "Status lookup remains PENDING: "
+                                + txn.getReferenceNumber() + provRef + provStatus;
                     }
-                    lblStatus.setText("Status sync: " + txn.getStatus() + provStatus);
-                    refreshDashboardAsync().whenComplete((v, err) -> future.complete(txn));
+                    lblCashFeedback.setForeground(color);
+                    lblCashFeedback.setText(msg);
+                    if (lblActivityFeedback != null) {
+                        lblActivityFeedback.setForeground(color);
+                        lblActivityFeedback.setText(msg);
+                    }
+                    String syncStatusText = "Status sync: " + txn.getStatus() + provStatus;
+                    lblStatus.setText(syncStatusText);
+                    refreshDashboardAsync().whenComplete((v, err) -> {
+                        runOnEdt(() -> lblStatus.setText(syncStatusText));
+                        future.complete(txn);
+                    });
                 } catch (Exception ex) {
                     Throwable cause = unwrapCause(ex);
                     String message = (cause.getMessage() != null && !cause.getMessage().trim().isEmpty())
                             ? cause.getMessage()
                             : cause.getClass().getSimpleName();
+                    if (lblActivityFeedback != null) {
+                        lblActivityFeedback.setForeground(new Color(176, 38, 38));
+                        lblActivityFeedback.setText("Status lookup failed: " + message);
+                    }
                     lblStatus.setText("Status lookup failed: " + message);
                     future.completeExceptionally(cause);
                 }
@@ -1193,6 +1562,9 @@ public class Main extends JFrame {
             }
         }
         cmbPaymentMethod.setSelectedIndex(prevIndex >= 0 ? prevIndex : defaultIndex);
+        if (cmbCashChannel != null) {
+            cmbCashChannel.setEnabled(cmbPaymentMethod.getSelectedIndex() <= 0);
+        }
     }
 
     public String getSelectedPaymentMethodId() {
@@ -1236,6 +1608,17 @@ public class Main extends JFrame {
                     txn.getDescription() != null ? txn.getDescription() : ""
             });
         }
+        updateTableActionButtonsState();
+    }
+
+    private void updateTableActionButtonsState() {
+        if (btnCheckStatus == null) {
+            return;
+        }
+        Transaction selected = getSelectedTransactionForReceipt();
+        boolean isCashTxn = selected != null
+                && (selected.getType() == TransactionType.CASH_IN || selected.getType() == TransactionType.CASH_OUT);
+        btnCheckStatus.setEnabled(isCashTxn);
     }
 
     private static Map<TransactionType, String> createDirectionMap() {
@@ -1287,6 +1670,15 @@ public class Main extends JFrame {
                     "Please select a transaction row to check its bank status.",
                     "No Transaction Selected",
                     JOptionPane.INFORMATION_MESSAGE);
+            return;
+        }
+        if (txn.getType() != TransactionType.CASH_IN && txn.getType() != TransactionType.CASH_OUT) {
+            String msg = "Status lookup is only available for Cash In / Cash Out transactions.";
+            if (lblActivityFeedback != null) {
+                lblActivityFeedback.setForeground(new Color(180, 95, 10));
+                lblActivityFeedback.setText(msg);
+            }
+            lblStatus.setText(msg);
             return;
         }
         submitStatusLookupAsync(txn.getReferenceNumber());
@@ -1451,6 +1843,10 @@ public class Main extends JFrame {
         return lblCashFeedback;
     }
 
+    public JLabel getActivityFeedbackLabel() {
+        return lblActivityFeedback;
+    }
+
     public JLabel getSendFeedbackLabel() {
         return lblSendFeedback;
     }
@@ -1469,6 +1865,10 @@ public class Main extends JFrame {
 
     public boolean isLastPaymentExecutedOffEdt() {
         return lastPaymentExecutedOffEdt;
+    }
+
+    public boolean isLastAdminLoadExecutedOffEdt() {
+        return lastAdminLoadExecutedOffEdt;
     }
 
     public JButton getCashInQuickNavButton() {
@@ -1537,6 +1937,18 @@ public class Main extends JFrame {
             this.transactions = transactions;
             this.paymentMethods = paymentMethods;
             this.hasPin = hasPin;
+        }
+    }
+
+    private static final class AdminPanelSnapshot {
+        private final List<User> users;
+        private final Map<String, Wallet> walletsByUser;
+        private final List<AdminAction> actions;
+
+        private AdminPanelSnapshot(List<User> users, Map<String, Wallet> walletsByUser, List<AdminAction> actions) {
+            this.users = users;
+            this.walletsByUser = walletsByUser;
+            this.actions = actions;
         }
     }
 }

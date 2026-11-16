@@ -2,6 +2,8 @@
 setlocal EnableDelayedExpansion
 pushd "%~dp0"
 
+if exist "C:\Program Files\Java\jdk-19\bin" set "PATH=C:\Program Files\Java\jdk-19\bin;%PATH%"
+
 echo Building OTOG E-Wallet...
 if not exist "out\production\OTOG" mkdir "out\production\OTOG"
 

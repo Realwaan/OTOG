@@ -32,6 +32,8 @@ public class WalletService implements WalletOperations {
     private final AuthService authService;
     private final boolean requirePinAuthorization;
     private BankApiClient bankApiClient;
+    private final AdminActionRepository adminActionRepository;
+    private final AdminService adminService;
 
     public WalletService(DatabaseManager databaseManager) {
         this(databaseManager,
@@ -102,6 +104,18 @@ public class WalletService implements WalletOperations {
         this.authService = authService;
         this.requirePinAuthorization = requirePinAuthorization;
         this.bankApiClient = new BankApiClient();
+        this.adminActionRepository = new AdminActionRepository(databaseManager);
+        this.adminService = new AdminServiceImpl(databaseManager, this.userRepository,
+                this.walletRepository, this.transactionRepository, this.adminActionRepository,
+                new CredentialRepository(databaseManager));
+    }
+
+    public AdminService getAdminService() {
+        return adminService;
+    }
+
+    public AdminActionRepository getAdminActionRepository() {
+        return adminActionRepository;
     }
 
     public BankApiClient getBankApiClient() {
@@ -116,6 +130,14 @@ public class WalletService implements WalletOperations {
         this.bankApiClient = factory != null ? factory.createBankApiClient() : new BankApiClient();
     }
 
+    @Override
+    public BankResponseStatus getCurrentProviderMode() {
+        if (bankApiClient != null && bankApiClient.getAdapter() instanceof MockBankAdapter mock) {
+            return mock.getMode();
+        }
+        return BankResponseStatus.SUCCESS;
+    }
+
     public PaymentMethod linkPaymentMethod(PaymentMethod paymentMethod) {
         if (paymentMethod == null) {
             throw new IllegalArgumentException("Payment method cannot be null");
@@ -128,8 +150,9 @@ public class WalletService implements WalletOperations {
 
     public PaymentMethod linkPaymentMethod(String userId, PaymentMethodType type, String providerName,
                                            String accountName, String accountNumber) {
-        if (userId == null || providerName == null) {
-            throw new IllegalArgumentException("User ID and provider name cannot be null");
+        if (userId == null || userId.trim().isEmpty() || type == null
+                || providerName == null || providerName.trim().isEmpty()) {
+            throw new IllegalArgumentException("User ID, payment method type, and provider name cannot be null or empty");
         }
         String pmId = IdGenerator.nextPaymentMethodId();
         PaymentMethod pm = new PaymentMethod(pmId, userId, type, providerName, accountName, accountNumber);
@@ -141,6 +164,10 @@ public class WalletService implements WalletOperations {
     }
 
     public List<PaymentMethod> seedDemoBankAccountsForUser(String userId) {
+        List<PaymentMethod> existing = paymentMethodRepository.findByUserId(userId);
+        if (!existing.isEmpty()) {
+            return existing;
+        }
         List<PaymentMethod> list = new ArrayList<>();
         list.add(linkPaymentMethod(userId, PaymentMethodType.BANK_ACCOUNT, "BDO Unibank", "Demo BDO Account", "•••• 1234"));
         list.add(linkPaymentMethod(userId, PaymentMethodType.BANK_ACCOUNT, "Bank of the Philippine Islands (BPI)", "Demo BPI Account", "•••• 5678"));
@@ -368,6 +395,7 @@ public class WalletService implements WalletOperations {
 
                     Wallet sourceWallet = walletRepository.findById(sourceWalletId, conn)
                             .orElseThrow(() -> new EntityNotFoundException("Source wallet", sourceWalletId));
+                    validateAccountNotSuspended(sourceWallet.getUserId(), conn);
                     authorizeOutgoingPayment(sourceWallet.getUserId());
                     Wallet targetWallet = walletRepository.findById(targetWalletId, conn)
                             .orElseThrow(() -> new EntityNotFoundException("Target wallet", targetWalletId));
@@ -385,10 +413,8 @@ public class WalletService implements WalletOperations {
                         throw new InsufficientFundsException(sourceWalletId, sourceBalance, totalDebit);
                     }
 
-                    String txnId = IdGenerator.nextTransactionId();
                     String txnDesc = description != null ? description : "Transfer to wallet " + targetWalletId;
-                    SendMoneyTransaction txn = new SendMoneyTransaction(
-                            txnId,
+                    SendMoneyTransaction txn = TransactionFactory.createSendMoney(
                             referenceNumber,
                             sourceWalletId,
                             targetWalletId,
@@ -407,7 +433,7 @@ public class WalletService implements WalletOperations {
 
                     LedgerEntry debitEntry = new LedgerEntry(
                             IdGenerator.nextLedgerEntryId(),
-                            txnId,
+                            txn.getTransactionId(),
                             sourceWalletId,
                             LedgerEntryType.DEBIT,
                             totalDebit,
@@ -426,7 +452,7 @@ public class WalletService implements WalletOperations {
 
                     LedgerEntry creditEntry = new LedgerEntry(
                             IdGenerator.nextLedgerEntryId(),
-                            txnId,
+                            txn.getTransactionId(),
                             targetWalletId,
                             LedgerEntryType.CREDIT,
                             validAmount,
@@ -454,6 +480,9 @@ public class WalletService implements WalletOperations {
     public Transaction cashIn(String referenceNumber, String targetWalletId, String paymentMethodId,
                               BigDecimal amount, String description) {
         validateReferenceNumber(referenceNumber);
+        if (targetWalletId == null || targetWalletId.trim().isEmpty()) {
+            throw new IllegalArgumentException("Target wallet ID must not be null or empty");
+        }
         BigDecimal validAmount = MoneyUtil.validatePositiveAmount(amount);
 
         ReentrantLock lock = getLock(targetWalletId);
@@ -467,12 +496,15 @@ public class WalletService implements WalletOperations {
 
                 Wallet wallet = walletRepository.findById(targetWalletId, conn)
                         .orElseThrow(() -> new EntityNotFoundException("Wallet", targetWalletId));
+                validateAccountNotSuspended(wallet.getUserId(), conn);
 
                 if (wallet.getStatus() != WalletStatus.ACTIVE) {
                     throw new WalletException("Wallet is not active: " + wallet.getStatus());
                 }
 
                 PaymentMethod pm = null;
+                PaymentMethod bankPm = null;
+                String channel;
                 if (paymentMethodId != null) {
                     pm = paymentMethodRepository.findById(paymentMethodId, conn)
                             .orElseThrow(() -> new EntityNotFoundException("PaymentMethod", paymentMethodId));
@@ -482,18 +514,28 @@ public class WalletService implements WalletOperations {
                     if (pm.getStatus() != PaymentMethodStatus.ACTIVE) {
                         throw new WalletException("Payment method is not active: " + pm.getStatus());
                     }
+                    channel = (pm.getProviderName() != null) ? pm.getProviderName() : "Bank";
+                    bankPm = pm;
                 } else {
-                    pm = paymentMethodRepository.findDefaultByUserId(wallet.getUserId(), conn).orElse(null);
-                    if (pm != null && pm.getStatus() != PaymentMethodStatus.ACTIVE) {
-                        pm = null;
+                    String explicitChannel = resolveChannelFromDescription(description, "Cash In via ");
+                    if (explicitChannel != null) {
+                        channel = explicitChannel;
+                        bankPm = new PaymentMethod(null, wallet.getUserId(), PaymentMethodType.BANK_ACCOUNT,
+                                channel, wallet.getUserId(), "N/A");
+                    } else {
+                        pm = paymentMethodRepository.findDefaultByUserId(wallet.getUserId(), conn).orElse(null);
+                        if (pm != null && pm.getStatus() != PaymentMethodStatus.ACTIVE) {
+                            pm = null;
+                        }
+                        channel = (pm != null && pm.getProviderName() != null) ? pm.getProviderName() : "Bank";
+                        bankPm = pm;
                     }
                 }
 
-                String channel = (pm != null && pm.getProviderName() != null) ? pm.getProviderName() : "Bank";
                 String txnId = IdGenerator.nextTransactionId();
                 String desc = description != null ? description : "Cash In via " + channel;
 
-                BankApiResponse response = bankApiClient.cashIn(referenceNumber, pm, validAmount);
+                BankApiResponse response = bankApiClient.cashIn(referenceNumber, bankPm, validAmount);
 
                 CashInOutTransaction txn = new CashInOutTransaction(
                         txnId,
@@ -559,6 +601,9 @@ public class WalletService implements WalletOperations {
     public Transaction cashOut(String referenceNumber, String sourceWalletId, String paymentMethodId,
                                BigDecimal amount, BigDecimal fee, String description) {
         validateReferenceNumber(referenceNumber);
+        if (sourceWalletId == null || sourceWalletId.trim().isEmpty()) {
+            throw new IllegalArgumentException("Source wallet ID must not be null or empty");
+        }
         BigDecimal validAmount = MoneyUtil.validatePositiveAmount(amount);
         BigDecimal validFee = fee != null ? MoneyUtil.validateNonNegativeAmount(fee) : MoneyUtil.ZERO;
         BigDecimal totalDebit = validAmount.add(validFee).setScale(MoneyUtil.DEFAULT_SCALE, MoneyUtil.DEFAULT_ROUNDING);
@@ -578,6 +623,7 @@ public class WalletService implements WalletOperations {
 
                 Wallet wallet = walletRepository.findById(sourceWalletId, conn)
                         .orElseThrow(() -> new EntityNotFoundException("Wallet", sourceWalletId));
+                validateAccountNotSuspended(wallet.getUserId(), conn);
                 authorizeOutgoingPayment(wallet.getUserId());
 
                 if (wallet.getStatus() != WalletStatus.ACTIVE) {
@@ -590,6 +636,8 @@ public class WalletService implements WalletOperations {
                 }
 
                 PaymentMethod pm = null;
+                PaymentMethod bankPm = null;
+                String channel;
                 if (paymentMethodId != null) {
                     pm = paymentMethodRepository.findById(paymentMethodId, conn)
                             .orElseThrow(() -> new EntityNotFoundException("PaymentMethod", paymentMethodId));
@@ -599,14 +647,24 @@ public class WalletService implements WalletOperations {
                     if (pm.getStatus() != PaymentMethodStatus.ACTIVE) {
                         throw new WalletException("Payment method is not active: " + pm.getStatus());
                     }
+                    channel = (pm.getProviderName() != null) ? pm.getProviderName() : "Bank";
+                    bankPm = pm;
                 } else {
-                    pm = paymentMethodRepository.findDefaultByUserId(wallet.getUserId(), conn).orElse(null);
-                    if (pm != null && pm.getStatus() != PaymentMethodStatus.ACTIVE) {
-                        pm = null;
+                    String explicitChannel = resolveChannelFromDescription(description, "Cash Out to ");
+                    if (explicitChannel != null) {
+                        channel = explicitChannel;
+                        bankPm = new PaymentMethod(null, wallet.getUserId(), PaymentMethodType.BANK_ACCOUNT,
+                                channel, wallet.getUserId(), "N/A");
+                    } else {
+                        pm = paymentMethodRepository.findDefaultByUserId(wallet.getUserId(), conn).orElse(null);
+                        if (pm != null && pm.getStatus() != PaymentMethodStatus.ACTIVE) {
+                            pm = null;
+                        }
+                        channel = (pm != null && pm.getProviderName() != null) ? pm.getProviderName() : "Bank";
+                        bankPm = pm;
                     }
                 }
 
-                String channel = (pm != null && pm.getProviderName() != null) ? pm.getProviderName() : "Bank";
                 String txnId = IdGenerator.nextTransactionId();
                 String desc = description != null ? description : "Cash Out to " + channel;
 
@@ -644,7 +702,7 @@ public class WalletService implements WalletOperations {
                 );
                 ledgerRepository.save(debitEntry, conn);
 
-                BankApiResponse response = bankApiClient.cashOut(referenceNumber, pm, validAmount);
+                BankApiResponse response = bankApiClient.cashOut(referenceNumber, bankPm, validAmount);
 
                 if (response != null) {
                     txn.setProviderReference(response.getProviderReference());
@@ -726,6 +784,11 @@ public class WalletService implements WalletOperations {
 
         Transaction existingTxn = transactionRepository.findByReferenceNumber(referenceNumber)
                 .orElseThrow(() -> new EntityNotFoundException("Transaction with reference", referenceNumber));
+
+        if (existingTxn.getType() != TransactionType.CASH_IN && existingTxn.getType() != TransactionType.CASH_OUT) {
+            throw new WalletException("Bank status lookup is only supported for CASH_IN and CASH_OUT transactions: "
+                    + existingTxn.getType());
+        }
 
         // Repeated provider responses never duplicate money movement
         if (existingTxn.getStatus() == TransactionStatus.COMPLETED || existingTxn.getStatus() == TransactionStatus.FAILED) {
@@ -900,12 +963,107 @@ public class WalletService implements WalletOperations {
         }
     }
 
+    private void validateAccountNotSuspended(String userId, Connection conn) throws java.sql.SQLException {
+        if (userId == null) {
+            return;
+        }
+        User user = userRepository.findById(userId, conn)
+                .orElseThrow(() -> new EntityNotFoundException("User", userId));
+        if (user.getStatus() == UserStatus.SUSPENDED) {
+            throw new WalletException("Suspended accounts cannot initiate payments: User " + userId + " is suspended.");
+        }
+        if (user.getStatus() == UserStatus.LOCKED) {
+            throw new WalletException("Account is locked: User " + userId + " is locked.");
+        }
+        if (user.getStatus() != UserStatus.ACTIVE) {
+            throw new WalletException("Account is not active: User " + userId + " status is " + user.getStatus());
+        }
+    }
+
     private void authorizeOutgoingPayment(String walletOwnerUserId) {
+        if (walletOwnerUserId != null) {
+            userRepository.findById(walletOwnerUserId).ifPresent(user -> {
+                if (user.getStatus() == UserStatus.SUSPENDED) {
+                    throw new WalletException("Suspended accounts cannot initiate payments: User " + user.getUserId() + " is suspended.");
+                }
+                if (user.getStatus() != UserStatus.ACTIVE) {
+                    throw new WalletException("Account is not active: User " + user.getUserId() + " status is " + user.getStatus());
+                }
+            });
+        }
         SessionManager session = SessionManager.getInstance();
         if (requirePinAuthorization || session.isLoggedIn()
                 || session.isExpiredDueToInactivity() || session.isLockedOutByPin()) {
             session.requirePinAuthorization(walletOwnerUserId);
         }
+    }
+
+    public void suspendUser(String adminUserId, String targetUserId, String reason) {
+        adminService.suspendUser(adminUserId, targetUserId, reason);
+    }
+
+    public void reactivateUser(String adminUserId, String targetUserId, String reason) {
+        adminService.reactivateUser(adminUserId, targetUserId, reason);
+    }
+
+    public List<User> getAllUsers(String requesterUserId) {
+        return adminService.getAllUsers(requesterUserId);
+    }
+
+    public List<Wallet> getAllWallets(String requesterUserId) {
+        return adminService.getAllWallets(requesterUserId);
+    }
+
+    public List<Transaction> getAllTransactions(String requesterUserId) {
+        return adminService.getAllTransactions(requesterUserId);
+    }
+
+    public List<Transaction> getUserTransactions(String requesterUserId, String targetUserId) {
+        return adminService.getUserTransactions(requesterUserId, targetUserId);
+    }
+
+    public List<Transaction> getTransactionHistory(String requesterUserId, String walletId) {
+        SessionManager session = SessionManager.getInstance();
+        session.requireAuthentication();
+
+        if (requesterUserId != null && !requesterUserId.trim().isEmpty()) {
+            session.requireActiveSessionFor(requesterUserId.trim());
+        }
+
+        User sessionUser = session.getCurrentUser();
+        User requester = userRepository.findById(sessionUser.getUserId())
+                .orElseThrow(() -> new SecurityException("Access denied: Unknown user " + sessionUser.getUserId()));
+        if (requester.getStatus() != UserStatus.ACTIVE) {
+            throw new SecurityException("Access denied: Requester account is " + requester.getStatus() + ".");
+        }
+        if (walletId == null || walletId.trim().isEmpty()) {
+            throw new IllegalArgumentException("Wallet ID must not be null or empty");
+        }
+        Wallet wallet = getWallet(walletId.trim());
+        if (requester.getRole() != UserRole.ADMIN && !wallet.getUserId().equals(requester.getUserId())) {
+            throw new SecurityException("Access denied: Ordinary users cannot inspect another user's transaction history.");
+        }
+        List<Transaction> txns = transactionRepository.findByWalletId(wallet.getWalletId());
+        if (requester.getRole() == UserRole.ADMIN && !wallet.getUserId().equals(requester.getUserId())) {
+            AdminAction action = new AdminAction(
+                    IdGenerator.nextAdminActionId(),
+                    requester.getUserId(),
+                    "INSPECT_USER_HISTORY",
+                    wallet.getUserId(),
+                    "Administrative inspection",
+                    "Inspected transaction history of wallet " + wallet.getWalletId()
+            );
+            adminActionRepository.save(action);
+        }
+        return txns;
+    }
+
+    public List<AdminAction> getAdminActions(String requesterUserId) {
+        return adminService.getAdminActions(requesterUserId);
+    }
+
+    public void directSetBalance(String requesterUserId, String walletId, BigDecimal newBalance) {
+        adminService.directSetBalance(requesterUserId, walletId, newBalance);
     }
 
     /**
@@ -925,6 +1083,25 @@ public class WalletService implements WalletOperations {
         txn.setDescription(desc);
         txn.execute();
         return txn;
+    }
+
+    private String resolveChannelFromDescription(String description, String prefix) {
+        if (description == null || description.trim().isEmpty()) {
+            return null;
+        }
+        String trimmed = description.trim();
+        if (trimmed.startsWith(prefix)) {
+            String rest = trimmed.substring(prefix.length()).trim();
+            int dashIdx = rest.indexOf(" - ");
+            String candidate = dashIdx >= 0 ? rest.substring(0, dashIdx).trim() : rest;
+            return candidate.isEmpty() ? null : candidate;
+        }
+        int dashIdx = trimmed.indexOf(" - ");
+        if (dashIdx > 0) {
+            String candidate = trimmed.substring(0, dashIdx).trim();
+            return candidate.isEmpty() ? null : candidate;
+        }
+        return null;
     }
 
     private void validateReferenceNumber(String ref) {

@@ -161,7 +161,19 @@ public class DatabaseManager implements AutoCloseable {
                         "pin_failed_attempts INTEGER NOT NULL DEFAULT 0, " +
                         "updated_at TEXT NOT NULL, " +
                         "FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE CASCADE);",
-                "CREATE INDEX IF NOT EXISTS idx_cred_user ON credentials(user_id);"
+                "CREATE INDEX IF NOT EXISTS idx_cred_user ON credentials(user_id);",
+
+                "CREATE TABLE IF NOT EXISTS admin_actions (" +
+                        "action_id TEXT PRIMARY KEY, " +
+                        "admin_user_id TEXT NOT NULL, " +
+                        "action_type TEXT NOT NULL, " +
+                        "target_user_id TEXT, " +
+                        "reason TEXT, " +
+                        "details TEXT, " +
+                        "created_at TEXT NOT NULL, " +
+                        "FOREIGN KEY (admin_user_id) REFERENCES users(user_id) ON DELETE RESTRICT);",
+                "CREATE INDEX IF NOT EXISTS idx_admin_act_admin ON admin_actions(admin_user_id);",
+                "CREATE INDEX IF NOT EXISTS idx_admin_act_target ON admin_actions(target_user_id);"
         };
 
         try (Connection conn = getConnection();
@@ -259,6 +271,43 @@ public class DatabaseManager implements AutoCloseable {
         } catch (SQLException e) {
             // Seed failure should not crash if already populated concurrently
         }
+
+        // Backfill demo bank methods for any pre-existing users lacking payment methods
+        String missingUsersSql = "SELECT u.user_id, u.name FROM users u " +
+                "WHERE NOT EXISTS (SELECT 1 FROM payment_methods pm WHERE pm.user_id = u.user_id)";
+        String insertSql = "INSERT INTO payment_methods (payment_method_id, user_id, type, provider_name, " +
+                "account_name, account_number, is_default, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)";
+        try (Statement stmt = conn.createStatement();
+             ResultSet rs = stmt.executeQuery(missingUsersSql);
+             java.sql.PreparedStatement ps = conn.prepareStatement(insertSql)) {
+            String now = java.time.LocalDateTime.now().toString();
+            while (rs.next()) {
+                String uid = rs.getString("user_id");
+                String uname = rs.getString("name");
+                String displayName = (uname != null && !uname.trim().isEmpty()) ? uname.trim() : "Demo User";
+
+                Object[][] demos = {
+                        {com.otog.util.IdGenerator.nextPaymentMethodId(), "BDO Unibank", displayName + " BDO Demo", "•••• 1234", 1},
+                        {com.otog.util.IdGenerator.nextPaymentMethodId(), "Bank of the Philippine Islands (BPI)", displayName + " BPI Demo", "•••• 5678", 0},
+                        {com.otog.util.IdGenerator.nextPaymentMethodId(), "Metrobank", displayName + " Metrobank Demo", "•••• 9012", 0}
+                };
+                for (Object[] row : demos) {
+                    ps.setString(1, (String) row[0]);
+                    ps.setString(2, uid);
+                    ps.setString(3, "BANK_ACCOUNT");
+                    ps.setString(4, (String) row[1]);
+                    ps.setString(5, (String) row[2]);
+                    ps.setString(6, (String) row[3]);
+                    ps.setInt(7, (Integer) row[4]);
+                    ps.setString(8, "ACTIVE");
+                    ps.setString(9, now);
+                    ps.addBatch();
+                }
+            }
+            ps.executeBatch();
+        } catch (SQLException e) {
+            // Seed failure should not crash if already populated concurrently
+        }
     }
 
     private void seedDefaultAdmin(Connection conn) {
@@ -268,14 +317,16 @@ public class DatabaseManager implements AutoCloseable {
             if (!rs.next()) {
                 String salt = "a1b2c3d4e5f60718293a4b5c6d7e8f90";
                 String hash = com.otog.util.PasswordUtil.hashPassword("password", salt);
+                String pinSalt = "f0e1d2c3b4a5968778695a4b3c2d1e0f";
+                String pinHash = com.otog.util.PasswordUtil.hashPassword("123456", pinSalt);
                 String now = java.time.LocalDateTime.now().toString();
 
                 String insertUser = "INSERT INTO users (user_id, name, mobile_number, email, role, status, created_at, updated_at) " +
                         "VALUES ('USR-ADMIN-01', 'admin', '09000000000', 'admin@otog.ph', 'ADMIN', 'ACTIVE', '" + now + "', '" + now + "')";
                 stmt.executeUpdate(insertUser);
 
-                String insertCred = "INSERT INTO credentials (user_id, password_hash, salt, failed_attempts, locked_until, updated_at) " +
-                        "VALUES ('USR-ADMIN-01', '" + hash + "', '" + salt + "', 0, NULL, '" + now + "')";
+                String insertCred = "INSERT INTO credentials (user_id, password_hash, salt, failed_attempts, locked_until, pin_hash, pin_salt, pin_failed_attempts, updated_at) " +
+                        "VALUES ('USR-ADMIN-01', '" + hash + "', '" + salt + "', 0, NULL, '" + pinHash + "', '" + pinSalt + "', 0, '" + now + "')";
                 stmt.executeUpdate(insertCred);
 
                 String insertWallet = "INSERT INTO wallets (wallet_id, user_id, balance, currency, status, created_at, updated_at) " +

@@ -72,4 +72,8 @@ public interface WalletOperations {
 
     default void setPaymentProviderFactory(PaymentProviderFactory factory) {
     }
+
+    default BankResponseStatus getCurrentProviderMode() {
+        return BankResponseStatus.SUCCESS;
+    }
 }
