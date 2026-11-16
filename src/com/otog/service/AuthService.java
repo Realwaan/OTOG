@@ -12,6 +12,8 @@ public interface AuthService {
 
     User registerUser(String name, String mobileNumber, String email, String rawPassword);
 
+    User registerUser(String name, String mobileNumber, String email, String rawPassword, com.otog.model.UserRole role);
+
     String issueTwoFactorOtp(String userId);
 
     boolean verifyTwoFactorOtp(String userId, String otpCode);

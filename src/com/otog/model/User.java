@@ -105,6 +105,26 @@ public class User {
         this.updatedAt = updatedAt;
     }
 
+    public boolean isAdmin() {
+        return role == UserRole.ADMIN;
+    }
+
+    public boolean isMerchant() {
+        return role == UserRole.MERCHANT;
+    }
+
+    public boolean isSuspended() {
+        return status == UserStatus.SUSPENDED;
+    }
+
+    public boolean isActive() {
+        return status == UserStatus.ACTIVE;
+    }
+
+    public boolean isLocked() {
+        return status == UserStatus.LOCKED;
+    }
+
     // Methods from Class Diagram: login(), logout()
     public void login() {
         // Domain hook for session initiation

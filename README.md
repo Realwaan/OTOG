@@ -39,6 +39,7 @@ In compliance with the subject CSIT227 - Object Oriented Programming.
 | **Security Domain (`Pin`, `TwoFactorAuth`)** | OTP expiry and PIN lockouts | **Partial** | Defined in `Class Diagram/ewallet_cd.png` and `AuthService.java`; CAP-03 implemented salted hash auth & 2FA issuance |
 | **Main Application Navigation Shell (`Main`)** | Dashboard with balance, recent activity, logout, async worker states & navigation | **Implemented (CAP-05)** | `src/com/otog/ui/Main.java`, `SessionManager.java`, `src/UserLogin.java` (unfinished Loans/Investments tabs hidden unless services are provided) |
 | **CashInOut & SendMoney GUI Workflows** | Swing forms wired to `WalletOperations` off the UI thread | **Implemented (CAP-05)** | Integrated in `src/com/otog/ui/Main.java` (`Cash In / Out` & `Send Money` tabs with post-payment refresh) |
+| **Admin Permissions & Account Controls (CAP-09)** | Role authorization, account suspension/reactivation with recorded reasons, suspended account payment blockage, audit logs without secrets & prohibited direct balance editing | **Implemented** | `src/com/otog/service/AdminService.java`, `AdminServiceImpl.java`, `AdminAction.java`, `AdminActionRepository.java`, `WalletService.java`, `test/com/otog/AdminPermissionsAndAccountControlTest.java` |
 | **Simulated Loans (`Loan`)** | Apply, approve, repay with wallet ledger integration | **Partial** | `LoanTransaction.java` & `LoanService.java` defined; service implementation & UI pending |
 | **Simulated Investments (`InvestMoney`)** | Invest, withdraw, calculate returns with wallet ledger integration | **Partial** | `InvestMoneyTransaction.java` & `InvestmentService.java` defined; service implementation & UI pending |
 
@@ -96,6 +97,30 @@ The core domain model, persistence layer, and transaction correctness rules are 
 - **Duplicate Request Rejection**: Idempotency is enforced at both service and database levels (`UNIQUE(reference_number)`), throwing `DuplicateTransactionException`.
 - **Concurrency & Competing Spends**: Deadlock-free ordered wallet locking prevents race conditions and double-spending across concurrent threads.
 - **Restart Persistence**: State persists across complete application shutdowns using SQLite with WAL mode.
+
+---
+
+## 🛡️ Admin Permissions & Account Controls (CAP-09)
+
+The platform enforces strict role-based access control, account lifecycle governance, and traceable administrative audits:
+
+### 1. Role Authorization (`USER`, `MERCHANT`, `ADMIN`)
+- **Seeded Administrator**: `USR-ADMIN-01` (`admin` / `password`) is automatically seeded with `ADMIN` role, active status, seeded credentials, and an initial wallet.
+- **Privilege Separation**:
+  - `ADMIN`: Full administrative authority to view all user accounts, wallet accounts, and system-wide transactions, suspend/reactivate accounts with mandatory recorded reasons, and inspect user histories.
+  - `MERCHANT` & `USER`: Standard operational roles restricted to managing their own wallets and viewing their own transaction histories.
+  - Any attempt by ordinary users to invoke administrative methods or inspect another user's history throws `SecurityException`.
+  - Self-registration with `UserRole.ADMIN` is strictly disallowed; roles can only be promoted by administrators with an audit trail.
+
+### 2. Account Suspension & Reactivation
+- **Mandatory Reason Requirement**: Account suspensions and reactivations strictly require non-empty recorded justifications (`IllegalArgumentException` thrown on empty/blank reasons).
+- **Wallet Synchronization**: Suspending a user automatically transitions their wallet to `WalletStatus.FROZEN` and invalidates any active sessions in `SessionManager`. Reactivation restores active status and resets lockout limits.
+- **Self-Protection**: Administrators are barred from suspending their own account (`OtogException`).
+
+### 3. Payment Protection & Traceable Audit Trail
+- **Suspended Account Payment Barrier**: Accounts in `SUSPENDED` status are blocked from initiating outgoing payments (`transfer`, `cashOut`, `transferWithPin`, `cashOutWithPin`), throwing `WalletException`.
+- **Traceable Actions Without Secrets**: All administrative actions are recorded in the `admin_actions` table with action ID, administrator ID, action type, target user ID, reason, and sanitized details. Secrets (passwords, PINs, auth salts, hashes, tokens, CVVs) are strictly excluded and automatically redacted.
+- **Prohibited Direct Balance Editing**: Direct arbitrary modification of balances is strictly prohibited (`UnsupportedOperationException`); all balance adjustments must occur through double-entry ledger transactions (`transfer`, `cashIn`, `cashOut`).
 
 ---
 

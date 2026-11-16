@@ -31,6 +31,8 @@ public class WalletService implements WalletOperations {
     private final ConcurrentHashMap<String, ReentrantLock> walletLocks = new ConcurrentHashMap<>();
     private final AuthService authService;
     private final boolean requirePinAuthorization;
+    private final AdminActionRepository adminActionRepository;
+    private final AdminService adminService;
 
     public WalletService(DatabaseManager databaseManager) {
         this(databaseManager,
@@ -80,6 +82,18 @@ public class WalletService implements WalletOperations {
         this.ledgerRepository = ledgerRepository;
         this.authService = authService;
         this.requirePinAuthorization = requirePinAuthorization;
+        this.adminActionRepository = new AdminActionRepository(databaseManager);
+        this.adminService = new AdminServiceImpl(databaseManager, this.userRepository,
+                this.walletRepository, this.transactionRepository, this.adminActionRepository,
+                new CredentialRepository(databaseManager));
+    }
+
+    public AdminService getAdminService() {
+        return adminService;
+    }
+
+    public AdminActionRepository getAdminActionRepository() {
+        return adminActionRepository;
     }
 
     public UserRepository getUserRepository() {
@@ -294,6 +308,7 @@ public class WalletService implements WalletOperations {
 
                     Wallet sourceWallet = walletRepository.findById(sourceWalletId, conn)
                             .orElseThrow(() -> new EntityNotFoundException("Source wallet", sourceWalletId));
+                    validateAccountNotSuspended(sourceWallet.getUserId(), conn);
                     authorizeOutgoingPayment(sourceWallet.getUserId());
                     Wallet targetWallet = walletRepository.findById(targetWalletId, conn)
                             .orElseThrow(() -> new EntityNotFoundException("Target wallet", targetWalletId));
@@ -390,6 +405,7 @@ public class WalletService implements WalletOperations {
 
                 Wallet wallet = walletRepository.findById(targetWalletId, conn)
                         .orElseThrow(() -> new EntityNotFoundException("Wallet", targetWalletId));
+                validateAccountNotSuspended(wallet.getUserId(), conn);
 
                 if (wallet.getStatus() != WalletStatus.ACTIVE) {
                     throw new WalletException("Wallet is not active: " + wallet.getStatus());
@@ -459,6 +475,7 @@ public class WalletService implements WalletOperations {
 
                 Wallet wallet = walletRepository.findById(sourceWalletId, conn)
                         .orElseThrow(() -> new EntityNotFoundException("Wallet", sourceWalletId));
+                validateAccountNotSuspended(wallet.getUserId(), conn);
                 authorizeOutgoingPayment(wallet.getUserId());
 
                 if (wallet.getStatus() != WalletStatus.ACTIVE) {
@@ -553,12 +570,107 @@ public class WalletService implements WalletOperations {
         }
     }
 
+    private void validateAccountNotSuspended(String userId, Connection conn) throws java.sql.SQLException {
+        if (userId == null) {
+            return;
+        }
+        User user = userRepository.findById(userId, conn)
+                .orElseThrow(() -> new EntityNotFoundException("User", userId));
+        if (user.getStatus() == UserStatus.SUSPENDED) {
+            throw new WalletException("Suspended accounts cannot initiate payments: User " + userId + " is suspended.");
+        }
+        if (user.getStatus() == UserStatus.LOCKED) {
+            throw new WalletException("Account is locked: User " + userId + " is locked.");
+        }
+        if (user.getStatus() != UserStatus.ACTIVE) {
+            throw new WalletException("Account is not active: User " + userId + " status is " + user.getStatus());
+        }
+    }
+
     private void authorizeOutgoingPayment(String walletOwnerUserId) {
+        if (walletOwnerUserId != null) {
+            userRepository.findById(walletOwnerUserId).ifPresent(user -> {
+                if (user.getStatus() == UserStatus.SUSPENDED) {
+                    throw new WalletException("Suspended accounts cannot initiate payments: User " + user.getUserId() + " is suspended.");
+                }
+                if (user.getStatus() != UserStatus.ACTIVE) {
+                    throw new WalletException("Account is not active: User " + user.getUserId() + " status is " + user.getStatus());
+                }
+            });
+        }
         SessionManager session = SessionManager.getInstance();
         if (requirePinAuthorization || session.isLoggedIn()
                 || session.isExpiredDueToInactivity() || session.isLockedOutByPin()) {
             session.requirePinAuthorization(walletOwnerUserId);
         }
+    }
+
+    public void suspendUser(String adminUserId, String targetUserId, String reason) {
+        adminService.suspendUser(adminUserId, targetUserId, reason);
+    }
+
+    public void reactivateUser(String adminUserId, String targetUserId, String reason) {
+        adminService.reactivateUser(adminUserId, targetUserId, reason);
+    }
+
+    public List<User> getAllUsers(String requesterUserId) {
+        return adminService.getAllUsers(requesterUserId);
+    }
+
+    public List<Wallet> getAllWallets(String requesterUserId) {
+        return adminService.getAllWallets(requesterUserId);
+    }
+
+    public List<Transaction> getAllTransactions(String requesterUserId) {
+        return adminService.getAllTransactions(requesterUserId);
+    }
+
+    public List<Transaction> getUserTransactions(String requesterUserId, String targetUserId) {
+        return adminService.getUserTransactions(requesterUserId, targetUserId);
+    }
+
+    public List<Transaction> getTransactionHistory(String requesterUserId, String walletId) {
+        SessionManager session = SessionManager.getInstance();
+        session.requireAuthentication();
+
+        if (requesterUserId != null && !requesterUserId.trim().isEmpty()) {
+            session.requireActiveSessionFor(requesterUserId.trim());
+        }
+
+        User sessionUser = session.getCurrentUser();
+        User requester = userRepository.findById(sessionUser.getUserId())
+                .orElseThrow(() -> new SecurityException("Access denied: Unknown user " + sessionUser.getUserId()));
+        if (requester.getStatus() != UserStatus.ACTIVE) {
+            throw new SecurityException("Access denied: Requester account is " + requester.getStatus() + ".");
+        }
+        if (walletId == null || walletId.trim().isEmpty()) {
+            throw new IllegalArgumentException("Wallet ID must not be null or empty");
+        }
+        Wallet wallet = getWallet(walletId.trim());
+        if (requester.getRole() != UserRole.ADMIN && !wallet.getUserId().equals(requester.getUserId())) {
+            throw new SecurityException("Access denied: Ordinary users cannot inspect another user's transaction history.");
+        }
+        List<Transaction> txns = transactionRepository.findByWalletId(wallet.getWalletId());
+        if (requester.getRole() == UserRole.ADMIN && !wallet.getUserId().equals(requester.getUserId())) {
+            AdminAction action = new AdminAction(
+                    IdGenerator.nextAdminActionId(),
+                    requester.getUserId(),
+                    "INSPECT_USER_HISTORY",
+                    wallet.getUserId(),
+                    "Administrative inspection",
+                    "Inspected transaction history of wallet " + wallet.getWalletId()
+            );
+            adminActionRepository.save(action);
+        }
+        return txns;
+    }
+
+    public List<AdminAction> getAdminActions(String requesterUserId) {
+        return adminService.getAdminActions(requesterUserId);
+    }
+
+    public void directSetBalance(String requesterUserId, String walletId, BigDecimal newBalance) {
+        adminService.directSetBalance(requesterUserId, walletId, newBalance);
     }
 
     /**
