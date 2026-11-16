@@ -19,3 +19,8 @@ Thumbs.db
 # Local agent tooling & logs
 .agent/
 *.log
+
+# Temporary build & script artifacts
+sources.txt
+__pycache__/
+*.pyc

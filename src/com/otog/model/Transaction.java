@@ -5,13 +5,14 @@ import com.otog.util.MoneyUtil;
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
+import java.util.Comparator;
 import java.util.Objects;
 
 /**
  * Represents a financial transaction within the OTOG E-Wallet platform.
  * Supports idempotency via unique referenceNumber and maintains BigDecimal financial precision.
  */
-public class Transaction {
+public class Transaction implements Comparable<Transaction> {
     private String transactionId;
     private String referenceNumber;
     private String sourceWalletId;
@@ -207,16 +208,32 @@ public class Transaction {
         return sb.toString();
     }
 
+    private static final Comparator<Transaction> NEWEST_FIRST = Comparator
+            .comparing(Transaction::getCreatedAt, Comparator.nullsLast(Comparator.reverseOrder()))
+            .thenComparing(Transaction::getTransactionId, Comparator.nullsLast(Comparator.reverseOrder()))
+            // Final tie-breaker keeps compareTo consistent with equals() when timestamps and IDs match.
+            .thenComparing(Transaction::getReferenceNumber, Comparator.nullsLast(Comparator.naturalOrder()));
+
+    @Override
+    public int compareTo(Transaction other) {
+        if (other == null) {
+            return -1;
+        }
+        return NEWEST_FIRST.compare(this, other);
+    }
+
     @Override
     public boolean equals(Object o) {
         if (this == o) return true;
         if (!(o instanceof Transaction that)) return false;
-        return Objects.equals(transactionId, that.transactionId);
+        return Objects.equals(transactionId, that.transactionId)
+                && Objects.equals(createdAt, that.createdAt)
+                && Objects.equals(referenceNumber, that.referenceNumber);
     }
 
     @Override
     public int hashCode() {
-        return Objects.hash(transactionId);
+        return Objects.hash(transactionId, createdAt, referenceNumber);
     }
 
     @Override

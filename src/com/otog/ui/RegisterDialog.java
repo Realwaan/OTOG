@@ -77,22 +77,21 @@ public class RegisterDialog extends JDialog {
         String confirmPassword = new String(txtConfirmPassword.getPassword());
 
         if (name.isEmpty() || mobile.isEmpty() || password.isEmpty()) {
-            JOptionPane.showMessageDialog(this,
+            showDialogMessage("Validation Error",
                     "Name, Mobile Number, and Password are required.",
-                    "Validation Error",
                     JOptionPane.WARNING_MESSAGE);
             return;
         }
 
         if (!password.equals(confirmPassword)) {
-            JOptionPane.showMessageDialog(this,
+            showDialogMessage("Validation Error",
                     "Passwords do not match.",
-                    "Validation Error",
                     JOptionPane.WARNING_MESSAGE);
             return;
         }
 
-        setRegistrationBusy(true);
+        setBusy(true);
+        // Password hashing, duplicate checks and the atomic user+wallet insert run off the EDT.
         new SwingWorker<User, Void>() {
             @Override
             protected User doInBackground() {
@@ -101,38 +100,67 @@ public class RegisterDialog extends JDialog {
 
             @Override
             protected void done() {
-                setRegistrationBusy(false);
+                setBusy(false);
                 try {
                     registeredUser = get();
-                    JOptionPane.showMessageDialog(RegisterDialog.this,
+                    showDialogMessage("Registration Complete",
                             "Registration successful!\nA secure wallet has been created with 0.00 PHP balance.\nYou may now log in.",
-                            "Registration Complete",
                             JOptionPane.INFORMATION_MESSAGE);
                     dispose();
                 } catch (InterruptedException ex) {
                     Thread.currentThread().interrupt();
-                    JOptionPane.showMessageDialog(RegisterDialog.this,
-                            "Registration was interrupted. Please try again.",
-                            "Registration Failed",
-                            JOptionPane.ERROR_MESSAGE);
+                    showRegistrationError("Registration was interrupted. Please try again.");
                 } catch (ExecutionException ex) {
                     Throwable cause = ex.getCause() != null ? ex.getCause() : ex;
-                    JOptionPane.showMessageDialog(RegisterDialog.this,
-                            cause.getMessage(),
-                            "Registration Failed",
-                            JOptionPane.ERROR_MESSAGE);
+                    showRegistrationError(cause.getMessage());
                 }
             }
         }.execute();
     }
 
-    private void setRegistrationBusy(boolean busy) {
+    private void showRegistrationError(String message) {
+        showDialogMessage("Registration Failed",
+                (message != null && !message.trim().isEmpty()) ? message : "Registration failed. Please try again.",
+                JOptionPane.ERROR_MESSAGE);
+    }
+
+    protected void showDialogMessage(String title, String message, int messageType) {
+        JOptionPane.showMessageDialog(this, message, title, messageType);
+    }
+
+    private void setBusy(boolean busy) {
         btnSubmit.setEnabled(!busy);
+        btnSubmit.setText(busy ? "Registering..." : "Register");
         btnCancel.setEnabled(!busy);
+        setDefaultCloseOperation(busy ? DO_NOTHING_ON_CLOSE : DISPOSE_ON_CLOSE);
         setCursor(busy ? Cursor.getPredefinedCursor(Cursor.WAIT_CURSOR) : Cursor.getDefaultCursor());
     }
 
     public User getRegisteredUser() {
         return registeredUser;
+    }
+
+    public JTextField getNameField() {
+        return txtName;
+    }
+
+    public JTextField getMobileField() {
+        return txtMobile;
+    }
+
+    public JTextField getEmailField() {
+        return txtEmail;
+    }
+
+    public JPasswordField getPasswordField() {
+        return txtPassword;
+    }
+
+    public JPasswordField getConfirmPasswordField() {
+        return txtConfirmPassword;
+    }
+
+    public JButton getSubmitButton() {
+        return btnSubmit;
     }
 }
