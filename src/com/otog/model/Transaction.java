@@ -26,6 +26,8 @@ public class Transaction implements Comparable<Transaction> {
     private String description;
     private LocalDateTime createdAt;
     private LocalDateTime completedAt;
+    private String providerReference;
+    private String providerStatus;
 
     public Transaction() {
         this.amount = MoneyUtil.ZERO;
@@ -166,6 +168,22 @@ public class Transaction implements Comparable<Transaction> {
         this.completedAt = completedAt;
     }
 
+    public String getProviderReference() {
+        return providerReference;
+    }
+
+    public void setProviderReference(String providerReference) {
+        this.providerReference = providerReference;
+    }
+
+    public String getProviderStatus() {
+        return providerStatus;
+    }
+
+    public void setProviderStatus(String providerStatus) {
+        this.providerStatus = providerStatus;
+    }
+
     /**
      * Executes the transaction state transition to COMPLETED.
      */
@@ -188,8 +206,14 @@ public class Transaction implements Comparable<Transaction> {
         sb.append("========================================\n");
         sb.append("Txn ID:       ").append(transactionId).append("\n");
         sb.append("Reference:    ").append(referenceNumber).append("\n");
+        if (providerReference != null && !providerReference.isEmpty()) {
+            sb.append("Provider Ref: ").append(providerReference).append("\n");
+        }
         sb.append("Type:         ").append(type).append("\n");
         sb.append("Status:       ").append(status).append("\n");
+        if (providerStatus != null && !providerStatus.isEmpty()) {
+            sb.append("Prov Status:  ").append(providerStatus).append("\n");
+        }
         sb.append("Date:         ").append(createdAt != null ? createdAt.format(dtf) : "N/A").append("\n");
         if (sourceWalletId != null) {
             sb.append("Source:       ").append(sourceWalletId).append("\n");

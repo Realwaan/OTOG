@@ -3,15 +3,20 @@ package com.otog.ui;
 import com.otog.database.DatabaseManager;
 import com.otog.exception.WalletException;
 import com.otog.model.AdminAction;
+import com.otog.model.PaymentMethod;
+import com.otog.model.PaymentMethodStatus;
 import com.otog.model.Transaction;
+import com.otog.model.TransactionStatus;
 import com.otog.model.TransactionType;
 import com.otog.model.User;
 import com.otog.model.UserRole;
 import com.otog.model.Wallet;
 import com.otog.service.AuthService;
 import com.otog.service.AuthServiceImpl;
+import com.otog.service.BankResponseStatus;
 import com.otog.service.InvestmentService;
 import com.otog.service.LoanService;
+import com.otog.service.PaymentProviderFactory;
 import com.otog.service.SessionManager;
 import com.otog.service.WalletOperations;
 import com.otog.service.WalletService;
@@ -90,14 +95,19 @@ public class Main extends JFrame {
     private DefaultTableModel transactionsTableModel;
     private JTable tblTransactions;
     private JButton btnViewReceipt;
+    private JButton btnCheckStatus;
+    private JLabel lblActivityFeedback;
 
     private JComboBox<String> cmbCashOperation;
+    private JComboBox<String> cmbPaymentMethod;
     private JComboBox<String> cmbCashChannel;
+    private JComboBox<String> cmbProviderMode;
     private JTextField txtCashAmount;
     private JTextField txtCashNote;
     private JPasswordField txtCashPin;
     private JButton btnSubmitCashOp;
     private JLabel lblCashFeedback;
+    private List<PaymentMethod> loadedPaymentMethods = Collections.emptyList();
 
     private JTextField txtRecipient;
     private JTextField txtSendAmount;
@@ -376,7 +386,7 @@ public class Main extends JFrame {
         errorInner.add(retryWrapper, BorderLayout.SOUTH);
         errorCard.add(errorInner);
 
-        String[] columns = {"Date", "Ref #", "Type", "Direction", "Amount", "Fee", "Status", "Description"};
+        String[] columns = {"Date", "Ref #", "Type", "Direction", "Amount", "Fee", "Status", "Provider Ref", "Description"};
         transactionsTableModel = new DefaultTableModel(columns, 0) {
             @Override
             public boolean isCellEditable(int row, int column) {
@@ -391,10 +401,24 @@ public class Main extends JFrame {
         JPanel readyCard = new JPanel(new BorderLayout(6, 6));
         readyCard.add(new JScrollPane(tblTransactions), BorderLayout.CENTER);
 
-        JPanel tableActions = new JPanel(new FlowLayout(FlowLayout.RIGHT, 0, 0));
+        JPanel tableActions = new JPanel(new BorderLayout(8, 0));
+        lblActivityFeedback = new JLabel(" ");
+        lblActivityFeedback.setFont(new Font("SansSerif", Font.PLAIN, 12));
+        JPanel tableActionButtons = new JPanel(new FlowLayout(FlowLayout.RIGHT, 8, 0));
+        btnCheckStatus = new JButton("Lookup Status");
+        btnCheckStatus.setEnabled(false);
+        btnCheckStatus.addActionListener(e -> lookupSelectedTransactionStatus());
         btnViewReceipt = new JButton("View Receipt");
         btnViewReceipt.addActionListener(e -> showSelectedReceipt());
-        tableActions.add(btnViewReceipt);
+        tableActionButtons.add(btnCheckStatus);
+        tableActionButtons.add(btnViewReceipt);
+        tableActions.add(lblActivityFeedback, BorderLayout.WEST);
+        tableActions.add(tableActionButtons, BorderLayout.EAST);
+        tblTransactions.getSelectionModel().addListSelectionListener(e -> {
+            if (!e.getValueIsAdjusting()) {
+                updateTableActionButtonsState();
+            }
+        });
         readyCard.add(tableActions, BorderLayout.SOUTH);
 
         activityCardPanel.add(loadingCard, DashboardState.LOADING.name());
@@ -417,7 +441,13 @@ public class Main extends JFrame {
         gbc.anchor = GridBagConstraints.WEST;
 
         cmbCashOperation = new JComboBox<>(new String[]{"CASH_IN", "CASH_OUT"});
+        cmbPaymentMethod = new JComboBox<>(new String[]{"Use Selected Channel"});
         cmbCashChannel = new JComboBox<>(new String[]{"GCash", "Maya", "BDO", "BPI", "7-Eleven OTC"});
+        cmbProviderMode = new JComboBox<>(new String[]{"SUCCESS", "REJECTED", "FAILED", "TIMEOUT", "PENDING", "UNKNOWN"});
+        BankResponseStatus initialMode = walletService.getCurrentProviderMode();
+        if (initialMode != null) {
+            cmbProviderMode.setSelectedItem(initialMode.name());
+        }
         txtCashAmount = new JTextField(20);
         txtCashNote = new JTextField(20);
         txtCashPin = new JPasswordField(20);
@@ -428,10 +458,23 @@ public class Main extends JFrame {
         lblCashFeedback.setFont(new Font("SansSerif", Font.PLAIN, 12));
 
         addFormRow(form, gbc, 0, "Operation:", cmbCashOperation);
-        addFormRow(form, gbc, 1, "Channel / Provider:", cmbCashChannel);
-        addFormRow(form, gbc, 2, "Amount (PHP):", txtCashAmount);
-        addFormRow(form, gbc, 3, "Note (Optional):", txtCashNote);
-        addFormRow(form, gbc, 4, "Transaction PIN (Cash Out):", txtCashPin);
+        addFormRow(form, gbc, 1, "Linked Bank Account:", cmbPaymentMethod);
+        addFormRow(form, gbc, 2, "Channel / Provider:", cmbCashChannel);
+        addFormRow(form, gbc, 3, "Mock Bank Mode:", cmbProviderMode);
+        addFormRow(form, gbc, 4, "Amount (PHP):", txtCashAmount);
+        addFormRow(form, gbc, 5, "Note (Optional):", txtCashNote);
+        addFormRow(form, gbc, 6, "Transaction PIN (Cash Out):", txtCashPin);
+
+        cmbPaymentMethod.addActionListener(e ->
+                cmbCashChannel.setEnabled(cmbPaymentMethod.getSelectedIndex() <= 0));
+
+        cmbProviderMode.addActionListener(e -> {
+            String modeName = (String) cmbProviderMode.getSelectedItem();
+            if (modeName != null) {
+                walletService.setPaymentProviderFactory(
+                        PaymentProviderFactory.forMode(BankResponseStatus.valueOf(modeName)));
+            }
+        });
 
         cmbCashOperation.addActionListener(e -> {
             boolean isCashOut = "CASH_OUT".equals(cmbCashOperation.getSelectedItem());
@@ -442,13 +485,13 @@ public class Main extends JFrame {
         });
 
         gbc.gridx = 1;
-        gbc.gridy = 5;
+        gbc.gridy = 7;
         gbc.weightx = 1.0;
         gbc.fill = GridBagConstraints.NONE;
         form.add(btnSubmitCashOp, gbc);
 
         gbc.gridx = 0;
-        gbc.gridy = 6;
+        gbc.gridy = 8;
         gbc.gridwidth = 2;
         gbc.fill = GridBagConstraints.HORIZONTAL;
         form.add(lblCashFeedback, gbc);
@@ -460,6 +503,7 @@ public class Main extends JFrame {
             submitCashOperationAsync(
                     op,
                     (String) cmbCashChannel.getSelectedItem(),
+                    getSelectedPaymentMethodId(),
                     txtCashAmount.getText(),
                     txtCashNote.getText(),
                     pin
@@ -954,8 +998,11 @@ public class Main extends JFrame {
                 Wallet wallet = session.refreshWallet(walletService);
                 List<Transaction> transactions = walletService.getRecentTransactions(
                         wallet.getWalletId(), RECENT_TRANSACTION_LIMIT);
+                List<PaymentMethod> paymentMethods = user != null
+                        ? walletService.getPaymentMethodsByUserId(user.getUserId())
+                        : Collections.emptyList();
                 boolean hasPin = authService != null && user != null && authService.hasPin(user.getUserId());
-                return new DashboardSnapshot(user, wallet, transactions, hasPin);
+                return new DashboardSnapshot(user, wallet, transactions, paymentMethods, hasPin);
             }
 
             @Override
@@ -968,6 +1015,7 @@ public class Main extends JFrame {
                 try {
                     DashboardSnapshot snapshot = get();
                     updateHeaderFromSession(snapshot.user, snapshot.wallet, snapshot.hasPin);
+                    populatePaymentMethodsCombo(snapshot.paymentMethods);
                     populateTransactionsTable(snapshot.wallet.getWalletId(), snapshot.transactions);
                     if (snapshot.transactions.isEmpty()) {
                         currentState = DashboardState.EMPTY;
@@ -1029,11 +1077,17 @@ public class Main extends JFrame {
 
     public CompletableFuture<Transaction> submitCashOperationAsync(String operationType, String channel,
                                                                     String amountText, String note) {
-        return submitCashOperationAsync(operationType, channel, amountText, note, null);
+        return submitCashOperationAsync(operationType, channel, null, amountText, note, null);
     }
 
     public CompletableFuture<Transaction> submitCashOperationAsync(String operationType, String channel,
                                                                     String amountText, String note, String rawPin) {
+        return submitCashOperationAsync(operationType, channel, null, amountText, note, rawPin);
+    }
+
+    public CompletableFuture<Transaction> submitCashOperationAsync(String operationType, String channel,
+                                                                    String paymentMethodId, String amountText,
+                                                                    String note, String rawPin) {
         CompletableFuture<Transaction> future = new CompletableFuture<>();
         String op = operationType != null ? operationType.trim().toUpperCase() : "CASH_IN";
         String opLabel = "CASH_OUT".equals(op) ? "Cash Out" : "Cash In";
@@ -1062,22 +1116,27 @@ public class Main extends JFrame {
                 String cleanChannel = (channel != null && !channel.trim().isEmpty())
                         ? channel.trim() : "OTOG Partner";
                 String cleanNote = (note != null && !note.trim().isEmpty()) ? note.trim() : null;
+                String pmId = (paymentMethodId != null && !paymentMethodId.trim().isEmpty()) ? paymentMethodId.trim() : null;
 
                 if ("CASH_IN".equals(op)) {
-                    String desc = cleanNote != null ? cleanChannel + " - " + cleanNote : "Cash In via " + cleanChannel;
-                    return walletService.cashIn(ref, wallet.getWalletId(), null, amount, desc);
+                    String desc = pmId == null
+                            ? (cleanNote != null ? cleanChannel + " - " + cleanNote : "Cash In via " + cleanChannel)
+                            : cleanNote;
+                    return walletService.cashIn(ref, wallet.getWalletId(), pmId, amount, desc);
                 } else if ("CASH_OUT".equals(op)) {
-                    String desc = cleanNote != null ? cleanChannel + " - " + cleanNote : "Cash Out to " + cleanChannel;
+                    String desc = pmId == null
+                            ? (cleanNote != null ? cleanChannel + " - " + cleanNote : "Cash Out to " + cleanChannel)
+                            : cleanNote;
                     String cleanPin = rawPin != null ? rawPin.trim() : "";
                     if (!cleanPin.isEmpty()) {
                         if (authService != null && user != null) {
                             verifyPinOrThrow(user.getUserId(), cleanPin);
-                            return walletService.cashOut(ref, wallet.getWalletId(), null, amount, MoneyUtil.ZERO, desc);
+                            return walletService.cashOut(ref, wallet.getWalletId(), pmId, amount, MoneyUtil.ZERO, desc);
                         }
                         return walletService.cashOutWithPin(
-                                ref, wallet.getWalletId(), null, amount, MoneyUtil.ZERO, desc, cleanPin);
+                                ref, wallet.getWalletId(), pmId, amount, MoneyUtil.ZERO, desc, cleanPin);
                     }
-                    return walletService.cashOut(ref, wallet.getWalletId(), null, amount, MoneyUtil.ZERO, desc);
+                    return walletService.cashOut(ref, wallet.getWalletId(), pmId, amount, MoneyUtil.ZERO, desc);
                 }
                 throw new IllegalArgumentException("Unsupported cash operation: " + operationType);
             }
@@ -1089,10 +1148,27 @@ public class Main extends JFrame {
                     Transaction txn = get();
                     txtCashAmount.setText("");
                     txtCashNote.setText("");
-                    lblCashFeedback.setForeground(new Color(17, 102, 68));
-                    lblCashFeedback.setText(opLabel + " successful: "
-                            + MoneyUtil.format(txn.getAmount(), txn.getCurrency())
-                            + " (Ref: " + txn.getReferenceNumber() + ")");
+                    String provRef = txn.getProviderReference() != null ? " | Bank Ref: " + txn.getProviderReference() : "";
+                    String provStatus = txn.getProviderStatus() != null ? " [" + txn.getProviderStatus() + "]" : "";
+                    if (txn.getStatus() == TransactionStatus.COMPLETED) {
+                        lblCashFeedback.setForeground(new Color(17, 102, 68));
+                        lblCashFeedback.setText(opLabel + " successful: "
+                                + MoneyUtil.format(txn.getAmount(), txn.getCurrency())
+                                + " (Ref: " + txn.getReferenceNumber() + ")" + provRef + provStatus);
+                        lblStatus.setText(opLabel + " completed" + provStatus);
+                    } else if (txn.getStatus() == TransactionStatus.FAILED) {
+                        lblCashFeedback.setForeground(new Color(176, 38, 38));
+                        lblCashFeedback.setText(opLabel + " failed/rejected: "
+                                + MoneyUtil.format(txn.getAmount(), txn.getCurrency())
+                                + " (Ref: " + txn.getReferenceNumber() + ")" + provRef + provStatus);
+                        lblStatus.setText(opLabel + " failed" + provStatus);
+                    } else {
+                        lblCashFeedback.setForeground(new Color(180, 95, 10));
+                        lblCashFeedback.setText(opLabel + " pending settlement: "
+                                + MoneyUtil.format(txn.getAmount(), txn.getCurrency())
+                                + " (Ref: " + txn.getReferenceNumber() + ")" + provRef + provStatus);
+                        lblStatus.setText(opLabel + " pending settlement" + provStatus);
+                    }
                     refreshDashboardAsync().whenComplete((v, err) -> future.complete(txn));
                 } catch (Exception ex) {
                     Throwable cause = unwrapCause(ex);
@@ -1103,6 +1179,74 @@ public class Main extends JFrame {
                     lblCashFeedback.setText("Failed: " + message);
                     lblStatus.setText(opLabel + " failed: " + message);
                     checkSessionTerminatedOnError(message);
+                    future.completeExceptionally(cause);
+                }
+            }
+        };
+        worker.execute();
+        return future;
+    }
+
+    public CompletableFuture<Transaction> submitStatusLookupAsync(String referenceNumber) {
+        CompletableFuture<Transaction> future = new CompletableFuture<>();
+        runOnEdt(() -> {
+            if (btnCheckStatus != null) {
+                btnCheckStatus.setEnabled(false);
+            }
+            lblStatus.setText("Checking bank status for " + referenceNumber + "...");
+        });
+
+        SwingWorker<Transaction, Void> worker = new SwingWorker<>() {
+            @Override
+            protected Transaction doInBackground() {
+                SessionManager.getInstance().requireAuthentication();
+                return walletService.statusLookup(referenceNumber);
+            }
+
+            @Override
+            protected void done() {
+                updateTableActionButtonsState();
+                try {
+                    Transaction txn = get();
+                    String provRef = txn.getProviderReference() != null ? " | Bank Ref: " + txn.getProviderReference() : "";
+                    String provStatus = txn.getProviderStatus() != null ? " [" + txn.getProviderStatus() + "]" : "";
+                    Color color;
+                    String msg;
+                    if (txn.getStatus() == TransactionStatus.COMPLETED) {
+                        color = new Color(17, 102, 68);
+                        msg = "Status lookup settled COMPLETED: "
+                                + txn.getReferenceNumber() + provRef + provStatus;
+                    } else if (txn.getStatus() == TransactionStatus.FAILED) {
+                        color = new Color(176, 38, 38);
+                        msg = "Status lookup confirmed FAILED: "
+                                + txn.getReferenceNumber() + provRef + provStatus;
+                    } else {
+                        color = new Color(180, 95, 10);
+                        msg = "Status lookup remains PENDING: "
+                                + txn.getReferenceNumber() + provRef + provStatus;
+                    }
+                    lblCashFeedback.setForeground(color);
+                    lblCashFeedback.setText(msg);
+                    if (lblActivityFeedback != null) {
+                        lblActivityFeedback.setForeground(color);
+                        lblActivityFeedback.setText(msg);
+                    }
+                    String syncStatusText = "Status sync: " + txn.getStatus() + provStatus;
+                    lblStatus.setText(syncStatusText);
+                    refreshDashboardAsync().whenComplete((v, err) -> {
+                        runOnEdt(() -> lblStatus.setText(syncStatusText));
+                        future.complete(txn);
+                    });
+                } catch (Exception ex) {
+                    Throwable cause = unwrapCause(ex);
+                    String message = (cause.getMessage() != null && !cause.getMessage().trim().isEmpty())
+                            ? cause.getMessage()
+                            : cause.getClass().getSimpleName();
+                    if (lblActivityFeedback != null) {
+                        lblActivityFeedback.setForeground(new Color(176, 38, 38));
+                        lblActivityFeedback.setText("Status lookup failed: " + message);
+                    }
+                    lblStatus.setText("Status lookup failed: " + message);
                     future.completeExceptionally(cause);
                 }
             }
@@ -1388,6 +1532,52 @@ public class Main extends JFrame {
         lblStatus.setText(message);
     }
 
+    private void populatePaymentMethodsCombo(List<PaymentMethod> paymentMethods) {
+        if (cmbPaymentMethod == null) {
+            return;
+        }
+        String prevSelectedId = getSelectedPaymentMethodId();
+        List<PaymentMethod> activeMethods = new ArrayList<>();
+        if (paymentMethods != null) {
+            for (PaymentMethod pm : paymentMethods) {
+                if (pm.getStatus() == PaymentMethodStatus.ACTIVE) {
+                    activeMethods.add(pm);
+                }
+            }
+        }
+        this.loadedPaymentMethods = Collections.unmodifiableList(activeMethods);
+        cmbPaymentMethod.removeAllItems();
+        cmbPaymentMethod.addItem("Use Selected Channel");
+        int defaultIndex = 0;
+        int prevIndex = -1;
+        for (int i = 0; i < activeMethods.size(); i++) {
+            PaymentMethod pm = activeMethods.get(i);
+            String label = pm.getProviderName() + " (" + pm.getAccountNumber() + ")"
+                    + (pm.isDefault() ? " [Default]" : "");
+            cmbPaymentMethod.addItem(label);
+            if (prevSelectedId != null && prevSelectedId.equals(pm.getPaymentMethodId())) {
+                prevIndex = i + 1;
+            } else if (pm.isDefault() && defaultIndex == 0) {
+                defaultIndex = i + 1;
+            }
+        }
+        cmbPaymentMethod.setSelectedIndex(prevIndex >= 0 ? prevIndex : defaultIndex);
+        if (cmbCashChannel != null) {
+            cmbCashChannel.setEnabled(cmbPaymentMethod.getSelectedIndex() <= 0);
+        }
+    }
+
+    public String getSelectedPaymentMethodId() {
+        if (cmbPaymentMethod == null) {
+            return null;
+        }
+        int idx = cmbPaymentMethod.getSelectedIndex();
+        if (idx <= 0 || idx - 1 >= loadedPaymentMethods.size()) {
+            return null;
+        }
+        return loadedPaymentMethods.get(idx - 1).getPaymentMethodId();
+    }
+
     private void populateTransactionsTable(String walletId, List<Transaction> transactions) {
         if (transactions == null || transactions.isEmpty()) {
             this.loadedTransactions = Collections.emptyList();
@@ -1400,6 +1590,12 @@ public class Main extends JFrame {
         for (Transaction txn : this.loadedTransactions) {
             String date = txn.getCreatedAt() != null ? txn.getCreatedAt().format(DATE_FORMATTER) : "-";
             String direction = resolveDirection(walletId, txn);
+            String statusText = txn.getStatus() != null ? txn.getStatus().name() : "-";
+            if (txn.getProviderStatus() != null && !txn.getProviderStatus().isEmpty()) {
+                statusText += " [" + txn.getProviderStatus() + "]";
+            }
+            String provRef = (txn.getProviderReference() != null && !txn.getProviderReference().isEmpty())
+                    ? txn.getProviderReference() : "-";
             transactionsTableModel.addRow(new Object[]{
                     date,
                     txn.getReferenceNumber(),
@@ -1407,10 +1603,22 @@ public class Main extends JFrame {
                     direction,
                     MoneyUtil.format(txn.getAmount(), txn.getCurrency()),
                     MoneyUtil.format(txn.getFee(), txn.getCurrency()),
-                    txn.getStatus() != null ? txn.getStatus().name() : "-",
+                    statusText,
+                    provRef,
                     txn.getDescription() != null ? txn.getDescription() : ""
             });
         }
+        updateTableActionButtonsState();
+    }
+
+    private void updateTableActionButtonsState() {
+        if (btnCheckStatus == null) {
+            return;
+        }
+        Transaction selected = getSelectedTransactionForReceipt();
+        boolean isCashTxn = selected != null
+                && (selected.getType() == TransactionType.CASH_IN || selected.getType() == TransactionType.CASH_OUT);
+        btnCheckStatus.setEnabled(isCashTxn);
     }
 
     private static Map<TransactionType, String> createDirectionMap() {
@@ -1453,6 +1661,27 @@ public class Main extends JFrame {
             return null;
         }
         return loadedTransactions.get(row);
+    }
+
+    private void lookupSelectedTransactionStatus() {
+        Transaction txn = getSelectedTransactionForReceipt();
+        if (txn == null) {
+            JOptionPane.showMessageDialog(this,
+                    "Please select a transaction row to check its bank status.",
+                    "No Transaction Selected",
+                    JOptionPane.INFORMATION_MESSAGE);
+            return;
+        }
+        if (txn.getType() != TransactionType.CASH_IN && txn.getType() != TransactionType.CASH_OUT) {
+            String msg = "Status lookup is only available for Cash In / Cash Out transactions.";
+            if (lblActivityFeedback != null) {
+                lblActivityFeedback.setForeground(new Color(180, 95, 10));
+                lblActivityFeedback.setText(msg);
+            }
+            lblStatus.setText(msg);
+            return;
+        }
+        submitStatusLookupAsync(txn.getReferenceNumber());
     }
 
     private void showSelectedReceipt() {
@@ -1614,6 +1843,10 @@ public class Main extends JFrame {
         return lblCashFeedback;
     }
 
+    public JLabel getActivityFeedbackLabel() {
+        return lblActivityFeedback;
+    }
+
     public JLabel getSendFeedbackLabel() {
         return lblSendFeedback;
     }
@@ -1670,6 +1903,18 @@ public class Main extends JFrame {
         return cmbCashOperation;
     }
 
+    public JComboBox<String> getPaymentMethodComboBox() {
+        return cmbPaymentMethod;
+    }
+
+    public JComboBox<String> getProviderModeComboBox() {
+        return cmbProviderMode;
+    }
+
+    public JButton getCheckStatusButton() {
+        return btnCheckStatus;
+    }
+
     public JPasswordField getCashPinField() {
         return txtCashPin;
     }
@@ -1682,12 +1927,15 @@ public class Main extends JFrame {
         private final User user;
         private final Wallet wallet;
         private final List<Transaction> transactions;
+        private final List<PaymentMethod> paymentMethods;
         private final boolean hasPin;
 
-        private DashboardSnapshot(User user, Wallet wallet, List<Transaction> transactions, boolean hasPin) {
+        private DashboardSnapshot(User user, Wallet wallet, List<Transaction> transactions,
+                                  List<PaymentMethod> paymentMethods, boolean hasPin) {
             this.user = user;
             this.wallet = wallet;
             this.transactions = transactions;
+            this.paymentMethods = paymentMethods;
             this.hasPin = hasPin;
         }
     }
