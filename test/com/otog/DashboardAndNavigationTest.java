@@ -4,6 +4,7 @@ import com.otog.database.DatabaseManager;
 import com.otog.exception.EntityNotFoundException;
 import com.otog.exception.InsufficientFundsException;
 import com.otog.exception.InvalidAmountException;
+import com.otog.exception.WalletException;
 import com.otog.model.CashInOutTransaction;
 import com.otog.model.SendMoneyTransaction;
 import com.otog.model.Transaction;
@@ -212,6 +213,21 @@ public class DashboardAndNavigationTest {
             }
 
             @Override
+            public boolean hasPin(String userId) {
+                return authService.hasPin(userId);
+            }
+
+            @Override
+            public void setPin(String userId, String currentPassword, String newPin) {
+                authService.setPin(userId, currentPassword, newPin);
+            }
+
+            @Override
+            public void changePin(String userId, String currentPin, String newPin) {
+                authService.changePin(userId, currentPin, newPin);
+            }
+
+            @Override
             public void logout(String userId) {
                 authService.logout(userId);
             }
@@ -228,6 +244,7 @@ public class DashboardAndNavigationTest {
             JPanel twoFactorPanel = (JPanel) loginClass.getMethod("getTwoFactorPanel").invoke(loginFrame);
             JTextField twoFactorField = (JTextField) loginClass.getMethod("getTwoFactorField").invoke(loginFrame);
             JButton verifyBtn = (JButton) loginClass.getMethod("getVerify2FAButton").invoke(loginFrame);
+            Method getLastIssuedOtp = loginClass.getMethod("getLastIssuedOtp");
 
             SwingUtilities.invokeAndWait(() -> {
                 userField.setText("09171001022");
@@ -250,9 +267,12 @@ public class DashboardAndNavigationTest {
             assertTrue(twoFactorPanel.isVisible(), "2FA panel must become visible on successful login");
             assertTrue(loginBtn.isEnabled(), "Login button must be re-enabled after worker completion");
 
+            String issuedOtp = (String) getLastIssuedOtp.invoke(loginFrame);
+            assertNotNull(issuedOtp, "Issued OTP must be captured in UI state");
+
             // Now test 2FA button execution off-EDT via SwingWorker.
             SwingUtilities.invokeAndWait(() -> {
-                twoFactorField.setText("123456");
+                twoFactorField.setText(issuedOtp);
                 verifyBtn.doClick();
             });
             assertTrue(otpVerifiedLatch.await(5, TimeUnit.SECONDS), "2FA SwingWorker must execute verification");
@@ -320,6 +340,13 @@ public class DashboardAndNavigationTest {
         }
 
         @Override
+        public Transaction transferWithPin(String referenceNumber, String sourceWalletId, String targetWalletId,
+                                           BigDecimal amount, BigDecimal fee, String description, String rawPin) {
+            return delegate.transferWithPin(
+                    referenceNumber, sourceWalletId, targetWalletId, amount, fee, description, rawPin);
+        }
+
+        @Override
         public Transaction cashIn(String referenceNumber, String targetWalletId, String paymentMethodId,
                                   BigDecimal amount, String description) {
             return delegate.cashIn(referenceNumber, targetWalletId, paymentMethodId, amount, description);
@@ -329,6 +356,13 @@ public class DashboardAndNavigationTest {
         public Transaction cashOut(String referenceNumber, String sourceWalletId, String paymentMethodId,
                                    BigDecimal amount, BigDecimal fee, String description) {
             return delegate.cashOut(referenceNumber, sourceWalletId, paymentMethodId, amount, fee, description);
+        }
+
+        @Override
+        public Transaction cashOutWithPin(String referenceNumber, String sourceWalletId, String paymentMethodId,
+                                          BigDecimal amount, BigDecimal fee, String description, String rawPin) {
+            return delegate.cashOutWithPin(
+                    referenceNumber, sourceWalletId, paymentMethodId, amount, fee, description, rawPin);
         }
 
         @Override
@@ -394,8 +428,9 @@ public class DashboardAndNavigationTest {
     void testCashInAndCashOutRefreshSessionBalanceAndRecentActivityOffEdt() throws Exception {
         User carol = authService.registerUser("Carol Cruz", "09171001003", "carol@otog.ph", "Secret123");
         SessionManager.getInstance().login(carol, walletService.getWalletByUserId(carol.getUserId()));
+        authService.setPin(carol.getUserId(), "Secret123", "1234");
 
-        activeDashboard = new Main(walletService);
+        activeDashboard = new Main(walletService, authService);
         activeDashboard.getInitialLoadFuture().get(5, TimeUnit.SECONDS);
 
         Transaction cashInTxn = activeDashboard.submitCashOperationAsync("CASH_IN", "GCash", "500.00", "Allowance")
@@ -411,7 +446,15 @@ public class DashboardAndNavigationTest {
         assertEquals(1, activeDashboard.getRecentTransactionsTable().getRowCount());
         assertTrue(activeDashboard.getCashFeedbackLabel().getText().contains("successful"));
 
-        Transaction cashOutTxn = activeDashboard.submitCashOperationAsync("CASH_OUT", "BPI", "125.50", "ATM")
+        // Cash Out without PIN is blocked while PIN is unverified
+        ExecutionException missingPinEx = assertThrows(ExecutionException.class, () ->
+                activeDashboard.submitCashOperationAsync("CASH_OUT", "BPI", "125.50", "ATM")
+                        .get(5, TimeUnit.SECONDS));
+        assertInstanceOf(WalletException.class, missingPinEx.getCause());
+        assertEquals("PHP 500.00", activeDashboard.getBalanceLabel().getText());
+
+        // Cash Out with valid Transaction PIN succeeds
+        Transaction cashOutTxn = activeDashboard.submitCashOperationAsync("CASH_OUT", "BPI", "125.50", "ATM", "1234")
                 .get(5, TimeUnit.SECONDS);
         assertNotNull(cashOutTxn);
         assertInstanceOf(CashInOutTransaction.class, cashOutTxn,
@@ -434,12 +477,13 @@ public class DashboardAndNavigationTest {
         Wallet senderWallet = walletService.getWalletByUserId(sender.getUserId());
         walletService.cashIn("REQ-INIT-01", senderWallet.getWalletId(), null, new BigDecimal("1000.00"), "Seed");
         SessionManager.getInstance().login(sender, walletService.getWallet(senderWallet.getWalletId()));
+        authService.setPin(sender.getUserId(), "Secret123", "5678");
 
-        activeDashboard = new Main(walletService);
+        activeDashboard = new Main(walletService, authService);
         activeDashboard.getInitialLoadFuture().get(5, TimeUnit.SECONDS);
         assertEquals("PHP 1,000.00", activeDashboard.getBalanceLabel().getText());
 
-        Transaction sendTxn = activeDashboard.submitSendMoneyAsync("09171001005", "250.00", "Dinner split")
+        Transaction sendTxn = activeDashboard.submitSendMoneyAsync("09171001005", "250.00", "Dinner split", "5678")
                 .get(5, TimeUnit.SECONDS);
         assertNotNull(sendTxn);
         assertInstanceOf(SendMoneyTransaction.class, sendTxn,
@@ -497,6 +541,13 @@ public class DashboardAndNavigationTest {
             }
 
             @Override
+            public Transaction transferWithPin(String referenceNumber, String sourceWalletId, String targetWalletId,
+                                               BigDecimal amount, BigDecimal fee, String description, String rawPin) {
+                return walletService.transferWithPin(
+                        referenceNumber, sourceWalletId, targetWalletId, amount, fee, description, rawPin);
+            }
+
+            @Override
             public Transaction cashIn(String referenceNumber, String targetWalletId, String paymentMethodId,
                                       BigDecimal amount, String description) {
                 return walletService.cashIn(referenceNumber, targetWalletId, paymentMethodId, amount, description);
@@ -506,6 +557,13 @@ public class DashboardAndNavigationTest {
             public Transaction cashOut(String referenceNumber, String sourceWalletId, String paymentMethodId,
                                        BigDecimal amount, BigDecimal fee, String description) {
                 return walletService.cashOut(referenceNumber, sourceWalletId, paymentMethodId, amount, fee, description);
+            }
+
+            @Override
+            public Transaction cashOutWithPin(String referenceNumber, String sourceWalletId, String paymentMethodId,
+                                              BigDecimal amount, BigDecimal fee, String description, String rawPin) {
+                return walletService.cashOutWithPin(
+                        referenceNumber, sourceWalletId, paymentMethodId, amount, fee, description, rawPin);
             }
 
             @Override
@@ -607,13 +665,14 @@ public class DashboardAndNavigationTest {
         walletService.cashIn("REQ-HANK-SEED", hankWallet.getWalletId(), null,
                 new BigDecimal("100.00"), "Seed");
         SessionManager.getInstance().login(hank, walletService.getWallet(hankWallet.getWalletId()));
+        authService.setPin(hank.getUserId(), "Secret123", "4321");
 
-        activeDashboard = new Main(walletService);
+        activeDashboard = new Main(walletService, authService);
         activeDashboard.getInitialLoadFuture().get(5, TimeUnit.SECONDS);
         assertEquals("PHP 100.00", activeDashboard.getBalanceLabel().getText());
 
         ExecutionException overdrawEx = assertThrows(ExecutionException.class, () ->
-                activeDashboard.submitCashOperationAsync("CASH_OUT", "BDO", "250.00", "Overdraw")
+                activeDashboard.submitCashOperationAsync("CASH_OUT", "BDO", "250.00", "Overdraw", "4321")
                         .get(5, TimeUnit.SECONDS));
         assertInstanceOf(InsufficientFundsException.class, overdrawEx.getCause());
         assertTrue(activeDashboard.getCashFeedbackLabel().getText().startsWith("Failed:"));
@@ -655,9 +714,12 @@ public class DashboardAndNavigationTest {
             Method attemptLogin = loginClass.getMethod("attemptLogin", String.class, String.class);
             Method verifyTwoFactor = loginClass.getMethod("verifyTwoFactorCode", String.class);
             Method openDashboard = loginClass.getMethod("openDashboard");
+            Method getLastIssuedOtp = loginClass.getMethod("getLastIssuedOtp");
 
             assertTrue((Boolean) attemptLogin.invoke(loginWindow, "09171001013", "Secret123"));
-            assertTrue((Boolean) verifyTwoFactor.invoke(loginWindow, "123456"));
+            String issuedOtp = (String) getLastIssuedOtp.invoke(loginWindow);
+            assertNotNull(issuedOtp);
+            assertTrue((Boolean) verifyTwoFactor.invoke(loginWindow, issuedOtp));
             assertTrue(SessionManager.getInstance().isLoggedIn());
 
             AtomicReference<Main> dashboardRef = new AtomicReference<>();
@@ -715,5 +777,53 @@ public class DashboardAndNavigationTest {
         assertEquals(25, activeDashboard.getRecentTransactionsTable().getRowCount());
         assertEquals("PHP 250.00", activeDashboard.getBalanceLabel().getText());
         assertEquals(Main.DashboardState.READY, activeDashboard.getCurrentState());
+    }
+
+    @Test
+    void testDashboardPinStatusAndFailedPinLockoutTriggersLogout() throws Exception {
+        User lina = authService.registerUser("Lina Sy", "09171001030", "lina@otog.ph", "Secret123");
+        User marco = authService.registerUser("Marco Ong", "09171001031", "marco@otog.ph", "Secret123");
+        Wallet linaWallet = walletService.getWalletByUserId(lina.getUserId());
+        walletService.cashIn("REQ-LINA-SEED", linaWallet.getWalletId(), null,
+                new BigDecimal("500.00"), "Seed");
+        SessionManager.getInstance().login(lina, walletService.getWallet(linaWallet.getWalletId()));
+
+        activeDashboard = new Main(walletService, authService);
+        activeDashboard.getInitialLoadFuture().get(5, TimeUnit.SECONDS);
+
+        assertTrue(activeDashboard.getPinSettingsButton().isEnabled());
+        assertEquals("Set PIN", activeDashboard.getPinSettingsButton().getText());
+        assertTrue(activeDashboard.getPinStatusLabel().getText().contains("Not Set"));
+        assertNotNull(activeDashboard.getCashPinField());
+        assertNotNull(activeDashboard.getSendPinField());
+
+        authService.setPin(lina.getUserId(), "Secret123", "2580");
+        activeDashboard.refreshDashboardAsync().get(5, TimeUnit.SECONDS);
+        assertEquals("Change PIN", activeDashboard.getPinSettingsButton().getText());
+        assertTrue(activeDashboard.getPinStatusLabel().getText().contains("Set"));
+
+        CountDownLatch logoutLatch = new CountDownLatch(1);
+        activeDashboard.setOnLogoutCallback(logoutLatch::countDown);
+
+        // Two wrong PIN attempts fail without terminating session; 3rd locks out and triggers logout
+        for (int i = 1; i <= 2; i++) {
+            ExecutionException badPinEx = assertThrows(ExecutionException.class, () ->
+                    activeDashboard.submitSendMoneyAsync("09171001031", "50.00", "Test", "0000")
+                            .get(5, TimeUnit.SECONDS));
+            assertInstanceOf(WalletException.class, badPinEx.getCause());
+            assertTrue(SessionManager.getInstance().isLoggedIn());
+        }
+
+        ExecutionException lockoutEx = assertThrows(ExecutionException.class, () ->
+                activeDashboard.submitSendMoneyAsync("09171001031", "50.00", "Test", "0000")
+                        .get(5, TimeUnit.SECONDS));
+        assertInstanceOf(WalletException.class, lockoutEx.getCause());
+        assertTrue(logoutLatch.await(5, TimeUnit.SECONDS),
+                "3 failed PIN attempts from dashboard must lock out and invoke logout callback");
+        assertTrue(SessionManager.getInstance().isLockedOutByPin());
+        assertFalse(SessionManager.getInstance().isLoggedIn());
+        assertEquals(new BigDecimal("500.00"), walletService.getBalance(linaWallet.getWalletId()));
+        assertEquals(new BigDecimal("0.00"),
+                walletService.getWalletByUserId(marco.getUserId()).getBalance());
     }
 }
