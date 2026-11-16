@@ -33,10 +33,14 @@ public class TransactionRepository {
     }
 
     public Transaction save(Transaction txn, Connection conn) throws SQLException {
+        String channel = null;
+        if (txn instanceof com.otog.model.CashInOutTransaction cio) {
+            channel = cio.getChannel();
+        }
         String sql = "INSERT INTO transactions (transaction_id, reference_number, source_wallet_id, " +
                 "target_wallet_id, amount, fee, total_amount, currency, type, status, description, " +
-                "created_at, completed_at) " +
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
+                "created_at, completed_at, provider_reference, provider_status, channel) " +
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
         try (PreparedStatement ps = conn.prepareStatement(sql)) {
             ps.setString(1, txn.getTransactionId());
             ps.setString(2, txn.getReferenceNumber());
@@ -51,17 +55,29 @@ public class TransactionRepository {
             ps.setString(11, txn.getDescription());
             ps.setString(12, txn.getCreatedAt().toString());
             ps.setString(13, txn.getCompletedAt() != null ? txn.getCompletedAt().toString() : null);
+            ps.setString(14, txn.getProviderReference());
+            ps.setString(15, txn.getProviderStatus());
+            ps.setString(16, channel);
             ps.executeUpdate();
             return txn;
         }
     }
 
     public void updateStatus(String transactionId, TransactionStatus status, LocalDateTime completedAt, Connection conn) throws SQLException {
-        String sql = "UPDATE transactions SET status = ?, completed_at = ? WHERE transaction_id = ?";
+        updateStatus(transactionId, status, null, null, completedAt, conn);
+    }
+
+    public void updateStatus(String transactionId, TransactionStatus status, String providerReference, String providerStatus, LocalDateTime completedAt, Connection conn) throws SQLException {
+        String sql = "UPDATE transactions SET status = ?, " +
+                "provider_reference = COALESCE(?, provider_reference), " +
+                "provider_status = COALESCE(?, provider_status), " +
+                "completed_at = ? WHERE transaction_id = ?";
         try (PreparedStatement ps = conn.prepareStatement(sql)) {
             ps.setString(1, status.name());
-            ps.setString(2, completedAt != null ? completedAt.toString() : null);
-            ps.setString(3, transactionId);
+            ps.setString(2, providerReference);
+            ps.setString(3, providerStatus);
+            ps.setString(4, completedAt != null ? completedAt.toString() : null);
+            ps.setString(5, transactionId);
             ps.executeUpdate();
         }
     }
@@ -76,7 +92,8 @@ public class TransactionRepository {
 
     public Optional<Transaction> findById(String transactionId, Connection conn) throws SQLException {
         String sql = "SELECT transaction_id, reference_number, source_wallet_id, target_wallet_id, " +
-                "amount, fee, total_amount, currency, type, status, description, created_at, completed_at " +
+                "amount, fee, total_amount, currency, type, status, description, created_at, completed_at, " +
+                "provider_reference, provider_status, channel " +
                 "FROM transactions WHERE transaction_id = ?";
         try (PreparedStatement ps = conn.prepareStatement(sql)) {
             ps.setString(1, transactionId);
@@ -99,7 +116,8 @@ public class TransactionRepository {
 
     public Optional<Transaction> findByReferenceNumber(String refNum, Connection conn) throws SQLException {
         String sql = "SELECT transaction_id, reference_number, source_wallet_id, target_wallet_id, " +
-                "amount, fee, total_amount, currency, type, status, description, created_at, completed_at " +
+                "amount, fee, total_amount, currency, type, status, description, created_at, completed_at, " +
+                "provider_reference, provider_status, channel " +
                 "FROM transactions WHERE reference_number = ?";
         try (PreparedStatement ps = conn.prepareStatement(sql)) {
             ps.setString(1, refNum);
@@ -140,7 +158,8 @@ public class TransactionRepository {
 
     public List<Transaction> findByWalletId(String walletId, Connection conn) throws SQLException {
         String sql = "SELECT transaction_id, reference_number, source_wallet_id, target_wallet_id, " +
-                "amount, fee, total_amount, currency, type, status, description, created_at, completed_at " +
+                "amount, fee, total_amount, currency, type, status, description, created_at, completed_at, " +
+                "provider_reference, provider_status, channel " +
                 "FROM transactions WHERE source_wallet_id = ? OR target_wallet_id = ? ORDER BY created_at DESC";
         List<Transaction> list = new ArrayList<>();
         try (PreparedStatement ps = conn.prepareStatement(sql)) {
@@ -196,7 +215,8 @@ public class TransactionRepository {
 
     public List<Transaction> findAll(Connection conn) throws SQLException {
         String sql = "SELECT transaction_id, reference_number, source_wallet_id, target_wallet_id, " +
-                "amount, fee, total_amount, currency, type, status, description, created_at, completed_at " +
+                "amount, fee, total_amount, currency, type, status, description, created_at, completed_at, " +
+                "provider_reference, provider_status, channel " +
                 "FROM transactions ORDER BY created_at DESC";
         List<Transaction> list = new ArrayList<>();
         try (Statement st = conn.createStatement();
@@ -209,7 +229,18 @@ public class TransactionRepository {
     }
 
     private Transaction mapRow(ResultSet rs) throws SQLException {
-        Transaction t = new Transaction();
+        TransactionType type = TransactionType.valueOf(rs.getString("type"));
+        Transaction t;
+        if (type == TransactionType.CASH_IN || type == TransactionType.CASH_OUT) {
+            com.otog.model.CashInOutTransaction cio = new com.otog.model.CashInOutTransaction();
+            cio.setCashOperationType(type == TransactionType.CASH_IN ? "CASH_IN" : "CASH_OUT");
+            try {
+                cio.setChannel(rs.getString("channel"));
+            } catch (SQLException ignored) {}
+            t = cio;
+        } else {
+            t = new Transaction();
+        }
         t.setTransactionId(rs.getString("transaction_id"));
         t.setReferenceNumber(rs.getString("reference_number"));
         t.setSourceWalletId(rs.getString("source_wallet_id"));
@@ -218,7 +249,7 @@ public class TransactionRepository {
         t.setFee(new BigDecimal(rs.getString("fee")).setScale(MoneyUtil.DEFAULT_SCALE, MoneyUtil.DEFAULT_ROUNDING));
         t.setTotalAmount(new BigDecimal(rs.getString("total_amount")).setScale(MoneyUtil.DEFAULT_SCALE, MoneyUtil.DEFAULT_ROUNDING));
         t.setCurrency(rs.getString("currency"));
-        t.setType(TransactionType.valueOf(rs.getString("type")));
+        t.setType(type);
         t.setStatus(TransactionStatus.valueOf(rs.getString("status")));
         t.setDescription(rs.getString("description"));
         t.setCreatedAt(LocalDateTime.parse(rs.getString("created_at")));
@@ -226,6 +257,12 @@ public class TransactionRepository {
         if (comp != null) {
             t.setCompletedAt(LocalDateTime.parse(comp));
         }
+        try {
+            t.setProviderReference(rs.getString("provider_reference"));
+        } catch (SQLException ignored) {}
+        try {
+            t.setProviderStatus(rs.getString("provider_status"));
+        } catch (SQLException ignored) {}
         return t;
     }
 }
