@@ -45,6 +45,10 @@ public interface PaymentProviderFactory {
         return new PendingPaymentProviderFactory();
     }
 
+    static PaymentProviderFactory unknownFactory() {
+        return new UnknownPaymentProviderFactory();
+    }
+
     // --- Direct Factory Methods for BankApiClient ---
 
     static BankApiClient createSuccessClient() {
@@ -61,6 +65,10 @@ public interface PaymentProviderFactory {
 
     static BankApiClient createPendingClient() {
         return pendingFactory().createBankApiClient();
+    }
+
+    static BankApiClient createUnknownClient() {
+        return unknownFactory().createBankApiClient();
     }
 
     static BankApiClient createClient(BankResponseStatus status) {
@@ -87,6 +95,10 @@ public interface PaymentProviderFactory {
 
     static BankAdapter createPendingAdapter() {
         return pendingFactory().createBankAdapter();
+    }
+
+    static BankAdapter createUnknownAdapter() {
+        return unknownFactory().createBankAdapter();
     }
 
     static BankAdapter createAdapter(BankResponseStatus status) {
@@ -152,6 +164,16 @@ public interface PaymentProviderFactory {
 
         public PendingPaymentProviderFactory(BankResponseStatus lookupMode) {
             super(BankResponseStatus.PENDING, lookupMode);
+        }
+    }
+
+    class UnknownPaymentProviderFactory extends DeterministicPaymentProviderFactory {
+        public UnknownPaymentProviderFactory() {
+            super(BankResponseStatus.UNKNOWN, BankResponseStatus.UNKNOWN);
+        }
+
+        public UnknownPaymentProviderFactory(BankResponseStatus lookupMode) {
+            super(BankResponseStatus.UNKNOWN, lookupMode);
         }
     }
 }

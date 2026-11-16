@@ -476,19 +476,23 @@ public class WalletService implements WalletOperations {
                 if (paymentMethodId != null) {
                     pm = paymentMethodRepository.findById(paymentMethodId, conn)
                             .orElseThrow(() -> new EntityNotFoundException("PaymentMethod", paymentMethodId));
+                    if (!pm.getUserId().equals(wallet.getUserId())) {
+                        throw new WalletException("Payment method does not belong to wallet owner: " + paymentMethodId);
+                    }
+                    if (pm.getStatus() != PaymentMethodStatus.ACTIVE) {
+                        throw new WalletException("Payment method is not active: " + pm.getStatus());
+                    }
                 } else {
                     pm = paymentMethodRepository.findDefaultByUserId(wallet.getUserId(), conn).orElse(null);
+                    if (pm != null && pm.getStatus() != PaymentMethodStatus.ACTIVE) {
+                        pm = null;
+                    }
                 }
 
                 String channel = (pm != null && pm.getProviderName() != null) ? pm.getProviderName() : "Bank";
                 String txnId = IdGenerator.nextTransactionId();
                 String desc = description != null ? description : "Cash In via " + channel;
 
-<<<<<<< Updated upstream
-                CashInOutTransaction txn = buildCashInOutTransaction(
-                        txnId, referenceNumber, targetWalletId, validAmount, MoneyUtil.ZERO, "CASH_IN", pm, desc);
-                transactionRepository.save(txn, conn);
-=======
                 BankApiResponse response = bankApiClient.cashIn(referenceNumber, pm, validAmount);
 
                 CashInOutTransaction txn = new CashInOutTransaction(
@@ -505,7 +509,6 @@ public class WalletService implements WalletOperations {
                 if (response != null && response.getStatus() != null) {
                     txn.setProviderStatus(response.getStatus().name());
                 }
->>>>>>> Stashed changes
 
                 if (response != null && response.isSuccess()) {
                     // Credit cash-in only on success
@@ -590,18 +593,23 @@ public class WalletService implements WalletOperations {
                 if (paymentMethodId != null) {
                     pm = paymentMethodRepository.findById(paymentMethodId, conn)
                             .orElseThrow(() -> new EntityNotFoundException("PaymentMethod", paymentMethodId));
+                    if (!pm.getUserId().equals(wallet.getUserId())) {
+                        throw new WalletException("Payment method does not belong to wallet owner: " + paymentMethodId);
+                    }
+                    if (pm.getStatus() != PaymentMethodStatus.ACTIVE) {
+                        throw new WalletException("Payment method is not active: " + pm.getStatus());
+                    }
                 } else {
                     pm = paymentMethodRepository.findDefaultByUserId(wallet.getUserId(), conn).orElse(null);
+                    if (pm != null && pm.getStatus() != PaymentMethodStatus.ACTIVE) {
+                        pm = null;
+                    }
                 }
 
                 String channel = (pm != null && pm.getProviderName() != null) ? pm.getProviderName() : "Bank";
                 String txnId = IdGenerator.nextTransactionId();
                 String desc = description != null ? description : "Cash Out to " + channel;
 
-<<<<<<< Updated upstream
-                CashInOutTransaction txn = buildCashInOutTransaction(
-                        txnId, referenceNumber, sourceWalletId, validAmount, validFee, "CASH_OUT", pm, desc);
-=======
                 CashInOutTransaction txn = new CashInOutTransaction(
                         txnId,
                         referenceNumber,
@@ -614,7 +622,6 @@ public class WalletService implements WalletOperations {
                 );
                 txn.setDescription(desc);
                 txn.setStatus(TransactionStatus.PENDING);
->>>>>>> Stashed changes
                 transactionRepository.save(txn, conn);
 
                 // Reserve cash-out funds until settlement, releasing them on confirmed failure
@@ -696,6 +703,25 @@ public class WalletService implements WalletOperations {
      * Repeated provider responses never duplicate money movement.
      */
     public Transaction statusLookup(String referenceNumber) {
+        return applyProviderResponse(referenceNumber, null);
+    }
+
+    public Transaction queryTransactionStatus(String referenceNumber) {
+        return statusLookup(referenceNumber);
+    }
+
+    public Transaction syncStatus(String referenceNumber) {
+        return statusLookup(referenceNumber);
+    }
+
+    public Transaction handleProviderResponse(String referenceNumber, BankApiResponse response) {
+        if (response == null) {
+            throw new IllegalArgumentException("Bank response cannot be null");
+        }
+        return applyProviderResponse(referenceNumber, response);
+    }
+
+    private Transaction applyProviderResponse(String referenceNumber, BankApiResponse directResponse) {
         validateReferenceNumber(referenceNumber);
 
         Transaction existingTxn = transactionRepository.findByReferenceNumber(referenceNumber)
@@ -726,7 +752,10 @@ public class WalletService implements WalletOperations {
                     return currentTxn;
                 }
 
-                BankApiResponse response = bankApiClient.checkStatus(referenceNumber, currentTxn.getProviderReference());
+                BankApiResponse response = directResponse != null
+                        ? directResponse
+                        : bankApiClient.checkStatus(referenceNumber, currentTxn.getProviderReference());
+
                 if (response == null) {
                     return currentTxn;
                 }
@@ -773,7 +802,7 @@ public class WalletService implements WalletOperations {
                         transactionRepository.updateStatus(currentTxn.getTransactionId(), TransactionStatus.FAILED,
                                 currentTxn.getProviderReference(), currentTxn.getProviderStatus(), currentTxn.getCompletedAt(), conn);
                     } else {
-                        // Unknown outcomes stay pending
+                        // Unknown / pending / timeout outcomes stay pending
                         transactionRepository.updateStatus(currentTxn.getTransactionId(), TransactionStatus.PENDING,
                                 currentTxn.getProviderReference(), currentTxn.getProviderStatus(), null, conn);
                     }
@@ -813,7 +842,7 @@ public class WalletService implements WalletOperations {
                         transactionRepository.updateStatus(currentTxn.getTransactionId(), TransactionStatus.FAILED,
                                 currentTxn.getProviderReference(), currentTxn.getProviderStatus(), currentTxn.getCompletedAt(), conn);
                     } else {
-                        // Unknown outcomes stay pending; funds remain reserved
+                        // Unknown / pending / timeout outcomes stay pending; funds remain reserved
                         transactionRepository.updateStatus(currentTxn.getTransactionId(), TransactionStatus.PENDING,
                                 currentTxn.getProviderReference(), currentTxn.getProviderStatus(), null, conn);
                     }
@@ -824,24 +853,6 @@ public class WalletService implements WalletOperations {
         } finally {
             lock.unlock();
         }
-    }
-
-    public Transaction queryTransactionStatus(String referenceNumber) {
-        return statusLookup(referenceNumber);
-    }
-
-    public Transaction syncStatus(String referenceNumber) {
-        return statusLookup(referenceNumber);
-    }
-
-    public Transaction handleProviderResponse(String referenceNumber, BankApiResponse response) {
-        if (response == null) {
-            throw new IllegalArgumentException("Bank response cannot be null");
-        }
-        if (bankApiClient.getAdapter() instanceof MockBankAdapter mock) {
-            mock.setReferenceLookupStatus(referenceNumber, response.getStatus());
-        }
-        return statusLookup(referenceNumber);
     }
 
     @Override

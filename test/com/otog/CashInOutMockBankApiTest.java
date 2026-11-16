@@ -1,9 +1,11 @@
 package com.otog;
 
 import com.otog.database.DatabaseManager;
+import com.otog.exception.WalletException;
 import com.otog.model.*;
 import com.otog.repository.*;
 import com.otog.service.*;
+import com.otog.ui.Main;
 import com.otog.util.IdGenerator;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -13,6 +15,7 @@ import org.junit.jupiter.api.Test;
 import java.math.BigDecimal;
 import java.util.List;
 import java.util.Optional;
+import java.util.concurrent.TimeUnit;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -34,6 +37,7 @@ public class CashInOutMockBankApiTest {
     private User testUser;
     private Wallet testWallet;
     private PaymentMethod testBankMethod;
+    private Main activeDashboard;
 
     @BeforeEach
     void setUp() {
@@ -60,6 +64,11 @@ public class CashInOutMockBankApiTest {
 
     @AfterEach
     void tearDown() {
+        if (activeDashboard != null) {
+            activeDashboard.dispose();
+            activeDashboard = null;
+        }
+        SessionManager.getInstance().logout();
         databaseManager.close();
     }
 
@@ -352,5 +361,182 @@ public class CashInOutMockBankApiTest {
         assertTrue(receipt.contains("Operation:    CASH_IN"));
         assertTrue(receipt.contains("Channel:      BDO Unibank"));
         assertTrue(receipt.contains("Status:       COMPLETED"));
+    }
+
+    @Test
+    @DisplayName("QA5: Distinct UNKNOWN and FAILED outcomes keep UNKNOWN pending and fail FAILED cleanly")
+    void testDistinctUnknownAndFailedStatuses() {
+        // 1. UNKNOWN stays PENDING with providerStatus = UNKNOWN
+        walletService.setPaymentProviderFactory(PaymentProviderFactory.unknownFactory());
+        Transaction unknownIn = walletService.cashIn("CIN-UNK-01", testWallet.getWalletId(),
+                testBankMethod.getPaymentMethodId(), new BigDecimal("250.00"), "Unknown Cash In");
+
+        assertEquals(TransactionStatus.PENDING, unknownIn.getStatus());
+        assertEquals("UNKNOWN", unknownIn.getProviderStatus());
+        assertEquals(new BigDecimal("1000.00"), walletService.getBalance(testWallet.getWalletId()));
+
+        // Lookup while UNKNOWN still returns UNKNOWN and stays PENDING
+        Transaction stillUnknown = walletService.statusLookup("CIN-UNK-01");
+        assertEquals(TransactionStatus.PENDING, stillUnknown.getStatus());
+        assertEquals("UNKNOWN", stillUnknown.getProviderStatus());
+
+        // 2. FAILED marks FAILED with providerStatus = FAILED and releases reserved cash-out funds
+        walletService.setPaymentProviderFactory(PaymentProviderFactory.forMode(BankResponseStatus.FAILED));
+        Transaction failedOut = walletService.cashOut("COUT-ERR-01", testWallet.getWalletId(),
+                testBankMethod.getPaymentMethodId(), new BigDecimal("150.00"), new BigDecimal("5.00"), "Failed Out");
+
+        assertEquals(TransactionStatus.FAILED, failedOut.getStatus());
+        assertEquals("FAILED", failedOut.getProviderStatus());
+        assertEquals(new BigDecimal("1000.00"), walletService.getBalance(testWallet.getWalletId()));
+    }
+
+    @Test
+    @DisplayName("QA6: PaymentMethod ownership and ACTIVE status enforced; new users auto-seed demo bank accounts")
+    void testPaymentMethodValidationAndRegistrationSeeding() {
+        AuthServiceImpl authService = new AuthServiceImpl(databaseManager);
+        User newUser = authService.registerUser("Maria Santos", "09175551234", "maria@otog.ph", "Secret123");
+        Wallet newWallet = walletService.getWalletByUserId(newUser.getUserId());
+
+        // Newly registered user automatically has seeded demo bank accounts
+        List<PaymentMethod> newUserMethods = walletService.getPaymentMethodsByUserId(newUser.getUserId());
+        assertEquals(3, newUserMethods.size());
+        assertTrue(newUserMethods.stream().anyMatch(pm -> "BDO Unibank".equals(pm.getProviderName()) && pm.isDefault()));
+
+        // Ownership validation: testUser cannot use newUser's payment method
+        String otherPmId = newUserMethods.get(0).getPaymentMethodId();
+        assertThrows(WalletException.class, () ->
+                walletService.cashIn("CIN-WRONG-OWNER", testWallet.getWalletId(), otherPmId,
+                        new BigDecimal("100.00"), "Cross-user pm"));
+        assertThrows(WalletException.class, () ->
+                walletService.cashOut("COUT-WRONG-OWNER", testWallet.getWalletId(), otherPmId,
+                        new BigDecimal("100.00"), BigDecimal.ZERO, "Cross-user pm"));
+
+        // Fund Maria's wallet via active default method before testing cashOut with inactive method
+        walletService.cashIn("CIN-FUND-MARIA", newWallet.getWalletId(), newUserMethods.get(0).getPaymentMethodId(),
+                new BigDecimal("200.00"), "Seed Maria");
+
+        // Active status validation: inactive payment method is rejected
+        PaymentMethod inactivePm = newUserMethods.get(1);
+        inactivePm.setStatus(PaymentMethodStatus.INACTIVE);
+        paymentMethodRepository.update(inactivePm);
+
+        assertThrows(WalletException.class, () ->
+                walletService.cashIn("CIN-INACTIVE-PM", newWallet.getWalletId(), inactivePm.getPaymentMethodId(),
+                        new BigDecimal("100.00"), "Inactive pm"));
+        assertThrows(WalletException.class, () ->
+                walletService.cashOut("COUT-INACTIVE-PM", newWallet.getWalletId(), inactivePm.getPaymentMethodId(),
+                        new BigDecimal("50.00"), BigDecimal.ZERO, "Inactive pm"));
+    }
+
+    @Test
+    @DisplayName("QA7: handleProviderResponse applies supplied response directly without requiring MockBankAdapter")
+    void testHandleProviderResponseWithNonMockAdapter() {
+        // Use a custom non-mock BankAdapter
+        BankAdapter customAdapter = new BankAdapter() {
+            @Override
+            public BankApiResponse processCashIn(String referenceNumber, PaymentMethod paymentMethod, BigDecimal amount) {
+                return BankApiResponse.pending("EXT-INIT-" + referenceNumber, "Queued externally");
+            }
+
+            @Override
+            public BankApiResponse processCashOut(String referenceNumber, PaymentMethod paymentMethod, BigDecimal amount) {
+                return BankApiResponse.pending("EXT-INIT-" + referenceNumber, "Queued externally");
+            }
+
+            @Override
+            public BankApiResponse queryStatus(String referenceNumber, String providerReference) {
+                return BankApiResponse.pending(providerReference, "Still pending");
+            }
+        };
+        walletService.setBankApiClient(new BankApiClient(customAdapter));
+
+        Transaction pendingIn = walletService.cashIn("CIN-CUSTOM-01", testWallet.getWalletId(),
+                testBankMethod.getPaymentMethodId(), new BigDecimal("200.00"), "Custom adapter");
+        assertEquals(TransactionStatus.PENDING, pendingIn.getStatus());
+        assertEquals("EXT-INIT-CIN-CUSTOM-01", pendingIn.getProviderReference());
+
+        // Direct webhook / callback with new provider reference applies without mutating customAdapter
+        Transaction settled = walletService.handleProviderResponse("CIN-CUSTOM-01",
+                BankApiResponse.success("EXT-FINAL-999", "Webhook settled"));
+        assertEquals(TransactionStatus.COMPLETED, settled.getStatus());
+        assertEquals("EXT-FINAL-999", settled.getProviderReference());
+        assertEquals("SUCCESS", settled.getProviderStatus());
+        assertEquals(new BigDecimal("1200.00"), walletService.getBalance(testWallet.getWalletId()));
+    }
+
+    @Test
+    @DisplayName("QA3: findRecentByWalletId preserves providerReference, providerStatus, and channel")
+    void testFindRecentByWalletIdPreservesProviderFields() {
+        walletService.setPaymentProviderFactory(PaymentProviderFactory.successFactory());
+        Transaction txn = walletService.cashIn("CIN-RECENT-01", testWallet.getWalletId(),
+                testBankMethod.getPaymentMethodId(), new BigDecimal("125.00"), "Recent query check");
+
+        List<Transaction> recent = walletService.getRecentTransactions(testWallet.getWalletId(), 10);
+        Transaction loaded = recent.stream()
+                .filter(t -> "CIN-RECENT-01".equals(t.getReferenceNumber()))
+                .findFirst()
+                .orElseThrow();
+
+        assertInstanceOf(CashInOutTransaction.class, loaded);
+        CashInOutTransaction cio = (CashInOutTransaction) loaded;
+        assertEquals(txn.getProviderReference(), cio.getProviderReference());
+        assertEquals("SUCCESS", cio.getProviderStatus());
+        assertEquals("BDO Unibank", cio.getChannel());
+    }
+
+    @Test
+    @DisplayName("QA4: Main dashboard UI wires PaymentMethod, provider modes, accurate feedback, and status lookup")
+    void testDashboardUiCap07Integration() throws Exception {
+        AuthServiceImpl authService = new AuthServiceImpl(databaseManager);
+        User uiUser = authService.registerUser("UI Tester", "09178889900", "ui@otog.ph", "Secret123");
+        Wallet uiWallet = walletService.getWalletByUserId(uiUser.getUserId());
+        SessionManager.getInstance().login(uiUser, uiWallet);
+
+        activeDashboard = new Main(walletService, authService);
+        activeDashboard.getInitialLoadFuture().get(5, TimeUnit.SECONDS);
+
+        // Linked demo bank accounts should be populated in combo box with default selected
+        assertNotNull(activeDashboard.getSelectedPaymentMethodId());
+        assertTrue(activeDashboard.getPaymentMethodComboBox().getItemCount() >= 4);
+
+        // Switch mode to REJECTED via UI combo and submit cash-in -> feedback shows failed/rejected, balance unchanged
+        activeDashboard.getProviderModeComboBox().setSelectedItem("REJECTED");
+        Transaction failedTxn = activeDashboard.submitCashOperationAsync(
+                "CASH_IN", "BDO", activeDashboard.getSelectedPaymentMethodId(), "300.00", "UI reject", null)
+                .get(5, TimeUnit.SECONDS);
+        assertEquals(TransactionStatus.FAILED, failedTxn.getStatus());
+        assertTrue(activeDashboard.getCashFeedbackLabel().getText().contains("failed/rejected"));
+        assertTrue(activeDashboard.getCashFeedbackLabel().getText().contains(failedTxn.getProviderReference()));
+        assertEquals(new BigDecimal("0.00"), SessionManager.getInstance().getCurrentWallet().getBalance());
+
+        // Switch mode to TIMEOUT via UI combo -> feedback shows pending settlement
+        activeDashboard.getProviderModeComboBox().setSelectedItem("TIMEOUT");
+        Transaction pendingTxn = activeDashboard.submitCashOperationAsync(
+                "CASH_IN", "BDO", activeDashboard.getSelectedPaymentMethodId(), "500.00", "UI timeout", null)
+                .get(5, TimeUnit.SECONDS);
+        assertEquals(TransactionStatus.PENDING, pendingTxn.getStatus());
+        assertTrue(activeDashboard.getCashFeedbackLabel().getText().contains("pending settlement"));
+        assertEquals("PHP 0.00", activeDashboard.getBalanceLabel().getText());
+
+        // Verify table displays Provider Ref and Status [TIMEOUT]
+        assertTrue(activeDashboard.getRecentTransactionsTable().getRowCount() >= 2);
+        int row = -1;
+        for (int i = 0; i < activeDashboard.getRecentTransactionsTable().getRowCount(); i++) {
+            if (pendingTxn.getReferenceNumber().equals(activeDashboard.getRecentTransactionsTable().getValueAt(i, 1))) {
+                row = i;
+                break;
+            }
+        }
+        assertTrue(row >= 0);
+        assertTrue(activeDashboard.getRecentTransactionsTable().getValueAt(row, 6).toString().contains("PENDING [TIMEOUT]"));
+        assertEquals(pendingTxn.getProviderReference(), activeDashboard.getRecentTransactionsTable().getValueAt(row, 7));
+
+        // Switch provider mode to SUCCESS and trigger status lookup via UI async helper
+        activeDashboard.getProviderModeComboBox().setSelectedItem("SUCCESS");
+        Transaction settledTxn = activeDashboard.submitStatusLookupAsync(pendingTxn.getReferenceNumber())
+                .get(5, TimeUnit.SECONDS);
+        assertEquals(TransactionStatus.COMPLETED, settledTxn.getStatus());
+        assertTrue(activeDashboard.getCashFeedbackLabel().getText().contains("settled COMPLETED"));
+        assertEquals("PHP 500.00", activeDashboard.getBalanceLabel().getText());
     }
 }

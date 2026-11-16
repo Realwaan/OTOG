@@ -188,7 +188,8 @@ public class TransactionRepository {
 
     public List<Transaction> findRecentByWalletId(String walletId, int limit, Connection conn) throws SQLException {
         String sql = "SELECT transaction_id, reference_number, source_wallet_id, target_wallet_id, " +
-                "amount, fee, total_amount, currency, type, status, description, created_at, completed_at " +
+                "amount, fee, total_amount, currency, type, status, description, created_at, completed_at, " +
+                "provider_reference, provider_status, channel " +
                 "FROM transactions WHERE source_wallet_id = ? OR target_wallet_id = ? " +
                 "ORDER BY created_at DESC, transaction_id DESC, reference_number ASC LIMIT ?";
         List<Transaction> list = new ArrayList<>();

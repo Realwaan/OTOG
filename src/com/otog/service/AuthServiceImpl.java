@@ -3,6 +3,8 @@ package com.otog.service;
 import com.otog.database.DatabaseManager;
 import com.otog.exception.OtogException;
 import com.otog.model.Credential;
+import com.otog.model.PaymentMethod;
+import com.otog.model.PaymentMethodType;
 import com.otog.model.User;
 import com.otog.model.UserRole;
 import com.otog.model.UserStatus;
@@ -104,13 +106,29 @@ public class AuthServiceImpl implements AuthService {
         String walletId = IdGenerator.nextWalletId();
         Wallet wallet = new Wallet(walletId, userId, MoneyUtil.ZERO, "PHP");
 
-        // Atomic transaction: persist user, credentials, and wallet in a single rollback unit
+        // Atomic transaction: persist user, credentials, wallet, and seeded demo bank accounts in a single rollback unit
         return databaseManager.executeInTransaction(conn -> {
             userRepository.save(user, conn);
             credentialRepository.save(credential, conn);
             walletService.getWalletRepository().save(wallet, conn);
+            seedDemoPaymentMethodsForUser(userId, name.trim(), conn);
             return user;
         });
+    }
+
+    private void seedDemoPaymentMethodsForUser(String userId, String userName, java.sql.Connection conn) throws java.sql.SQLException {
+        PaymentMethod bdo = new PaymentMethod(IdGenerator.nextPaymentMethodId(), userId,
+                PaymentMethodType.BANK_ACCOUNT, "BDO Unibank", userName + " BDO Demo", "•••• 1234");
+        bdo.setDefault(true);
+        walletService.getPaymentMethodRepository().save(bdo, conn);
+
+        PaymentMethod bpi = new PaymentMethod(IdGenerator.nextPaymentMethodId(), userId,
+                PaymentMethodType.BANK_ACCOUNT, "Bank of the Philippine Islands (BPI)", userName + " BPI Demo", "•••• 5678");
+        walletService.getPaymentMethodRepository().save(bpi, conn);
+
+        PaymentMethod metro = new PaymentMethod(IdGenerator.nextPaymentMethodId(), userId,
+                PaymentMethodType.BANK_ACCOUNT, "Metrobank", userName + " Metrobank Demo", "•••• 9012");
+        walletService.getPaymentMethodRepository().save(metro, conn);
     }
 
     @Override

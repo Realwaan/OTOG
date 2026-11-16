@@ -56,6 +56,10 @@ public class BankApiResponse {
         return status != null && status.isUncertain();
     }
 
+    public boolean isUnknown() {
+        return status == BankResponseStatus.UNKNOWN;
+    }
+
     public static BankApiResponse success(String providerRef, String message) {
         return new BankApiResponse(BankResponseStatus.SUCCESS, providerRef, "200", message);
     }
@@ -74,6 +78,10 @@ public class BankApiResponse {
 
     public static BankApiResponse pending(String providerRef, String message) {
         return new BankApiResponse(BankResponseStatus.PENDING, providerRef, "102", message);
+    }
+
+    public static BankApiResponse unknown(String providerRef, String message) {
+        return new BankApiResponse(BankResponseStatus.UNKNOWN, providerRef, "102", message);
     }
 
     @Override

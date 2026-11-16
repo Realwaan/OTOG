@@ -1,5 +1,6 @@
 package com.otog.service;
 
+import com.otog.model.PaymentMethod;
 import com.otog.model.Transaction;
 import com.otog.model.Wallet;
 
@@ -60,4 +61,15 @@ public interface WalletOperations {
 
     Transaction cashOutWithPin(String referenceNumber, String sourceWalletId, String paymentMethodId,
                                BigDecimal amount, BigDecimal fee, String description, String rawPin);
+
+    default List<PaymentMethod> getPaymentMethodsByUserId(String userId) {
+        return Collections.emptyList();
+    }
+
+    default Transaction statusLookup(String referenceNumber) {
+        throw new UnsupportedOperationException("Status lookup not supported");
+    }
+
+    default void setPaymentProviderFactory(PaymentProviderFactory factory) {
+    }
 }

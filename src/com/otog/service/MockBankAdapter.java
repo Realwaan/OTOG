@@ -98,7 +98,8 @@ public class MockBankAdapter implements BankAdapter {
             case FAILED -> BankApiResponse.failed(providerRef,
                     customFailureMessage != null ? customFailureMessage : "Bank processing system error");
             case TIMEOUT -> BankApiResponse.timeout(providerRef, "Bank gateway connection timeout during cash-in");
-            case PENDING, UNKNOWN -> BankApiResponse.pending(providerRef, "Cash-in deposit pending bank verification");
+            case PENDING -> BankApiResponse.pending(providerRef, "Cash-in deposit pending bank verification");
+            case UNKNOWN -> BankApiResponse.unknown(providerRef, "Transaction outcome unknown; awaiting bank reconciliation");
         };
     }
 
@@ -115,7 +116,8 @@ public class MockBankAdapter implements BankAdapter {
             case FAILED -> BankApiResponse.failed(providerRef,
                     customFailureMessage != null ? customFailureMessage : "Interbank clearing network failure");
             case TIMEOUT -> BankApiResponse.timeout(providerRef, "Bank gateway timed out waiting for cash-out acknowledgment");
-            case PENDING, UNKNOWN -> BankApiResponse.pending(providerRef, "Cash-out transfer queued for clearing settlement");
+            case PENDING -> BankApiResponse.pending(providerRef, "Cash-out transfer queued for clearing settlement");
+            case UNKNOWN -> BankApiResponse.unknown(providerRef, "Transaction outcome unknown; awaiting bank reconciliation");
         };
     }
 
@@ -138,7 +140,8 @@ public class MockBankAdapter implements BankAdapter {
             case FAILED -> BankApiResponse.failed(effectiveProviderRef,
                     customFailureMessage != null ? customFailureMessage : "Bank confirmed transaction failed");
             case TIMEOUT -> BankApiResponse.timeout(effectiveProviderRef, "Bank gateway timed out during status query");
-            case PENDING, UNKNOWN -> BankApiResponse.pending(effectiveProviderRef, "Transaction still pending bank settlement");
+            case PENDING -> BankApiResponse.pending(effectiveProviderRef, "Transaction still pending bank settlement");
+            case UNKNOWN -> BankApiResponse.unknown(effectiveProviderRef, "Transaction outcome unknown; awaiting bank reconciliation");
         };
     }
 }
