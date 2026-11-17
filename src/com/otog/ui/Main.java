@@ -518,19 +518,6 @@ public class Main extends JFrame {
         txtCashAmount.addActionListener(e -> handleInteractiveCashSubmit());
         txtCashNote.addActionListener(e -> handleInteractiveCashSubmit());
         txtCashPin.addActionListener(e -> handleInteractiveCashSubmit());
-        btnSubmitCashOp.addActionListener(e -> {
-            String op = (String) cmbCashOperation.getSelectedItem();
-            String pin = new String(txtCashPin.getPassword());
-            txtCashPin.setText("");
-            submitCashOperationAsync(
-                    op,
-                    (String) cmbCashChannel.getSelectedItem(),
-                    getSelectedPaymentMethodId(),
-                    txtCashAmount.getText(),
-                    txtCashNote.getText(),
-                    pin
-            );
-        });
 
         wrapper.add(form, BorderLayout.NORTH);
         return wrapper;
@@ -1486,6 +1473,8 @@ public class Main extends JFrame {
         if (choice == JOptionPane.YES_OPTION) {
             openPinSettingsDialog();
         }
+    }
+
     public CompletableFuture<Transaction> submitStatusLookupAsync(String referenceNumber) {
         CompletableFuture<Transaction> future = new CompletableFuture<>();
         runOnEdt(() -> {

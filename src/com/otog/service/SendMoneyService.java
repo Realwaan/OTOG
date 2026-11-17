@@ -1,6 +1,5 @@
 package com.otog.service;
 
-import com.otog.exception.DuplicateTransactionException;
 import com.otog.exception.EntityNotFoundException;
 import com.otog.exception.InsufficientFundsException;
 import com.otog.exception.InvalidAmountException;
