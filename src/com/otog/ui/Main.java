@@ -1,15 +1,16 @@
 package com.otog.ui;
 
+import com.intellij.uiDesigner.core.GridConstraints;
+import com.intellij.uiDesigner.core.GridLayoutManager;
+import com.intellij.uiDesigner.core.Spacer;
 import com.otog.database.DatabaseManager;
 import com.otog.exception.WalletException;
-import com.otog.model.AdminAction;
 import com.otog.model.PaymentMethod;
 import com.otog.model.PaymentMethodStatus;
 import com.otog.model.Transaction;
 import com.otog.model.TransactionStatus;
 import com.otog.model.TransactionType;
 import com.otog.model.User;
-import com.otog.model.UserRole;
 import com.otog.model.Wallet;
 import com.otog.service.AdminService;
 import com.otog.service.AuthService;
@@ -17,9 +18,10 @@ import com.otog.service.AuthServiceImpl;
 import com.otog.service.BankResponseStatus;
 import com.otog.service.InvestmentService;
 import com.otog.service.LoanService;
-import com.otog.service.SendMoneyService;
 import com.otog.service.PaymentProviderFactory;
+import com.otog.service.SendMoneyService;
 import com.otog.service.SessionManager;
+import com.otog.service.StatementFileService;
 import com.otog.service.WalletOperations;
 import com.otog.service.WalletService;
 import com.otog.util.IdGenerator;
@@ -30,14 +32,15 @@ import javax.swing.table.DefaultTableModel;
 import java.awt.*;
 import java.awt.event.MouseAdapter;
 import java.awt.event.MouseEvent;
+import java.io.File;
 import java.math.BigDecimal;
+import java.nio.file.Path;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Deque;
 import java.util.EnumMap;
-import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
@@ -45,7 +48,6 @@ import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.ExecutionException;
-import java.util.function.Consumer;
 
 public class Main extends JFrame {
 
@@ -75,6 +77,13 @@ public class Main extends JFrame {
     private boolean suppressHistoryRecording;
     private boolean logoutHandled;
 
+    private JPanel pnlRoot;
+    private JPanel pnlHeader;
+    private JPanel pnlIdentity;
+    private JPanel pnlBalanceAndActions;
+    private JPanel pnlBalanceBox;
+    private JPanel pnlFooter;
+
     private JLabel lblWelcome;
     private JLabel lblWalletId;
     private JLabel lblPinStatus;
@@ -86,11 +95,18 @@ public class Main extends JFrame {
     private JButton btnLogout;
 
     private JTabbedPane tabs;
+    private OverviewPanel overviewPanel;
+    private CashInOutPanel cashInOutPanel;
+    private SendMoneyPanel sendMoneyPanel;
+    private AdminControlsPanel adminControlsPanel;
+    private final StatementFileService statementFileService = new StatementFileService();
 
     private JButton btnNavCashIn;
     private JButton btnNavCashOut;
     private JButton btnNavSendMoney;
     private JButton btnNavPinSettings;
+    private JButton btnExportStatement;
+    private JButton btnLoadStatement;
 
     private CardLayout activityCardLayout;
     private JPanel activityCardPanel;
@@ -101,6 +117,7 @@ public class Main extends JFrame {
     private DefaultTableModel transactionsTableModel;
     private JTable tblTransactions;
     private JButton btnViewReceipt;
+    private JButton btnExportReceipt;
     private JButton btnCheckStatus;
     private JLabel lblActivityFeedback;
 
@@ -184,6 +201,9 @@ public class Main extends JFrame {
         this.investmentService = investmentService;
         this.ownedDatabaseManager = ownedDatabaseManager;
 
+        if (pnlRoot == null) {
+            $$$setupUI$$$();
+        }
         initUI();
         startSessionMonitor();
         this.initialLoadFuture = refreshDashboardAsync();
@@ -196,84 +216,40 @@ public class Main extends JFrame {
         setMinimumSize(new Dimension(840, 560));
         setLocationRelativeTo(null);
 
-        JPanel root = new JPanel(new BorderLayout(12, 12));
-        root.setBorder(BorderFactory.createEmptyBorder(14, 16, 14, 16));
-
-        root.add(buildHeaderPanel(), BorderLayout.NORTH);
-        root.add(buildTabsPanel(), BorderLayout.CENTER);
-        root.add(buildFooterPanel(), BorderLayout.SOUTH);
-
-        setContentPane(root);
-        applyInitialSessionSnapshot();
-    }
-
-    private JPanel buildHeaderPanel() {
-        JPanel header = new JPanel(new BorderLayout(12, 6));
-        header.setBorder(BorderFactory.createCompoundBorder(
-                BorderFactory.createMatteBorder(0, 0, 1, 0, new Color(215, 220, 226)),
-                BorderFactory.createEmptyBorder(0, 0, 10, 0)
-        ));
-
-        JPanel identityPanel = new JPanel(new GridLayout(3, 1, 0, 2));
-        lblWelcome = new JLabel("Welcome");
-        lblWelcome.setFont(new Font("SansSerif", Font.BOLD, 16));
-        lblWalletId = new JLabel("Wallet: --");
-        lblWalletId.setFont(new Font("SansSerif", Font.PLAIN, 12));
-        lblWalletId.setForeground(new Color(90, 98, 110));
-        lblPinStatus = new JLabel("Transaction PIN: Checking...");
-        lblPinStatus.setFont(new Font("SansSerif", Font.PLAIN, 11));
-        lblPinStatus.setForeground(new Color(90, 98, 110));
-        identityPanel.add(lblWelcome);
-        identityPanel.add(lblWalletId);
-        identityPanel.add(lblPinStatus);
-
-        JPanel balanceAndActions = new JPanel(new FlowLayout(FlowLayout.RIGHT, 8, 0));
-        JPanel balanceBox = new JPanel(new GridLayout(2, 1, 0, 1));
-        JLabel balanceCaption = new JLabel("Available Balance", SwingConstants.RIGHT);
-        balanceCaption.setFont(new Font("SansSerif", Font.PLAIN, 11));
-        balanceCaption.setForeground(new Color(90, 98, 110));
-        lblBalance = new JLabel("PHP 0.00", SwingConstants.RIGHT);
-        lblBalance.setFont(new Font("SansSerif", Font.BOLD, 18));
-        lblBalance.setForeground(new Color(17, 102, 68));
-        balanceBox.add(balanceCaption);
-        balanceBox.add(lblBalance);
-
-        btnBack = new JButton("\u2190 Back");
         btnBack.setToolTipText("Return to the previously viewed tab");
         btnBack.setEnabled(false);
         btnBack.addActionListener(e -> navigateBack());
 
-        btnRefresh = new JButton("Refresh");
         btnRefresh.addActionListener(e -> handleInteractiveRefresh());
 
-        btnPinSettings = new JButton("Transaction PIN");
         btnPinSettings.setEnabled(authService != null);
         btnPinSettings.setToolTipText(authService != null
                 ? "Set or change your 4-6 digit Transaction PIN"
                 : "PIN management requires AuthService");
         btnPinSettings.addActionListener(e -> openPinSettingsDialog());
 
-        btnLogout = new JButton("Logout");
         btnLogout.addActionListener(e -> confirmAndLogout());
 
-        balanceAndActions.add(balanceBox);
-        balanceAndActions.add(Box.createHorizontalStrut(8));
-        balanceAndActions.add(btnBack);
-        balanceAndActions.add(btnRefresh);
-        balanceAndActions.add(btnPinSettings);
-        balanceAndActions.add(btnLogout);
-
-        header.add(identityPanel, BorderLayout.WEST);
-        header.add(balanceAndActions, BorderLayout.EAST);
-        return header;
+        buildTabsPanel();
+        setContentPane(pnlRoot);
+        applyInitialSessionSnapshot();
     }
 
     private JTabbedPane buildTabsPanel() {
-        tabs = new JTabbedPane();
+        tabs.removeAll();
         tabIndexByTitle.clear();
-        registerTab("Overview", buildOverviewPanel());
-        registerTab("Cash In / Out", buildCashInOutPanel());
-        registerTab("Send Money", buildSendMoneyPanel());
+
+        overviewPanel = new OverviewPanel();
+        cashInOutPanel = new CashInOutPanel(walletService.getCurrentProviderMode());
+        sendMoneyPanel = new SendMoneyPanel();
+
+        wireOverviewPanel();
+        wireCashInOutPanel();
+        wireSendMoneyPanel();
+
+        registerTab("Overview", overviewPanel);
+        registerTab("Cash In / Out", cashInOutPanel);
+        registerTab("Send Money", sendMoneyPanel);
 
         // Hide unfinished modules unless an implementation is explicitly provided
         if (loanService != null) {
@@ -287,13 +263,137 @@ public class Main extends JFrame {
         User sessionUser = SessionManager.getInstance().getCurrentUser();
         AdminService adminService = walletService.getAdminService();
         if (sessionUser != null && sessionUser.isAdmin() && adminService != null) {
-            registerTab("Admin Controls", buildAdminControlsPanel(adminService));
+            adminControlsPanel = new AdminControlsPanel(
+                    adminService,
+                    sessionUser.getUserId(),
+                    offEdt -> lastAdminLoadExecutedOffEdt = offEdt,
+                    this::showDialogMessage
+            );
+            registerTab("Admin Controls", adminControlsPanel);
         }
 
         lastSelectedTabTitle = tabs.getTabCount() > 0 ? tabs.getTitleAt(tabs.getSelectedIndex()) : null;
         // Record every tab switch (manual click or programmatic) on the LIFO back-stack.
         tabs.addChangeListener(e -> onTabSelectionChanged());
         return tabs;
+    }
+
+    private void wireOverviewPanel() {
+        btnNavCashIn = overviewPanel.getNavCashInButton();
+        btnNavCashOut = overviewPanel.getNavCashOutButton();
+        btnNavSendMoney = overviewPanel.getNavSendMoneyButton();
+        btnNavPinSettings = overviewPanel.getNavPinSettingsButton();
+        btnExportStatement = overviewPanel.getExportStatementButton();
+        btnLoadStatement = overviewPanel.getLoadStatementButton();
+
+        activityCardLayout = overviewPanel.getActivityCardLayout();
+        activityCardPanel = overviewPanel.getActivityCardPanel();
+        lblLoadingState = overviewPanel.getLoadingStateLabel();
+        lblEmptyState = overviewPanel.getEmptyStateLabel();
+        lblErrorState = overviewPanel.getErrorStateLabel();
+        btnRetryLoad = overviewPanel.getRetryLoadButton();
+        transactionsTableModel = overviewPanel.getTransactionsTableModel();
+        tblTransactions = overviewPanel.getTransactionsTable();
+        btnCheckStatus = overviewPanel.getCheckStatusButton();
+        btnViewReceipt = overviewPanel.getViewReceiptButton();
+        btnExportReceipt = overviewPanel.getExportReceiptButton();
+        lblActivityFeedback = overviewPanel.getActivityFeedbackLabel();
+
+        btnNavCashIn.addActionListener(e -> {
+            cmbCashOperation.setSelectedItem("CASH_IN");
+            navigateToTab("Cash In / Out");
+            txtCashAmount.requestFocusInWindow();
+        });
+
+        btnNavCashOut.addActionListener(e -> {
+            cmbCashOperation.setSelectedItem("CASH_OUT");
+            navigateToTab("Cash In / Out");
+            txtCashAmount.requestFocusInWindow();
+        });
+
+        btnNavSendMoney.addActionListener(e -> {
+            navigateToTab("Send Money");
+            txtRecipient.requestFocusInWindow();
+        });
+
+        btnNavPinSettings.setEnabled(authService != null);
+        btnNavPinSettings.addActionListener(e -> openPinSettingsDialog());
+
+        btnExportStatement.addActionListener(e -> handleInteractiveExportStatement());
+        btnLoadStatement.addActionListener(e -> handleInteractiveLoadStatement());
+
+        btnRetryLoad.addActionListener(e -> handleInteractiveRefresh());
+        tblTransactions.addMouseListener(new MouseAdapter() {
+            @Override
+            public void mouseClicked(MouseEvent e) {
+                if (e.getClickCount() == 2 && tblTransactions.getSelectedRow() >= 0) {
+                    showSelectedReceipt();
+                }
+            }
+        });
+        tblTransactions.getSelectionModel().addListSelectionListener(e -> {
+            if (!e.getValueIsAdjusting()) {
+                updateTableActionButtonsState();
+            }
+        });
+        btnCheckStatus.addActionListener(e -> lookupSelectedTransactionStatus());
+        btnViewReceipt.addActionListener(e -> showSelectedReceipt());
+        btnExportReceipt.addActionListener(e -> handleInteractiveExportReceipt());
+    }
+
+    private void wireCashInOutPanel() {
+        cmbCashOperation = cashInOutPanel.getCashOperationComboBox();
+        cmbPaymentMethod = cashInOutPanel.getPaymentMethodComboBox();
+        cmbCashChannel = cashInOutPanel.getCashChannelComboBox();
+        cmbProviderMode = cashInOutPanel.getProviderModeComboBox();
+        txtCashAmount = cashInOutPanel.getCashAmountField();
+        txtCashNote = cashInOutPanel.getCashNoteField();
+        txtCashPin = cashInOutPanel.getCashPinField();
+        btnSubmitCashOp = cashInOutPanel.getSubmitCashOpButton();
+        btnCashBackToOverview = cashInOutPanel.getCashBackToOverviewButton();
+        lblCashFeedback = cashInOutPanel.getCashFeedbackLabel();
+
+        cmbPaymentMethod.addActionListener(e ->
+                cmbCashChannel.setEnabled(cmbPaymentMethod.getSelectedIndex() <= 0));
+
+        cmbProviderMode.addActionListener(e -> {
+            String modeName = (String) cmbProviderMode.getSelectedItem();
+            if (modeName != null) {
+                walletService.setPaymentProviderFactory(
+                        PaymentProviderFactory.forMode(BankResponseStatus.valueOf(modeName)));
+            }
+        });
+
+        cmbCashOperation.addActionListener(e -> {
+            boolean isCashOut = "CASH_OUT".equals(cmbCashOperation.getSelectedItem());
+            txtCashPin.setEnabled(isCashOut);
+            if (!isCashOut) {
+                txtCashPin.setText("");
+            }
+        });
+
+        btnCashBackToOverview.addActionListener(e -> navigateToTab("Overview"));
+        btnSubmitCashOp.addActionListener(e -> handleInteractiveCashSubmit());
+        txtCashAmount.addActionListener(e -> handleInteractiveCashSubmit());
+        txtCashNote.addActionListener(e -> handleInteractiveCashSubmit());
+        txtCashPin.addActionListener(e -> handleInteractiveCashSubmit());
+    }
+
+    private void wireSendMoneyPanel() {
+        txtRecipient = sendMoneyPanel.getRecipientField();
+        txtSendAmount = sendMoneyPanel.getSendAmountField();
+        txtSendNote = sendMoneyPanel.getSendNoteField();
+        txtSendPin = sendMoneyPanel.getSendPinField();
+        btnSubmitSendMoney = sendMoneyPanel.getSubmitSendMoneyButton();
+        btnSendBackToOverview = sendMoneyPanel.getSendBackToOverviewButton();
+        lblSendFeedback = sendMoneyPanel.getSendFeedbackLabel();
+
+        btnSendBackToOverview.addActionListener(e -> navigateToTab("Overview"));
+        btnSubmitSendMoney.addActionListener(e -> handleInteractiveSendMoneySubmit());
+        txtRecipient.addActionListener(e -> handleInteractiveSendMoneySubmit());
+        txtSendAmount.addActionListener(e -> handleInteractiveSendMoneySubmit());
+        txtSendNote.addActionListener(e -> handleInteractiveSendMoneySubmit());
+        txtSendPin.addActionListener(e -> handleInteractiveSendMoneySubmit());
     }
 
     private void onTabSelectionChanged() {
@@ -320,620 +420,10 @@ public class Main extends JFrame {
         tabIndexByTitle.put(title.toLowerCase(Locale.ROOT), index);
     }
 
-    private JPanel buildOverviewPanel() {
-        JPanel overview = new JPanel(new BorderLayout(12, 12));
-        overview.setBorder(BorderFactory.createEmptyBorder(10, 4, 4, 4));
-
-        JPanel quickActions = new JPanel(new FlowLayout(FlowLayout.LEFT, 10, 8));
-        quickActions.setBorder(BorderFactory.createTitledBorder("Quick Actions"));
-
-        btnNavCashIn = new JButton("Cash In");
-        btnNavCashIn.addActionListener(e -> {
-            cmbCashOperation.setSelectedItem("CASH_IN");
-            navigateToTab("Cash In / Out");
-            txtCashAmount.requestFocusInWindow();
-        });
-
-        btnNavCashOut = new JButton("Cash Out");
-        btnNavCashOut.addActionListener(e -> {
-            cmbCashOperation.setSelectedItem("CASH_OUT");
-            navigateToTab("Cash In / Out");
-            txtCashAmount.requestFocusInWindow();
-        });
-
-        btnNavSendMoney = new JButton("Send Money");
-        btnNavSendMoney.addActionListener(e -> {
-            navigateToTab("Send Money");
-            txtRecipient.requestFocusInWindow();
-        });
-
-        btnNavPinSettings = new JButton("Set / Change PIN");
-        btnNavPinSettings.setEnabled(authService != null);
-        btnNavPinSettings.addActionListener(e -> openPinSettingsDialog());
-
-        quickActions.add(btnNavCashIn);
-        quickActions.add(btnNavCashOut);
-        quickActions.add(btnNavSendMoney);
-        quickActions.add(btnNavPinSettings);
-
-        overview.add(quickActions, BorderLayout.NORTH);
-        overview.add(buildRecentActivityPanel(), BorderLayout.CENTER);
-        return overview;
-    }
-
-    private JPanel buildRecentActivityPanel() {
-        JPanel container = new JPanel(new BorderLayout(8, 8));
-        container.setBorder(BorderFactory.createTitledBorder("Recent Activity"));
-
-        activityCardLayout = new CardLayout();
-        activityCardPanel = new JPanel(activityCardLayout);
-
-        JPanel loadingCard = new JPanel(new GridBagLayout());
-        lblLoadingState = new JLabel("Loading wallet balance and recent activity...");
-        lblLoadingState.setFont(new Font("SansSerif", Font.ITALIC, 13));
-        loadingCard.add(lblLoadingState);
-
-        JPanel emptyCard = new JPanel(new GridBagLayout());
-        lblEmptyState = new JLabel("No recent transactions yet. Use Cash In or Send Money to get started.");
-        lblEmptyState.setFont(new Font("SansSerif", Font.PLAIN, 13));
-        lblEmptyState.setForeground(new Color(95, 103, 114));
-        emptyCard.add(lblEmptyState);
-
-        JPanel errorCard = new JPanel(new GridBagLayout());
-        JPanel errorInner = new JPanel(new BorderLayout(8, 10));
-        lblErrorState = new JLabel("Unable to load wallet activity.", SwingConstants.CENTER);
-        lblErrorState.setFont(new Font("SansSerif", Font.PLAIN, 13));
-        lblErrorState.setForeground(new Color(176, 38, 38));
-        btnRetryLoad = new JButton("Retry");
-        btnRetryLoad.addActionListener(e -> handleInteractiveRefresh());
-        JPanel retryWrapper = new JPanel(new FlowLayout(FlowLayout.CENTER));
-        retryWrapper.add(btnRetryLoad);
-        errorInner.add(lblErrorState, BorderLayout.CENTER);
-        errorInner.add(retryWrapper, BorderLayout.SOUTH);
-        errorCard.add(errorInner);
-
-        String[] columns = {"Date", "Ref #", "Type", "Direction", "Amount", "Fee", "Status", "Provider Ref", "Description"};
-        transactionsTableModel = new DefaultTableModel(columns, 0) {
-            @Override
-            public boolean isCellEditable(int row, int column) {
-                return false;
-            }
-        };
-        tblTransactions = new JTable(transactionsTableModel);
-        tblTransactions.setSelectionMode(ListSelectionModel.SINGLE_SELECTION);
-        tblTransactions.setRowHeight(24);
-        tblTransactions.getTableHeader().setReorderingAllowed(false);
-        tblTransactions.addMouseListener(new MouseAdapter() {
-            @Override
-            public void mouseClicked(MouseEvent e) {
-                if (e.getClickCount() == 2 && tblTransactions.getSelectedRow() >= 0) {
-                    showSelectedReceipt();
-                }
-            }
-        });
-
-        JPanel readyCard = new JPanel(new BorderLayout(6, 6));
-        readyCard.add(new JScrollPane(tblTransactions), BorderLayout.CENTER);
-
-        JPanel tableActions = new JPanel(new BorderLayout(8, 0));
-        lblActivityFeedback = new JLabel(" ");
-        lblActivityFeedback.setFont(new Font("SansSerif", Font.PLAIN, 12));
-        JPanel tableActionButtons = new JPanel(new FlowLayout(FlowLayout.RIGHT, 8, 0));
-        btnCheckStatus = new JButton("Lookup Status");
-        btnCheckStatus.setEnabled(false);
-        btnCheckStatus.addActionListener(e -> lookupSelectedTransactionStatus());
-        btnViewReceipt = new JButton("View Receipt");
-        btnViewReceipt.addActionListener(e -> showSelectedReceipt());
-        tableActionButtons.add(btnCheckStatus);
-        tableActionButtons.add(btnViewReceipt);
-        tableActions.add(lblActivityFeedback, BorderLayout.WEST);
-        tableActions.add(tableActionButtons, BorderLayout.EAST);
-        tblTransactions.getSelectionModel().addListSelectionListener(e -> {
-            if (!e.getValueIsAdjusting()) {
-                updateTableActionButtonsState();
-            }
-        });
-        readyCard.add(tableActions, BorderLayout.SOUTH);
-
-        activityCardPanel.add(loadingCard, DashboardState.LOADING.name());
-        activityCardPanel.add(emptyCard, DashboardState.EMPTY.name());
-        activityCardPanel.add(errorCard, DashboardState.ERROR.name());
-        activityCardPanel.add(readyCard, DashboardState.READY.name());
-
-        container.add(activityCardPanel, BorderLayout.CENTER);
-        return container;
-    }
-
-    private JPanel buildCashInOutPanel() {
-        JPanel wrapper = new JPanel(new BorderLayout(10, 10));
-        wrapper.setBorder(BorderFactory.createEmptyBorder(16, 16, 16, 16));
-
-        JPanel form = new JPanel(new GridBagLayout());
-        GridBagConstraints gbc = new GridBagConstraints();
-        gbc.insets = new Insets(6, 6, 6, 6);
-        gbc.fill = GridBagConstraints.HORIZONTAL;
-        gbc.anchor = GridBagConstraints.WEST;
-
-        cmbCashOperation = new JComboBox<>(new String[]{"CASH_IN", "CASH_OUT"});
-        cmbPaymentMethod = new JComboBox<>(new String[]{"Use Selected Channel"});
-        cmbCashChannel = new JComboBox<>(new String[]{"GCash", "Maya", "BDO", "BPI", "7-Eleven OTC"});
-        cmbProviderMode = new JComboBox<>(new String[]{"SUCCESS", "REJECTED", "FAILED", "TIMEOUT", "PENDING", "UNKNOWN"});
-        BankResponseStatus initialMode = walletService.getCurrentProviderMode();
-        if (initialMode != null) {
-            cmbProviderMode.setSelectedItem(initialMode.name());
-        }
-        txtCashAmount = new JTextField(20);
-        txtCashNote = new JTextField(20);
-        txtCashPin = new JPasswordField(20);
-        txtCashPin.setEnabled(false);
-        txtCashPin.setToolTipText("Required for Cash Out transactions");
-        btnSubmitCashOp = new JButton("Submit Cash Transaction");
-        btnCashBackToOverview = new JButton("\u2190 Back to Overview");
-        lblCashFeedback = new JLabel(" ");
-        lblCashFeedback.setFont(new Font("SansSerif", Font.PLAIN, 12));
-
-        addFormRow(form, gbc, 0, "Operation:", cmbCashOperation);
-        addFormRow(form, gbc, 1, "Linked Bank Account:", cmbPaymentMethod);
-        addFormRow(form, gbc, 2, "Channel / Provider:", cmbCashChannel);
-        addFormRow(form, gbc, 3, "Mock Bank Mode:", cmbProviderMode);
-        addFormRow(form, gbc, 4, "Amount (PHP):", txtCashAmount);
-        addFormRow(form, gbc, 5, "Note (Optional):", txtCashNote);
-        addFormRow(form, gbc, 6, "Transaction PIN (Cash Out):", txtCashPin);
-
-        cmbPaymentMethod.addActionListener(e ->
-                cmbCashChannel.setEnabled(cmbPaymentMethod.getSelectedIndex() <= 0));
-
-        cmbProviderMode.addActionListener(e -> {
-            String modeName = (String) cmbProviderMode.getSelectedItem();
-            if (modeName != null) {
-                walletService.setPaymentProviderFactory(
-                        PaymentProviderFactory.forMode(BankResponseStatus.valueOf(modeName)));
-            }
-        });
-
-        cmbCashOperation.addActionListener(e -> {
-            boolean isCashOut = "CASH_OUT".equals(cmbCashOperation.getSelectedItem());
-            txtCashPin.setEnabled(isCashOut);
-            if (!isCashOut) {
-                txtCashPin.setText("");
-            }
-        });
-
-        JPanel cashActions = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 0));
-        cashActions.add(btnSubmitCashOp);
-        cashActions.add(btnCashBackToOverview);
-
-        gbc.gridx = 1;
-        gbc.gridy = 7;
-        gbc.weightx = 1.0;
-        gbc.fill = GridBagConstraints.NONE;
-        form.add(cashActions, gbc);
-
-        gbc.gridx = 0;
-        gbc.gridy = 8;
-        gbc.gridwidth = 2;
-        gbc.fill = GridBagConstraints.HORIZONTAL;
-        form.add(lblCashFeedback, gbc);
-
-        btnCashBackToOverview.addActionListener(e -> navigateToTab("Overview"));
-        btnSubmitCashOp.addActionListener(e -> handleInteractiveCashSubmit());
-        txtCashAmount.addActionListener(e -> handleInteractiveCashSubmit());
-        txtCashNote.addActionListener(e -> handleInteractiveCashSubmit());
-        txtCashPin.addActionListener(e -> handleInteractiveCashSubmit());
-
-        wrapper.add(form, BorderLayout.NORTH);
-        return wrapper;
-    }
-
-    private JPanel buildSendMoneyPanel() {
-        JPanel wrapper = new JPanel(new BorderLayout(10, 10));
-        wrapper.setBorder(BorderFactory.createEmptyBorder(16, 16, 16, 16));
-
-        JPanel form = new JPanel(new GridBagLayout());
-        GridBagConstraints gbc = new GridBagConstraints();
-        gbc.insets = new Insets(6, 6, 6, 6);
-        gbc.fill = GridBagConstraints.HORIZONTAL;
-        gbc.anchor = GridBagConstraints.WEST;
-
-        txtRecipient = new JTextField(22);
-        txtSendAmount = new JTextField(22);
-        txtSendNote = new JTextField(22);
-        txtSendPin = new JPasswordField(22);
-        txtSendPin.setToolTipText("Enter your 4-6 digit Transaction PIN to authorize outgoing transfer");
-        btnSubmitSendMoney = new JButton("Send Money");
-        btnSendBackToOverview = new JButton("\u2190 Back to Overview");
-        lblSendFeedback = new JLabel(" ");
-        lblSendFeedback.setFont(new Font("SansSerif", Font.PLAIN, 12));
-
-        addFormRow(form, gbc, 0, "Recipient (Mobile / Email / Name / Wallet ID):", txtRecipient);
-        addFormRow(form, gbc, 1, "Amount (PHP):", txtSendAmount);
-        addFormRow(form, gbc, 2, "Note (Optional):", txtSendNote);
-        addFormRow(form, gbc, 3, "Transaction PIN:", txtSendPin);
-
-        JPanel sendActions = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 0));
-        sendActions.add(btnSubmitSendMoney);
-        sendActions.add(btnSendBackToOverview);
-
-        gbc.gridx = 1;
-        gbc.gridy = 4;
-        gbc.weightx = 1.0;
-        gbc.fill = GridBagConstraints.NONE;
-        form.add(sendActions, gbc);
-
-        gbc.gridx = 0;
-        gbc.gridy = 5;
-        gbc.gridwidth = 2;
-        gbc.fill = GridBagConstraints.HORIZONTAL;
-        form.add(lblSendFeedback, gbc);
-
-        btnSendBackToOverview.addActionListener(e -> navigateToTab("Overview"));
-        btnSubmitSendMoney.addActionListener(e -> handleInteractiveSendMoneySubmit());
-        txtRecipient.addActionListener(e -> handleInteractiveSendMoneySubmit());
-        txtSendAmount.addActionListener(e -> handleInteractiveSendMoneySubmit());
-        txtSendNote.addActionListener(e -> handleInteractiveSendMoneySubmit());
-        txtSendPin.addActionListener(e -> handleInteractiveSendMoneySubmit());
-
-        wrapper.add(form, BorderLayout.NORTH);
-        return wrapper;
-    }
-
-    private void addFormRow(JPanel panel, GridBagConstraints gbc, int row, String labelText, JComponent field) {
-        gbc.gridx = 0;
-        gbc.gridy = row;
-        gbc.gridwidth = 1;
-        gbc.weightx = 0.0;
-        gbc.fill = GridBagConstraints.NONE;
-        panel.add(new JLabel(labelText), gbc);
-
-        gbc.gridx = 1;
-        gbc.weightx = 1.0;
-        gbc.fill = GridBagConstraints.HORIZONTAL;
-        panel.add(field, gbc);
-    }
-
     private JPanel buildServiceReadyNotice(String text) {
         JPanel panel = new JPanel(new BorderLayout());
         panel.add(new JLabel(text, SwingConstants.CENTER), BorderLayout.CENTER);
         return panel;
-    }
-
-    // ─── CAP-09: Admin Controls Panel ───────────────────────────────────────────
-
-    /**
-     * Builds the Admin Controls tab: user account and wallet overview, suspend/reactivate/role
-     * actions (with mandatory recorded reasons), transaction inspection, and audit log viewer.
-     * Only rendered when the session user has role ADMIN; all DB calls execute off the EDT.
-     */
-    private JPanel buildAdminControlsPanel(AdminService adminService) {
-        User admin = SessionManager.getInstance().getCurrentUser();
-        String adminId = admin.getUserId();
-
-        JPanel root = new JPanel(new BorderLayout(8, 8));
-        root.setBorder(BorderFactory.createEmptyBorder(10, 12, 10, 12));
-
-        JLabel title = new JLabel("Admin Controls — Account Management & Audit Log");
-        title.setFont(new Font("SansSerif", Font.BOLD, 14));
-        root.add(title, BorderLayout.NORTH);
-
-        JSplitPane split = new JSplitPane(JSplitPane.VERTICAL_SPLIT);
-        split.setResizeWeight(0.55);
-
-        String[] userCols = {"User ID", "Name", "Mobile", "Role", "Status", "Wallet", "Balance"};
-        DefaultTableModel userModel = new DefaultTableModel(userCols, 0) {
-            @Override public boolean isCellEditable(int r, int c) { return false; }
-        };
-        JTable userTable = new JTable(userModel);
-        userTable.setSelectionMode(ListSelectionModel.SINGLE_SELECTION);
-        userTable.setAutoCreateRowSorter(true);
-
-        JScrollPane userScroll = new JScrollPane(userTable);
-        userScroll.setBorder(BorderFactory.createTitledBorder("Registered Accounts & Wallets"));
-
-        JButton btnSuspend = new JButton("Suspend User");
-        JButton btnReactivate = new JButton("Reactivate User");
-        JButton btnChangeRole = new JButton("Change Role");
-        JButton btnViewUserTxns = new JButton("View User Txns");
-        JButton btnViewAllTxns = new JButton("All System Txns");
-        JButton btnRefreshAll = new JButton("Refresh");
-        btnSuspend.setEnabled(false);
-        btnReactivate.setEnabled(false);
-        btnChangeRole.setEnabled(false);
-        btnViewUserTxns.setEnabled(false);
-
-        userTable.getSelectionModel().addListSelectionListener(e -> {
-            if (!e.getValueIsAdjusting()) {
-                boolean hasSelection = userTable.getSelectedRow() >= 0;
-                btnSuspend.setEnabled(hasSelection);
-                btnReactivate.setEnabled(hasSelection);
-                btnChangeRole.setEnabled(hasSelection);
-                btnViewUserTxns.setEnabled(hasSelection);
-            }
-        });
-
-        JPanel btnPanel = new JPanel(new FlowLayout(FlowLayout.LEFT, 6, 4));
-        btnPanel.add(btnSuspend);
-        btnPanel.add(btnReactivate);
-        btnPanel.add(btnChangeRole);
-        btnPanel.add(btnViewUserTxns);
-        btnPanel.add(btnViewAllTxns);
-        btnPanel.add(btnRefreshAll);
-
-        JPanel usersPanel = new JPanel(new BorderLayout(4, 4));
-        usersPanel.add(userScroll, BorderLayout.CENTER);
-        usersPanel.add(btnPanel, BorderLayout.SOUTH);
-        split.setTopComponent(usersPanel);
-
-        String[] auditCols = {"Action ID", "Type", "Target", "Reason", "Timestamp"};
-        DefaultTableModel auditModel = new DefaultTableModel(auditCols, 0) {
-            @Override public boolean isCellEditable(int r, int c) { return false; }
-        };
-        JTable auditTable = new JTable(auditModel);
-        auditTable.setAutoCreateRowSorter(true);
-
-        JScrollPane auditScroll = new JScrollPane(auditTable);
-        auditScroll.setBorder(BorderFactory.createTitledBorder("Admin Action Audit Log"));
-        split.setBottomComponent(auditScroll);
-
-        root.add(split, BorderLayout.CENTER);
-
-        JLabel statusLbl = new JLabel("Loading admin records...");
-        statusLbl.setFont(new Font("SansSerif", Font.PLAIN, 11));
-        root.add(statusLbl, BorderLayout.SOUTH);
-
-        Consumer<Boolean> reloadAll = showErrorPopup -> {
-            btnRefreshAll.setEnabled(false);
-            statusLbl.setText("Loading admin records...");
-            new SwingWorker<AdminPanelSnapshot, Void>() {
-                @Override
-                protected AdminPanelSnapshot doInBackground() {
-                    lastAdminLoadExecutedOffEdt = !SwingUtilities.isEventDispatchThread();
-                    List<User> users = adminService.getAllUsers(adminId);
-                    List<Wallet> wallets = adminService.getAllWallets(adminId);
-                    List<AdminAction> actions = adminService.getAdminActions(adminId);
-                    Map<String, Wallet> walletsByUser = new HashMap<>();
-                    for (Wallet w : wallets) {
-                        walletsByUser.put(w.getUserId(), w);
-                    }
-                    return new AdminPanelSnapshot(users, walletsByUser, actions);
-                }
-
-                @Override
-                protected void done() {
-                    btnRefreshAll.setEnabled(true);
-                    try {
-                        AdminPanelSnapshot snap = get();
-                        userModel.setRowCount(0);
-                        for (User u : snap.users) {
-                            Wallet w = snap.walletsByUser.get(u.getUserId());
-                            userModel.addRow(new Object[]{
-                                    u.getUserId(),
-                                    u.getName(),
-                                    u.getMobileNumber(),
-                                    u.getRole(),
-                                    u.getStatus(),
-                                    w != null ? w.getWalletId() + " (" + w.getStatus() + ")" : "--",
-                                    w != null ? MoneyUtil.format(w.getBalance(), w.getCurrency()) : "--"
-                            });
-                        }
-                        auditModel.setRowCount(0);
-                        for (AdminAction a : snap.actions) {
-                            auditModel.addRow(new Object[]{
-                                    a.getActionId(),
-                                    a.getActionType(),
-                                    a.getTargetUserId(),
-                                    a.getReason(),
-                                    a.getCreatedAt()
-                            });
-                        }
-                        statusLbl.setText("Last refreshed: " + java.time.LocalDateTime.now()
-                                .format(java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss")));
-                    } catch (Exception ex) {
-                        Throwable cause = unwrapCause(ex);
-                        String message = extractErrorMessage(cause);
-                        statusLbl.setText("Error loading admin data: " + message);
-                        if (showErrorPopup) {
-                            showDialogMessage(root, "Admin Refresh Failed", message, JOptionPane.ERROR_MESSAGE);
-                        }
-                    }
-                }
-            }.execute();
-        };
-
-        reloadAll.accept(false);
-
-        btnSuspend.addActionListener(e -> executeAdminStatusAction(
-                adminService, adminId, userTable, userModel, statusLbl, () -> reloadAll.accept(false), true));
-
-        btnReactivate.addActionListener(e -> executeAdminStatusAction(
-                adminService, adminId, userTable, userModel, statusLbl, () -> reloadAll.accept(false), false));
-
-        btnChangeRole.addActionListener(e -> {
-            int row = userTable.getSelectedRow();
-            if (row < 0) return;
-            int modelRow = userTable.convertRowIndexToModel(row);
-            String targetId = (String) userModel.getValueAt(modelRow, 0);
-            String targetName = (String) userModel.getValueAt(modelRow, 1);
-            UserRole currentRole = (UserRole) userModel.getValueAt(modelRow, 3);
-
-            UserRole selectedRole = (UserRole) JOptionPane.showInputDialog(
-                    root,
-                    "Select new role for " + targetName + " (" + targetId + "):",
-                    "Change User Role",
-                    JOptionPane.QUESTION_MESSAGE,
-                    null,
-                    UserRole.values(),
-                    currentRole
-            );
-            if (selectedRole == null) return;
-            String reason = promptMandatoryAdminReason(root,
-                    "Enter reason for changing role of " + targetName + " to " + selectedRole + ":",
-                    "Change User Role");
-            if (reason == null) return;
-
-            statusLbl.setText("Updating role for " + targetId + "...");
-            new SwingWorker<Void, Void>() {
-                @Override
-                protected Void doInBackground() {
-                    adminService.changeUserRole(adminId, targetId, selectedRole, reason);
-                    return null;
-                }
-
-                @Override
-                protected void done() {
-                    try {
-                        get();
-                        showDialogMessage(root, "Done", "Role updated to " + selectedRole + ".",
-                                JOptionPane.INFORMATION_MESSAGE);
-                    } catch (Exception ex) {
-                        Throwable cause = unwrapCause(ex);
-                        showDialogMessage(root, "Role Update Failed", "Error: " + extractErrorMessage(cause),
-                                JOptionPane.ERROR_MESSAGE);
-                    } finally {
-                        reloadAll.accept(false);
-                    }
-                }
-            }.execute();
-        });
-
-        btnViewUserTxns.addActionListener(e -> {
-            int row = userTable.getSelectedRow();
-            if (row < 0) return;
-            int modelRow = userTable.convertRowIndexToModel(row);
-            String targetId = (String) userModel.getValueAt(modelRow, 0);
-            String targetName = (String) userModel.getValueAt(modelRow, 1);
-            loadAndShowAdminTransactions(adminService, adminId, targetId,
-                    "Transactions — " + targetName + " (" + targetId + ")", root, statusLbl,
-                    () -> reloadAll.accept(false));
-        });
-
-        btnViewAllTxns.addActionListener(e ->
-                loadAndShowAdminTransactions(adminService, adminId, null,
-                        "All System Transactions", root, statusLbl, () -> reloadAll.accept(false)));
-
-        btnRefreshAll.addActionListener(e -> reloadAll.accept(true));
-
-        return root;
-    }
-
-    private void executeAdminStatusAction(AdminService adminService, String adminId, JTable userTable,
-                                          DefaultTableModel userModel, JLabel statusLbl,
-                                          Runnable reloadAll, boolean suspend) {
-        int row = userTable.getSelectedRow();
-        if (row < 0) return;
-        int modelRow = userTable.convertRowIndexToModel(row);
-        String targetId = (String) userModel.getValueAt(modelRow, 0);
-        String targetName = (String) userModel.getValueAt(modelRow, 1);
-
-        String verb = suspend ? "suspending" : "reactivating";
-        String dialogTitle = suspend ? "Suspend Account" : "Reactivate Account";
-        String reason = promptMandatoryAdminReason(userTable,
-                "Enter reason for " + verb + " " + targetName + " (" + targetId + "):",
-                dialogTitle);
-        if (reason == null) return;
-
-        statusLbl.setText((suspend ? "Suspending " : "Reactivating ") + targetId + "...");
-        new SwingWorker<Void, Void>() {
-            @Override
-            protected Void doInBackground() {
-                if (suspend) {
-                    adminService.suspendUser(adminId, targetId, reason);
-                } else {
-                    adminService.reactivateUser(adminId, targetId, reason);
-                }
-                return null;
-            }
-
-            @Override
-            protected void done() {
-                try {
-                    get();
-                    showDialogMessage(userTable, "Done",
-                            suspend ? "Account suspended." : "Account reactivated.",
-                            JOptionPane.INFORMATION_MESSAGE);
-                } catch (Exception ex) {
-                    Throwable cause = unwrapCause(ex);
-                    showDialogMessage(userTable,
-                            suspend ? "Suspend Failed" : "Reactivate Failed",
-                            "Error: " + extractErrorMessage(cause),
-                            JOptionPane.ERROR_MESSAGE);
-                } finally {
-                    reloadAll.run();
-                }
-            }
-        }.execute();
-    }
-
-    private String promptMandatoryAdminReason(Component parent, String message, String title) {
-        String reason = JOptionPane.showInputDialog(parent, message, title, JOptionPane.QUESTION_MESSAGE);
-        if (reason == null) {
-            return null;
-        }
-        String trimmed = reason.trim();
-        if (trimmed.isEmpty()) {
-            showDialogMessage(parent, "Validation Error", "A reason is required.", JOptionPane.ERROR_MESSAGE);
-            return null;
-        }
-        return trimmed;
-    }
-
-    private void loadAndShowAdminTransactions(AdminService adminService, String adminId, String targetUserId,
-                                              String dialogTitle, Component parent,
-                                              JLabel statusLbl, Runnable reloadAll) {
-        statusLbl.setText("Loading transactions...");
-        new SwingWorker<List<Transaction>, Void>() {
-            @Override
-            protected List<Transaction> doInBackground() {
-                return targetUserId != null
-                        ? adminService.getUserTransactions(adminId, targetUserId)
-                        : adminService.getAllTransactions(adminId);
-            }
-
-            @Override
-            protected void done() {
-                try {
-                    List<Transaction> txns = get();
-                    String[] cols = {"Date", "Ref #", "Type", "Source", "Target", "Amount", "Fee", "Status", "Description"};
-                    DefaultTableModel model = new DefaultTableModel(cols, 0) {
-                        @Override public boolean isCellEditable(int r, int c) { return false; }
-                    };
-                    for (Transaction t : txns) {
-                        model.addRow(new Object[]{
-                                t.getCreatedAt() != null ? t.getCreatedAt().format(DATE_FORMATTER) : "-",
-                                t.getReferenceNumber(),
-                                t.getType(),
-                                t.getSourceWalletId() != null ? t.getSourceWalletId() : "-",
-                                t.getTargetWalletId() != null ? t.getTargetWalletId() : "-",
-                                MoneyUtil.format(t.getAmount(), t.getCurrency()),
-                                MoneyUtil.format(t.getFee(), t.getCurrency()),
-                                t.getStatus(),
-                                t.getDescription() != null ? t.getDescription() : ""
-                        });
-                    }
-                    JTable table = new JTable(model);
-                    table.setAutoCreateRowSorter(true);
-                    JScrollPane scroll = new JScrollPane(table);
-                    scroll.setPreferredSize(new Dimension(760, 320));
-                    JOptionPane.showMessageDialog(parent, scroll, dialogTitle, JOptionPane.INFORMATION_MESSAGE);
-                    reloadAll.run();
-                } catch (Exception ex) {
-                    Throwable cause = unwrapCause(ex);
-                    String message = extractErrorMessage(cause);
-                    statusLbl.setText("Error loading transactions: " + message);
-                    showDialogMessage(parent, "Transaction Inspection Failed", "Error: " + message,
-                            JOptionPane.ERROR_MESSAGE);
-                }
-            }
-        }.execute();
-    }
-
-    private JPanel buildFooterPanel() {
-        JPanel footer = new JPanel(new BorderLayout());
-        footer.setBorder(BorderFactory.createEmptyBorder(4, 2, 0, 2));
-        lblStatus = new JLabel("Initializing dashboard...");
-        lblStatus.setFont(new Font("SansSerif", Font.PLAIN, 11));
-        lblStatus.setForeground(new Color(90, 98, 110));
-        footer.add(lblStatus, BorderLayout.WEST);
-        return footer;
     }
 
     private void applyInitialSessionSnapshot() {
@@ -1654,156 +1144,160 @@ public class Main extends JFrame {
         }
         SessionManager.getInstance().touchActivity();
 
-        JDialog dialog = new JDialog(this, cachedHasPin ? "Change Transaction PIN" : "Set Transaction PIN", true);
-        dialog.setSize(420, 270);
-        dialog.setLocationRelativeTo(this);
-        dialog.setResizable(false);
-
-        JPanel form = new JPanel(new GridBagLayout());
-        form.setBorder(BorderFactory.createEmptyBorder(14, 16, 10, 16));
-        GridBagConstraints gbc = new GridBagConstraints();
-        gbc.insets = new Insets(5, 5, 5, 5);
-        gbc.fill = GridBagConstraints.HORIZONTAL;
-        gbc.anchor = GridBagConstraints.WEST;
-
-        JRadioButton rbChangePin = new JRadioButton("Use Current PIN", cachedHasPin);
-        JRadioButton rbResetWithPassword = new JRadioButton(
-                cachedHasPin ? "Reset with Account Password" : "Verify with Account Password", !cachedHasPin);
-        ButtonGroup modeGroup = new ButtonGroup();
-        modeGroup.add(rbChangePin);
-        modeGroup.add(rbResetWithPassword);
-        rbChangePin.setEnabled(cachedHasPin);
-
-        JLabel lblSecret = new JLabel(cachedHasPin ? "Current PIN:" : "Account Password:");
-        JPasswordField txtSecret = new JPasswordField(18);
-        JPasswordField txtNewPin = new JPasswordField(18);
-        JPasswordField txtConfirmPin = new JPasswordField(18);
-        JLabel lblPinDialogFeedback = new JLabel(" ");
-        lblPinDialogFeedback.setFont(new Font("SansSerif", Font.PLAIN, 11));
-
-        if (cachedHasPin) {
-            JPanel modePanel = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 0));
-            modePanel.add(rbChangePin);
-            modePanel.add(rbResetWithPassword);
-            gbc.gridx = 0;
-            gbc.gridy = 0;
-            gbc.gridwidth = 2;
-            form.add(modePanel, gbc);
-        }
-
-        rbChangePin.addActionListener(e -> lblSecret.setText("Current PIN:"));
-        rbResetWithPassword.addActionListener(e -> lblSecret.setText("Account Password:"));
-
-        int row = cachedHasPin ? 1 : 0;
-        gbc.gridwidth = 1;
-        gbc.gridx = 0;
-        gbc.gridy = row;
-        gbc.weightx = 0.0;
-        form.add(lblSecret, gbc);
-        gbc.gridx = 1;
-        gbc.weightx = 1.0;
-        form.add(txtSecret, gbc);
-
-        addFormRow(form, gbc, row + 1, "New PIN (4-6 digits):", txtNewPin);
-        addFormRow(form, gbc, row + 2, "Confirm New PIN:", txtConfirmPin);
-
-        gbc.gridx = 0;
-        gbc.gridy = row + 3;
-        gbc.gridwidth = 2;
-        form.add(lblPinDialogFeedback, gbc);
-
-        JPanel buttons = new JPanel(new FlowLayout(FlowLayout.RIGHT, 8, 10));
-        JButton btnCancel = new JButton("Cancel");
-        JButton btnSavePin = new JButton("Save PIN");
-        buttons.add(btnCancel);
-        buttons.add(btnSavePin);
-
-        dialog.setDefaultCloseOperation(WindowConstants.DISPOSE_ON_CLOSE);
-        dialog.getRootPane().setDefaultButton(btnSavePin);
-        dialog.getRootPane().registerKeyboardAction(
-                e -> {
-                    if (btnCancel.isEnabled()) {
-                        dialog.dispose();
-                    }
-                },
-                KeyStroke.getKeyStroke(java.awt.event.KeyEvent.VK_ESCAPE, 0),
-                JComponent.WHEN_IN_FOCUSED_WINDOW
+        PinSettingsDialog dialog = new PinSettingsDialog(
+                this,
+                authService,
+                currentUser.getUserId(),
+                cachedHasPin,
+                this::showDialogMessage,
+                this::handleSessionTermination,
+                () -> {
+                    updatePinStatusDisplay(true);
+                    lblStatus.setText("Transaction PIN updated.");
+                }
         );
-
-        btnCancel.addActionListener(e -> dialog.dispose());
-        btnSavePin.addActionListener(e -> {
-            String secret = new String(txtSecret.getPassword());
-            String newPin = new String(txtNewPin.getPassword()).trim();
-            String confirmPin = new String(txtConfirmPin.getPassword()).trim();
-
-            if (secret.isEmpty() || newPin.isEmpty()) {
-                String msg = "Please fill in all fields.";
-                lblPinDialogFeedback.setForeground(new Color(176, 38, 38));
-                lblPinDialogFeedback.setText(msg);
-                showDialogMessage(dialog, "Validation Error", msg, JOptionPane.WARNING_MESSAGE);
-                return;
-            }
-            if (!newPin.equals(confirmPin)) {
-                String msg = "New PIN and confirmation do not match.";
-                lblPinDialogFeedback.setForeground(new Color(176, 38, 38));
-                lblPinDialogFeedback.setText(msg);
-                showDialogMessage(dialog, "Validation Error", msg, JOptionPane.WARNING_MESSAGE);
-                return;
-            }
-
-            final boolean useCurrentPin = rbChangePin.isSelected();
-            btnSavePin.setEnabled(false);
-            btnCancel.setEnabled(false);
-            dialog.setDefaultCloseOperation(WindowConstants.DO_NOTHING_ON_CLOSE);
-            lblPinDialogFeedback.setForeground(new Color(70, 80, 95));
-            lblPinDialogFeedback.setText("Saving Transaction PIN...");
-
-            new SwingWorker<Void, Void>() {
-                @Override
-                protected Void doInBackground() {
-                    if (useCurrentPin) {
-                        authService.changePin(currentUser.getUserId(), secret, newPin);
-                    } else {
-                        authService.setPin(currentUser.getUserId(), secret, newPin);
-                    }
-                    return null;
-                }
-
-                @Override
-                protected void done() {
-                    btnSavePin.setEnabled(true);
-                    btnCancel.setEnabled(true);
-                    dialog.setDefaultCloseOperation(WindowConstants.DISPOSE_ON_CLOSE);
-                    try {
-                        get();
-                        updatePinStatusDisplay(true);
-                        lblStatus.setText("Transaction PIN updated.");
-                        showDialogMessage(dialog,
-                                "Transaction PIN",
-                                "Transaction PIN saved successfully.",
-                                JOptionPane.INFORMATION_MESSAGE);
-                        dialog.dispose();
-                    } catch (Exception ex) {
-                        Throwable cause = unwrapCause(ex);
-                        String message = extractErrorMessage(cause);
-                        lblPinDialogFeedback.setForeground(new Color(176, 38, 38));
-                        lblPinDialogFeedback.setText(message);
-                        if (SessionManager.getInstance().isExpiredDueToInactivity()
-                                || SessionManager.getInstance().isLockedOutByPin()) {
-                            dialog.dispose();
-                            handleSessionTermination(message);
-                        } else {
-                            showDialogMessage(dialog, "Transaction PIN Error", message, JOptionPane.ERROR_MESSAGE);
-                        }
-                    }
-                }
-            }.execute();
-        });
-
-        dialog.setLayout(new BorderLayout());
-        dialog.add(form, BorderLayout.CENTER);
-        dialog.add(buttons, BorderLayout.SOUTH);
         dialog.setVisible(true);
+    }
+
+    private void handleInteractiveExportStatement() {
+        if (!ensureActiveSessionForInteraction()) {
+            return;
+        }
+        JFileChooser chooser = new JFileChooser();
+        chooser.setDialogTitle("Export OTOG Wallet Statement");
+        chooser.setSelectedFile(new File("otog-statement.txt"));
+        if (chooser.showSaveDialog(this) == JFileChooser.APPROVE_OPTION) {
+            exportStatementAsync(chooser.getSelectedFile().toPath());
+        }
+    }
+
+    private void handleInteractiveLoadStatement() {
+        if (!ensureActiveSessionForInteraction()) {
+            return;
+        }
+        JFileChooser chooser = new JFileChooser();
+        chooser.setDialogTitle("Load Saved OTOG Wallet Statement");
+        if (chooser.showOpenDialog(this) == JFileChooser.APPROVE_OPTION) {
+            importStatementAsync(chooser.getSelectedFile().toPath()).thenAccept(stmt -> {
+                if (stmt != null) {
+                    runOnEdt(() -> {
+                        JTextArea area = new JTextArea(stmt.toDisplaySummary(), 18, 68);
+                        area.setEditable(false);
+                        area.setFont(new Font("Monospaced", Font.PLAIN, 12));
+                        JOptionPane.showMessageDialog(this, new JScrollPane(area),
+                                "Loaded Wallet Statement — " + stmt.getMaskedWalletId(),
+                                JOptionPane.INFORMATION_MESSAGE);
+                    });
+                }
+            });
+        }
+    }
+
+    private void handleInteractiveExportReceipt() {
+        Transaction selected = getSelectedTransactionForReceipt();
+        if (selected == null) {
+            showDialogMessage(this,
+                    "No Transaction Selected",
+                    "Please select a transaction row to save its receipt file.",
+                    JOptionPane.INFORMATION_MESSAGE);
+            return;
+        }
+        JFileChooser chooser = new JFileChooser();
+        chooser.setDialogTitle("Save Transaction Receipt");
+        chooser.setSelectedFile(new File("receipt-" + selected.getReferenceNumber() + ".txt"));
+        if (chooser.showSaveDialog(this) == JFileChooser.APPROVE_OPTION) {
+            exportSelectedReceiptAsync(chooser.getSelectedFile().toPath());
+        }
+    }
+
+    public CompletableFuture<Path> exportStatementAsync(Path targetFile) {
+        CompletableFuture<Path> future = new CompletableFuture<>();
+        User user = SessionManager.getInstance().getCurrentUser();
+        Wallet wallet = SessionManager.getInstance().getCurrentWallet();
+        List<Transaction> snapshotTxns = new ArrayList<>(loadedTransactions);
+
+        new SwingWorker<Path, Void>() {
+            @Override
+            protected Path doInBackground() {
+                Wallet latestWallet = (wallet != null && user != null)
+                        ? walletService.getWalletByUserId(user.getUserId())
+                        : wallet;
+                return statementFileService.exportWalletStatement(user, latestWallet, snapshotTxns, targetFile);
+            }
+
+            @Override
+            protected void done() {
+                try {
+                    Path saved = get();
+                    lblStatus.setText("Statement exported to " + saved.getFileName());
+                    if (lblActivityFeedback != null) {
+                        lblActivityFeedback.setForeground(new Color(17, 102, 68));
+                        lblActivityFeedback.setText("Exported statement: " + saved.getFileName());
+                    }
+                    future.complete(saved);
+                } catch (Exception ex) {
+                    Throwable cause = unwrapCause(ex);
+                    String msg = extractErrorMessage(cause);
+                    lblStatus.setText("Statement export failed: " + msg);
+                    future.completeExceptionally(cause);
+                }
+            }
+        }.execute();
+        return future;
+    }
+
+    public CompletableFuture<StatementFileService.LoadedStatement> importStatementAsync(Path sourceFile) {
+        CompletableFuture<StatementFileService.LoadedStatement> future = new CompletableFuture<>();
+        new SwingWorker<StatementFileService.LoadedStatement, Void>() {
+            @Override
+            protected StatementFileService.LoadedStatement doInBackground() {
+                return statementFileService.importWalletStatement(sourceFile);
+            }
+
+            @Override
+            protected void done() {
+                try {
+                    StatementFileService.LoadedStatement loaded = get();
+                    lblStatus.setText("Loaded statement (" + loaded.getEntries().size() + " transactions).");
+                    if (lblActivityFeedback != null) {
+                        lblActivityFeedback.setForeground(new Color(17, 102, 68));
+                        lblActivityFeedback.setText("Loaded statement for wallet " + loaded.getMaskedWalletId());
+                    }
+                    future.complete(loaded);
+                } catch (Exception ex) {
+                    Throwable cause = unwrapCause(ex);
+                    String msg = extractErrorMessage(cause);
+                    lblStatus.setText("Statement load failed: " + msg);
+                    future.completeExceptionally(cause);
+                }
+            }
+        }.execute();
+        return future;
+    }
+
+    public CompletableFuture<Path> exportSelectedReceiptAsync(Path targetFile) {
+        CompletableFuture<Path> future = new CompletableFuture<>();
+        Transaction selected = getSelectedTransactionForReceipt();
+        new SwingWorker<Path, Void>() {
+            @Override
+            protected Path doInBackground() {
+                return statementFileService.exportReceipt(selected, targetFile);
+            }
+
+            @Override
+            protected void done() {
+                try {
+                    Path saved = get();
+                    lblStatus.setText("Receipt saved to " + saved.getFileName());
+                    future.complete(saved);
+                } catch (Exception ex) {
+                    Throwable cause = unwrapCause(ex);
+                    lblStatus.setText("Receipt save failed: " + extractErrorMessage(cause));
+                    future.completeExceptionally(cause);
+                }
+            }
+        }.execute();
+        return future;
     }
 
     private void startSessionMonitor() {
@@ -2306,6 +1800,176 @@ public class Main extends JFrame {
         return txtSendAmount;
     }
 
+    public JPanel getRootPanel() {
+        return pnlRoot;
+    }
+
+    public OverviewPanel getOverviewPanel() {
+        return overviewPanel;
+    }
+
+    public CashInOutPanel getCashInOutPanel() {
+        return cashInOutPanel;
+    }
+
+    public SendMoneyPanel getSendMoneyPanel() {
+        return sendMoneyPanel;
+    }
+
+    public AdminControlsPanel getAdminControlsPanel() {
+        return adminControlsPanel;
+    }
+
+    public JButton getExportStatementButton() {
+        return btnExportStatement;
+    }
+
+    public JButton getLoadStatementButton() {
+        return btnLoadStatement;
+    }
+
+    public JButton getExportReceiptButton() {
+        return btnExportReceipt;
+    }
+
+    private void $$$setupUI$$$() {
+        pnlRoot = new JPanel();
+        pnlRoot.setLayout(new GridLayoutManager(3, 1, new Insets(14, 16, 14, 16), 12, 12));
+
+        pnlHeader = new JPanel();
+        pnlHeader.setLayout(new GridLayoutManager(1, 3, new Insets(0, 0, 10, 0), 12, 6));
+        pnlHeader.setBorder(BorderFactory.createMatteBorder(0, 0, 1, 0, new Color(215, 220, 226)));
+        pnlRoot.add(pnlHeader, new GridConstraints(0, 0, 1, 1,
+                GridConstraints.ANCHOR_CENTER, GridConstraints.FILL_BOTH,
+                GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_CAN_GROW,
+                GridConstraints.SIZEPOLICY_FIXED,
+                null, null, null, 0, false));
+
+        pnlIdentity = new JPanel();
+        pnlIdentity.setLayout(new GridLayoutManager(3, 1, new Insets(0, 0, 0, 0), 0, 2));
+        pnlHeader.add(pnlIdentity, new GridConstraints(0, 0, 1, 1,
+                GridConstraints.ANCHOR_WEST, GridConstraints.FILL_VERTICAL,
+                GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_CAN_GROW,
+                GridConstraints.SIZEPOLICY_FIXED,
+                null, null, null, 0, false));
+
+        lblWelcome = new JLabel("Welcome");
+        lblWelcome.setFont(new Font("SansSerif", Font.BOLD, 16));
+        pnlIdentity.add(lblWelcome, new GridConstraints(0, 0, 1, 1,
+                GridConstraints.ANCHOR_WEST, GridConstraints.FILL_NONE,
+                GridConstraints.SIZEPOLICY_FIXED, GridConstraints.SIZEPOLICY_FIXED,
+                null, null, null, 0, false));
+
+        lblWalletId = new JLabel("Wallet: --");
+        lblWalletId.setFont(new Font("SansSerif", Font.PLAIN, 12));
+        lblWalletId.setForeground(new Color(90, 98, 110));
+        pnlIdentity.add(lblWalletId, new GridConstraints(1, 0, 1, 1,
+                GridConstraints.ANCHOR_WEST, GridConstraints.FILL_NONE,
+                GridConstraints.SIZEPOLICY_FIXED, GridConstraints.SIZEPOLICY_FIXED,
+                null, null, null, 0, false));
+
+        lblPinStatus = new JLabel("Transaction PIN: Checking...");
+        lblPinStatus.setFont(new Font("SansSerif", Font.PLAIN, 11));
+        lblPinStatus.setForeground(new Color(90, 98, 110));
+        pnlIdentity.add(lblPinStatus, new GridConstraints(2, 0, 1, 1,
+                GridConstraints.ANCHOR_WEST, GridConstraints.FILL_NONE,
+                GridConstraints.SIZEPOLICY_FIXED, GridConstraints.SIZEPOLICY_FIXED,
+                null, null, null, 0, false));
+
+        pnlHeader.add(new Spacer(), new GridConstraints(0, 1, 1, 1,
+                GridConstraints.ANCHOR_CENTER, GridConstraints.FILL_HORIZONTAL,
+                GridConstraints.SIZEPOLICY_WANT_GROW, 1,
+                null, null, null, 0, false));
+
+        pnlBalanceAndActions = new JPanel();
+        pnlBalanceAndActions.setLayout(new GridLayoutManager(1, 5, new Insets(0, 0, 0, 0), 8, 0));
+        pnlHeader.add(pnlBalanceAndActions, new GridConstraints(0, 2, 1, 1,
+                GridConstraints.ANCHOR_EAST, GridConstraints.FILL_VERTICAL,
+                GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_CAN_GROW,
+                GridConstraints.SIZEPOLICY_FIXED,
+                null, null, null, 0, false));
+
+        pnlBalanceBox = new JPanel();
+        pnlBalanceBox.setLayout(new GridLayoutManager(2, 1, new Insets(0, 0, 0, 8), 0, 1));
+        pnlBalanceAndActions.add(pnlBalanceBox, new GridConstraints(0, 0, 1, 1,
+                GridConstraints.ANCHOR_EAST, GridConstraints.FILL_VERTICAL,
+                GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_CAN_GROW,
+                GridConstraints.SIZEPOLICY_FIXED,
+                null, null, null, 0, false));
+
+        JLabel balanceCaption = new JLabel("Available Balance", SwingConstants.RIGHT);
+        balanceCaption.setFont(new Font("SansSerif", Font.PLAIN, 11));
+        balanceCaption.setForeground(new Color(90, 98, 110));
+        pnlBalanceBox.add(balanceCaption, new GridConstraints(0, 0, 1, 1,
+                GridConstraints.ANCHOR_EAST, GridConstraints.FILL_NONE,
+                GridConstraints.SIZEPOLICY_FIXED, GridConstraints.SIZEPOLICY_FIXED,
+                null, null, null, 0, false));
+
+        lblBalance = new JLabel("PHP 0.00", SwingConstants.RIGHT);
+        lblBalance.setFont(new Font("SansSerif", Font.BOLD, 18));
+        lblBalance.setForeground(new Color(17, 102, 68));
+        pnlBalanceBox.add(lblBalance, new GridConstraints(1, 0, 1, 1,
+                GridConstraints.ANCHOR_EAST, GridConstraints.FILL_NONE,
+                GridConstraints.SIZEPOLICY_FIXED, GridConstraints.SIZEPOLICY_FIXED,
+                null, null, null, 0, false));
+
+        btnBack = new JButton("\u2190 Back");
+        btnBack.setEnabled(false);
+        pnlBalanceAndActions.add(btnBack, new GridConstraints(0, 1, 1, 1,
+                GridConstraints.ANCHOR_CENTER, GridConstraints.FILL_HORIZONTAL,
+                GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_CAN_GROW,
+                GridConstraints.SIZEPOLICY_FIXED,
+                null, null, null, 0, false));
+
+        btnRefresh = new JButton("Refresh");
+        pnlBalanceAndActions.add(btnRefresh, new GridConstraints(0, 2, 1, 1,
+                GridConstraints.ANCHOR_CENTER, GridConstraints.FILL_HORIZONTAL,
+                GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_CAN_GROW,
+                GridConstraints.SIZEPOLICY_FIXED,
+                null, null, null, 0, false));
+
+        btnPinSettings = new JButton("Transaction PIN");
+        pnlBalanceAndActions.add(btnPinSettings, new GridConstraints(0, 3, 1, 1,
+                GridConstraints.ANCHOR_CENTER, GridConstraints.FILL_HORIZONTAL,
+                GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_CAN_GROW,
+                GridConstraints.SIZEPOLICY_FIXED,
+                null, null, null, 0, false));
+
+        btnLogout = new JButton("Logout");
+        pnlBalanceAndActions.add(btnLogout, new GridConstraints(0, 4, 1, 1,
+                GridConstraints.ANCHOR_CENTER, GridConstraints.FILL_HORIZONTAL,
+                GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_CAN_GROW,
+                GridConstraints.SIZEPOLICY_FIXED,
+                null, null, null, 0, false));
+
+        tabs = new JTabbedPane();
+        pnlRoot.add(tabs, new GridConstraints(1, 0, 1, 1,
+                GridConstraints.ANCHOR_CENTER, GridConstraints.FILL_BOTH,
+                GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_WANT_GROW,
+                GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_WANT_GROW,
+                null, new Dimension(860, 480), null, 0, false));
+
+        pnlFooter = new JPanel();
+        pnlFooter.setLayout(new GridLayoutManager(1, 1, new Insets(4, 2, 0, 2), 0, 0));
+        pnlRoot.add(pnlFooter, new GridConstraints(2, 0, 1, 1,
+                GridConstraints.ANCHOR_CENTER, GridConstraints.FILL_BOTH,
+                GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_CAN_GROW,
+                GridConstraints.SIZEPOLICY_FIXED,
+                null, null, null, 0, false));
+
+        lblStatus = new JLabel("Initializing dashboard...");
+        lblStatus.setFont(new Font("SansSerif", Font.PLAIN, 11));
+        lblStatus.setForeground(new Color(90, 98, 110));
+        pnlFooter.add(lblStatus, new GridConstraints(0, 0, 1, 1,
+                GridConstraints.ANCHOR_WEST, GridConstraints.FILL_NONE,
+                GridConstraints.SIZEPOLICY_FIXED, GridConstraints.SIZEPOLICY_FIXED,
+                null, null, null, 0, false));
+    }
+
+    public JComponent $$$getRootComponent$$$() {
+        return pnlRoot;
+    }
+
     private static final class DashboardSnapshot {
         private final User user;
         private final Wallet wallet;
@@ -2320,18 +1984,6 @@ public class Main extends JFrame {
             this.transactions = transactions;
             this.paymentMethods = paymentMethods;
             this.hasPin = hasPin;
-        }
-    }
-
-    private static final class AdminPanelSnapshot {
-        private final List<User> users;
-        private final Map<String, Wallet> walletsByUser;
-        private final List<AdminAction> actions;
-
-        private AdminPanelSnapshot(List<User> users, Map<String, Wallet> walletsByUser, List<AdminAction> actions) {
-            this.users = users;
-            this.walletsByUser = walletsByUser;
-            this.actions = actions;
         }
     }
 }
