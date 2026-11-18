@@ -256,26 +256,28 @@ public class DatabaseManager implements AutoCloseable {
              ResultSet rs = stmt.executeQuery(checkSql)) {
             if (!rs.next()) {
                 String now = java.time.LocalDateTime.now().toString();
-                String insertBdo = "INSERT INTO payment_methods (payment_method_id, user_id, type, provider_name, account_name, account_number, is_default, status, created_at) " +
+                String insertBdo = "INSERT OR IGNORE INTO payment_methods (payment_method_id, user_id, type, provider_name, account_name, account_number, is_default, status, created_at) " +
                         "VALUES ('PM-DEMO-BDO', 'USR-ADMIN-01', 'BANK_ACCOUNT', 'BDO Unibank', 'Admin BDO Demo', '•••• 1234', 1, 'ACTIVE', '" + now + "')";
                 stmt.executeUpdate(insertBdo);
 
-                String insertBpi = "INSERT INTO payment_methods (payment_method_id, user_id, type, provider_name, account_name, account_number, is_default, status, created_at) " +
+                String insertBpi = "INSERT OR IGNORE INTO payment_methods (payment_method_id, user_id, type, provider_name, account_name, account_number, is_default, status, created_at) " +
                         "VALUES ('PM-DEMO-BPI', 'USR-ADMIN-01', 'BANK_ACCOUNT', 'Bank of the Philippine Islands (BPI)', 'Admin BPI Demo', '•••• 5678', 0, 'ACTIVE', '" + now + "')";
                 stmt.executeUpdate(insertBpi);
 
-                String insertMetro = "INSERT INTO payment_methods (payment_method_id, user_id, type, provider_name, account_name, account_number, is_default, status, created_at) " +
+                String insertMetro = "INSERT OR IGNORE INTO payment_methods (payment_method_id, user_id, type, provider_name, account_name, account_number, is_default, status, created_at) " +
                         "VALUES ('PM-DEMO-METRO', 'USR-ADMIN-01', 'BANK_ACCOUNT', 'Metrobank', 'Admin Metrobank Demo', '•••• 9012', 0, 'ACTIVE', '" + now + "')";
                 stmt.executeUpdate(insertMetro);
             }
         } catch (SQLException e) {
-            // Seed failure should not crash if already populated concurrently
+            if (e.getMessage() == null || !e.getMessage().toUpperCase().contains("CONSTRAINT")) {
+                throw new OtogException("Failed to seed admin demo payment methods", e);
+            }
         }
 
         // Backfill demo bank methods for any pre-existing users lacking payment methods
         String missingUsersSql = "SELECT u.user_id, u.name FROM users u " +
                 "WHERE NOT EXISTS (SELECT 1 FROM payment_methods pm WHERE pm.user_id = u.user_id)";
-        String insertSql = "INSERT INTO payment_methods (payment_method_id, user_id, type, provider_name, " +
+        String insertSql = "INSERT OR IGNORE INTO payment_methods (payment_method_id, user_id, type, provider_name, " +
                 "account_name, account_number, is_default, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)";
         try (Statement stmt = conn.createStatement();
              ResultSet rs = stmt.executeQuery(missingUsersSql);
@@ -306,7 +308,9 @@ public class DatabaseManager implements AutoCloseable {
             }
             ps.executeBatch();
         } catch (SQLException e) {
-            // Seed failure should not crash if already populated concurrently
+            if (e.getMessage() == null || !e.getMessage().toUpperCase().contains("CONSTRAINT")) {
+                throw new OtogException("Failed to backfill demo payment methods", e);
+            }
         }
     }
 
@@ -321,20 +325,22 @@ public class DatabaseManager implements AutoCloseable {
                 String pinHash = com.otog.util.PasswordUtil.hashPassword("123456", pinSalt);
                 String now = java.time.LocalDateTime.now().toString();
 
-                String insertUser = "INSERT INTO users (user_id, name, mobile_number, email, role, status, created_at, updated_at) " +
+                String insertUser = "INSERT OR IGNORE INTO users (user_id, name, mobile_number, email, role, status, created_at, updated_at) " +
                         "VALUES ('USR-ADMIN-01', 'admin', '09000000000', 'admin@otog.ph', 'ADMIN', 'ACTIVE', '" + now + "', '" + now + "')";
                 stmt.executeUpdate(insertUser);
 
-                String insertCred = "INSERT INTO credentials (user_id, password_hash, salt, failed_attempts, locked_until, pin_hash, pin_salt, pin_failed_attempts, updated_at) " +
+                String insertCred = "INSERT OR IGNORE INTO credentials (user_id, password_hash, salt, failed_attempts, locked_until, pin_hash, pin_salt, pin_failed_attempts, updated_at) " +
                         "VALUES ('USR-ADMIN-01', '" + hash + "', '" + salt + "', 0, NULL, '" + pinHash + "', '" + pinSalt + "', 0, '" + now + "')";
                 stmt.executeUpdate(insertCred);
 
-                String insertWallet = "INSERT INTO wallets (wallet_id, user_id, balance, currency, status, created_at, updated_at) " +
+                String insertWallet = "INSERT OR IGNORE INTO wallets (wallet_id, user_id, balance, currency, status, created_at, updated_at) " +
                         "VALUES ('WLT-ADMIN-01', 'USR-ADMIN-01', '1000.00', 'PHP', 'ACTIVE', '" + now + "', '" + now + "')";
                 stmt.executeUpdate(insertWallet);
             }
         } catch (SQLException e) {
-            // Seed failure should not crash if already populated concurrently
+            if (e.getMessage() == null || !e.getMessage().toUpperCase().contains("CONSTRAINT")) {
+                throw new OtogException("Failed to seed default administrator account", e);
+            }
         }
     }
 
@@ -359,7 +365,7 @@ public class DatabaseManager implements AutoCloseable {
                 try {
                     conn.rollback();
                 } catch (SQLException rollbackEx) {
-                    // Suppress secondary rollback exception
+                    e.addSuppressed(rollbackEx);
                 }
             }
             if (e instanceof RuntimeException re) {
@@ -370,11 +376,13 @@ public class DatabaseManager implements AutoCloseable {
             if (conn != null) {
                 try {
                     conn.setAutoCommit(initialAutoCommit);
-                } catch (SQLException ignored) {
+                } catch (SQLException cleanupEx) {
+                    System.err.println("[WARN] Failed to restore connection autoCommit: " + cleanupEx.getMessage());
                 }
                 try {
                     conn.close();
-                } catch (SQLException ignored) {
+                } catch (SQLException closeEx) {
+                    System.err.println("[WARN] Failed to close SQLite connection: " + closeEx.getMessage());
                 }
             }
         }
@@ -385,7 +393,8 @@ public class DatabaseManager implements AutoCloseable {
         if (memoryAnchorConnection != null) {
             try {
                 memoryAnchorConnection.close();
-            } catch (SQLException ignored) {
+            } catch (SQLException closeEx) {
+                System.err.println("[WARN] Failed to close in-memory anchor connection: " + closeEx.getMessage());
             }
             memoryAnchorConnection = null;
         }

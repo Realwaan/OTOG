@@ -422,7 +422,7 @@ public class UserLogin extends JFrame {
     }
 
     /**
-     * Pure non-UI login work: credential checks, PBKDF2 hashing, wallet lookup/provisioning and
+     * Pure non-UI login work: credential checks, salted SHA-256 hashing, wallet lookup/provisioning and
      * OTP issuance. Must not touch Swing components so it is safe inside SwingWorker.doInBackground().
      */
     private LoginOutcome authenticateInBackground(String username, String password) {

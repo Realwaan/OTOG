@@ -39,6 +39,10 @@ public class SendMoneyService {
         this((WalletOperations) walletService, userRepository, authService);
     }
 
+    public SendMoneyService(WalletService walletService, AuthService authService) {
+        this((WalletOperations) walletService, walletService.getUserRepository(), authService);
+    }
+
     /**
      * Resolves a recipient user from a mobile number, user ID, email, name, or wallet ID.
      *
@@ -64,7 +68,8 @@ public class SendMoneyService {
                 return userRepository.findById(wallet.getUserId())
                         .orElseThrow(() -> new EntityNotFoundException("Recipient user", cleanId));
             }
-        } catch (Exception ignored) {
+        } catch (EntityNotFoundException notFound) {
+            throw new EntityNotFoundException("Recipient user", cleanId);
         }
 
         throw new EntityNotFoundException("Recipient user", cleanId);
@@ -230,19 +235,15 @@ public class SendMoneyService {
     public Transaction sendMoney(String senderUserId, String recipientIdentifier,
                                  BigDecimal amount, BigDecimal fee, String note, String pin) {
         // Fast-path balance check for send operations: reject insufficient funds before processing preview
-        if (senderUserId != null && amount != null) {
-            try {
-                Wallet senderWallet = walletService.getWalletByUserId(senderUserId.trim());
-                if (senderWallet != null) {
-                    BigDecimal validFee = (fee != null) ? fee : MoneyUtil.ZERO;
-                    BigDecimal totalDebit = amount.add(validFee);
-                    if (senderWallet.getBalance().compareTo(totalDebit) < 0) {
-                        throw new InsufficientFundsException(senderWallet.getWalletId(), senderWallet.getBalance(), totalDebit);
-                    }
+        if (senderUserId != null && !senderUserId.trim().isEmpty()
+                && amount != null && amount.compareTo(BigDecimal.ZERO) > 0) {
+            Wallet senderWallet = walletService.getWalletByUserId(senderUserId.trim());
+            if (senderWallet != null) {
+                BigDecimal validFee = (fee != null && fee.compareTo(BigDecimal.ZERO) >= 0) ? fee : MoneyUtil.ZERO;
+                BigDecimal totalDebit = amount.add(validFee);
+                if (senderWallet.getBalance().compareTo(totalDebit) < 0) {
+                    throw new InsufficientFundsException(senderWallet.getWalletId(), senderWallet.getBalance(), totalDebit);
                 }
-            } catch (InsufficientFundsException ex) {
-                throw ex;
-            } catch (Exception ignored) {
             }
         }
 

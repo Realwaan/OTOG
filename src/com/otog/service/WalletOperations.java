@@ -76,4 +76,12 @@ public interface WalletOperations {
     default BankResponseStatus getCurrentProviderMode() {
         return BankResponseStatus.SUCCESS;
     }
+
+    default AdminService getAdminService() {
+        return null;
+    }
+
+    default SendMoneyService createSendMoneyService(AuthService authService) {
+        return null;
+    }
 }

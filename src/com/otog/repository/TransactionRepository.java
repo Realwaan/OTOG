@@ -2,6 +2,8 @@ package com.otog.repository;
 
 import com.otog.database.DatabaseManager;
 import com.otog.exception.OtogException;
+import com.otog.model.CashInOutTransaction;
+import com.otog.model.SendMoneyTransaction;
 import com.otog.model.Transaction;
 import com.otog.model.TransactionStatus;
 import com.otog.model.TransactionType;
@@ -34,7 +36,7 @@ public class TransactionRepository {
 
     public Transaction save(Transaction txn, Connection conn) throws SQLException {
         String channel = null;
-        if (txn instanceof com.otog.model.CashInOutTransaction cio) {
+        if (txn instanceof CashInOutTransaction cio) {
             channel = cio.getChannel();
         }
         String sql = "INSERT INTO transactions (transaction_id, reference_number, source_wallet_id, " +
@@ -233,12 +235,15 @@ public class TransactionRepository {
         TransactionType type = TransactionType.valueOf(rs.getString("type"));
         Transaction t;
         if (type == TransactionType.CASH_IN || type == TransactionType.CASH_OUT) {
-            com.otog.model.CashInOutTransaction cio = new com.otog.model.CashInOutTransaction();
+            CashInOutTransaction cio = new CashInOutTransaction();
             cio.setCashOperationType(type == TransactionType.CASH_IN ? "CASH_IN" : "CASH_OUT");
-            try {
-                cio.setChannel(rs.getString("channel"));
-            } catch (SQLException ignored) {}
+            cio.setChannel(rs.getString("channel"));
             t = cio;
+        } else if (type == TransactionType.SEND_MONEY) {
+            SendMoneyTransaction smt = new SendMoneyTransaction();
+            smt.setRecipientNumber(rs.getString("target_wallet_id"));
+            smt.setNote(rs.getString("description"));
+            t = smt;
         } else {
             t = new Transaction();
         }
@@ -258,12 +263,8 @@ public class TransactionRepository {
         if (comp != null) {
             t.setCompletedAt(LocalDateTime.parse(comp));
         }
-        try {
-            t.setProviderReference(rs.getString("provider_reference"));
-        } catch (SQLException ignored) {}
-        try {
-            t.setProviderStatus(rs.getString("provider_status"));
-        } catch (SQLException ignored) {}
+        t.setProviderReference(rs.getString("provider_reference"));
+        t.setProviderStatus(rs.getString("provider_status"));
         return t;
     }
 }

@@ -11,6 +11,7 @@ import com.otog.model.TransactionType;
 import com.otog.model.User;
 import com.otog.model.UserRole;
 import com.otog.model.Wallet;
+import com.otog.service.AdminService;
 import com.otog.service.AuthService;
 import com.otog.service.AuthServiceImpl;
 import com.otog.service.BankResponseStatus;
@@ -284,8 +285,9 @@ public class Main extends JFrame {
 
         // CAP-09: Admin Controls tab — only visible to administrators
         User sessionUser = SessionManager.getInstance().getCurrentUser();
-        if (sessionUser != null && sessionUser.isAdmin() && walletService instanceof WalletService) {
-            registerTab("Admin Controls", buildAdminControlsPanel((WalletService) walletService));
+        AdminService adminService = walletService.getAdminService();
+        if (sessionUser != null && sessionUser.isAdmin() && adminService != null) {
+            registerTab("Admin Controls", buildAdminControlsPanel(adminService));
         }
 
         lastSelectedTabTitle = tabs.getTabCount() > 0 ? tabs.getTitleAt(tabs.getSelectedIndex()) : null;
@@ -602,7 +604,7 @@ public class Main extends JFrame {
      * actions (with mandatory recorded reasons), transaction inspection, and audit log viewer.
      * Only rendered when the session user has role ADMIN; all DB calls execute off the EDT.
      */
-    private JPanel buildAdminControlsPanel(WalletService ws) {
+    private JPanel buildAdminControlsPanel(AdminService adminService) {
         User admin = SessionManager.getInstance().getCurrentUser();
         String adminId = admin.getUserId();
 
@@ -685,9 +687,9 @@ public class Main extends JFrame {
                 @Override
                 protected AdminPanelSnapshot doInBackground() {
                     lastAdminLoadExecutedOffEdt = !SwingUtilities.isEventDispatchThread();
-                    List<User> users = ws.getAllUsers(adminId);
-                    List<Wallet> wallets = ws.getAllWallets(adminId);
-                    List<AdminAction> actions = ws.getAdminActions(adminId);
+                    List<User> users = adminService.getAllUsers(adminId);
+                    List<Wallet> wallets = adminService.getAllWallets(adminId);
+                    List<AdminAction> actions = adminService.getAdminActions(adminId);
                     Map<String, Wallet> walletsByUser = new HashMap<>();
                     for (Wallet w : wallets) {
                         walletsByUser.put(w.getUserId(), w);
@@ -740,10 +742,10 @@ public class Main extends JFrame {
         reloadAll.accept(false);
 
         btnSuspend.addActionListener(e -> executeAdminStatusAction(
-                ws, adminId, userTable, userModel, statusLbl, () -> reloadAll.accept(false), true));
+                adminService, adminId, userTable, userModel, statusLbl, () -> reloadAll.accept(false), true));
 
         btnReactivate.addActionListener(e -> executeAdminStatusAction(
-                ws, adminId, userTable, userModel, statusLbl, () -> reloadAll.accept(false), false));
+                adminService, adminId, userTable, userModel, statusLbl, () -> reloadAll.accept(false), false));
 
         btnChangeRole.addActionListener(e -> {
             int row = userTable.getSelectedRow();
@@ -772,7 +774,7 @@ public class Main extends JFrame {
             new SwingWorker<Void, Void>() {
                 @Override
                 protected Void doInBackground() {
-                    ws.getAdminService().changeUserRole(adminId, targetId, selectedRole, reason);
+                    adminService.changeUserRole(adminId, targetId, selectedRole, reason);
                     return null;
                 }
 
@@ -799,13 +801,13 @@ public class Main extends JFrame {
             int modelRow = userTable.convertRowIndexToModel(row);
             String targetId = (String) userModel.getValueAt(modelRow, 0);
             String targetName = (String) userModel.getValueAt(modelRow, 1);
-            loadAndShowAdminTransactions(ws, adminId, targetId,
+            loadAndShowAdminTransactions(adminService, adminId, targetId,
                     "Transactions — " + targetName + " (" + targetId + ")", root, statusLbl,
                     () -> reloadAll.accept(false));
         });
 
         btnViewAllTxns.addActionListener(e ->
-                loadAndShowAdminTransactions(ws, adminId, null,
+                loadAndShowAdminTransactions(adminService, adminId, null,
                         "All System Transactions", root, statusLbl, () -> reloadAll.accept(false)));
 
         btnRefreshAll.addActionListener(e -> reloadAll.accept(true));
@@ -813,7 +815,7 @@ public class Main extends JFrame {
         return root;
     }
 
-    private void executeAdminStatusAction(WalletService ws, String adminId, JTable userTable,
+    private void executeAdminStatusAction(AdminService adminService, String adminId, JTable userTable,
                                           DefaultTableModel userModel, JLabel statusLbl,
                                           Runnable reloadAll, boolean suspend) {
         int row = userTable.getSelectedRow();
@@ -834,9 +836,9 @@ public class Main extends JFrame {
             @Override
             protected Void doInBackground() {
                 if (suspend) {
-                    ws.suspendUser(adminId, targetId, reason);
+                    adminService.suspendUser(adminId, targetId, reason);
                 } else {
-                    ws.reactivateUser(adminId, targetId, reason);
+                    adminService.reactivateUser(adminId, targetId, reason);
                 }
                 return null;
             }
@@ -874,7 +876,7 @@ public class Main extends JFrame {
         return trimmed;
     }
 
-    private void loadAndShowAdminTransactions(WalletService ws, String adminId, String targetUserId,
+    private void loadAndShowAdminTransactions(AdminService adminService, String adminId, String targetUserId,
                                               String dialogTitle, Component parent,
                                               JLabel statusLbl, Runnable reloadAll) {
         statusLbl.setText("Loading transactions...");
@@ -882,8 +884,8 @@ public class Main extends JFrame {
             @Override
             protected List<Transaction> doInBackground() {
                 return targetUserId != null
-                        ? ws.getUserTransactions(adminId, targetUserId)
-                        : ws.getAllTransactions(adminId);
+                        ? adminService.getUserTransactions(adminId, targetUserId)
+                        : adminService.getAllTransactions(adminId);
             }
 
             @Override
@@ -1367,13 +1369,13 @@ public class Main extends JFrame {
 
         txtSendPin.setText("");
         User currentUser = session.getCurrentUser();
-        if (walletService instanceof WalletService ws && currentUser != null) {
+        SendMoneyService sendMoneyService = walletService.createSendMoneyService(authService);
+        if (sendMoneyService != null && currentUser != null) {
             btnSubmitSendMoney.setEnabled(false);
             lblSendFeedback.setForeground(new Color(70, 80, 95));
             lblSendFeedback.setText("Preparing transfer confirmation...");
             lblStatus.setText("Validating recipient and balance...");
 
-            SendMoneyService sendMoneyService = new SendMoneyService(ws, ws.getUserRepository(), authService);
             new SwingWorker<SendMoneyService.SendMoneyPreview, Void>() {
                 @Override
                 protected SendMoneyService.SendMoneyPreview doInBackground() {

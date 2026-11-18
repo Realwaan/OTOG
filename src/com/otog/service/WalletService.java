@@ -110,8 +110,14 @@ public class WalletService implements WalletOperations {
                 new CredentialRepository(databaseManager));
     }
 
+    @Override
     public AdminService getAdminService() {
         return adminService;
+    }
+
+    @Override
+    public SendMoneyService createSendMoneyService(AuthService effectiveAuthService) {
+        return new SendMoneyService(this, this.userRepository, effectiveAuthService);
     }
 
     public AdminActionRepository getAdminActionRepository() {
