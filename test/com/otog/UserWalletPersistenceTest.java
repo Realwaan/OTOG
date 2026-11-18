@@ -156,10 +156,15 @@ public class UserWalletPersistenceTest {
                 new BigDecimal("250.00"), new BigDecimal("15.00"), "Dinner split");
 
         assertNotNull(txn.getTransactionId());
+        assertInstanceOf(SendMoneyTransaction.class, txn);
         assertEquals(TransactionStatus.COMPLETED, txn.getStatus());
         assertEquals(new BigDecimal("250.00"), txn.getAmount());
         assertEquals(new BigDecimal("15.00"), txn.getFee());
         assertEquals(new BigDecimal("265.00"), txn.getTotalAmount());
+
+        Transaction reloadedSend = transactionRepository.findByReferenceNumber(ref).orElseThrow();
+        assertInstanceOf(SendMoneyTransaction.class, reloadedSend,
+                "SEND_MONEY rows should hydrate back as SendMoneyTransaction");
 
         // Verify receipt string contains required details
         String receipt = txn.getReceipt();
