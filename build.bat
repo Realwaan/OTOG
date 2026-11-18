@@ -20,7 +20,14 @@ set BUILD_EXIT=%ERRORLEVEL%
 if exist sources.txt del sources.txt
 
 if %BUILD_EXIT% EQU 0 (
-    if exist "src\UserLogin.form" copy /Y "src\UserLogin.form" "out\production\OTOG\UserLogin.form" >nul
+    for /f "delims=" %%f in ('dir /s /b src\*.form 2^>nul') do (
+        set "srcForm=%%f"
+        set "relForm=!srcForm:%CD%\src\=!"
+        for %%d in ("out\production\OTOG\!relForm!") do (
+            if not exist "%%~dpd" mkdir "%%~dpd"
+        )
+        copy /Y "%%f" "out\production\OTOG\!relForm!" >nul
+    )
     echo Build successful.
 ) else (
     echo Build failed with error %BUILD_EXIT%.

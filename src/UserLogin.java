@@ -622,58 +622,71 @@ public class UserLogin extends JFrame {
 
     private void $$$setupUI$$$() {
         pnlMain = new JPanel();
-        pnlMain.setLayout(new GridLayoutManager(4, 3, new Insets(15, 15, 15, 15), -1, -1));
+        pnlMain.setLayout(new GridLayoutManager(4, 3, new Insets(20, 24, 20, 24), 10, 10));
         pnlMain.setVisible(true);
 
         pnlPassword = new JPanel();
-        pnlPassword.setLayout(new GridLayoutManager(4, 2, new Insets(0, 0, 0, 0), -1, -1));
+        pnlPassword.setLayout(new GridLayoutManager(5, 2, new Insets(12, 16, 12, 16), 10, 10));
+        pnlPassword.setBorder(BorderFactory.createTitledBorder(
+                BorderFactory.createEtchedBorder(), "OTOG E-Wallet — Sign In"));
         pnlMain.add(pnlPassword, new GridConstraints(0, 0, 3, 3,
                 GridConstraints.ANCHOR_CENTER, GridConstraints.FILL_BOTH,
                 GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_CAN_GROW,
                 GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_CAN_GROW,
                 null, null, null, 0, false));
 
+        JLabel loginBannerLabel = new JLabel("One Team One Goal — Digital E-Wallet");
+        loginBannerLabel.setFont(new Font("SansSerif", Font.BOLD, 16));
+        pnlPassword.add(loginBannerLabel, new GridConstraints(0, 0, 1, 2,
+                GridConstraints.ANCHOR_CENTER, GridConstraints.FILL_NONE,
+                GridConstraints.SIZEPOLICY_FIXED, GridConstraints.SIZEPOLICY_FIXED,
+                null, null, null, 0, false));
+
         JLabel usernameLabel = new JLabel("Username / Mobile / Email:");
-        pnlPassword.add(usernameLabel, new GridConstraints(0, 0, 1, 1,
+        pnlPassword.add(usernameLabel, new GridConstraints(1, 0, 1, 1,
                 GridConstraints.ANCHOR_WEST, GridConstraints.FILL_NONE,
                 GridConstraints.SIZEPOLICY_FIXED, GridConstraints.SIZEPOLICY_FIXED,
                 null, null, null, 0, false));
 
         textFieldUsername = new JTextField();
-        pnlPassword.add(textFieldUsername, new GridConstraints(0, 1, 1, 1,
+        pnlPassword.add(textFieldUsername, new GridConstraints(1, 1, 1, 1,
                 GridConstraints.ANCHOR_WEST, GridConstraints.FILL_HORIZONTAL,
-                GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_CAN_GROW,
+                GridConstraints.SIZEPOLICY_WANT_GROW,
                 GridConstraints.SIZEPOLICY_FIXED,
-                null, null, null, 0, false));
+                null, new Dimension(260, -1), null, 0, false));
 
         JLabel passwordLabel = new JLabel("Password:");
-        pnlPassword.add(passwordLabel, new GridConstraints(1, 0, 1, 1,
+        pnlPassword.add(passwordLabel, new GridConstraints(2, 0, 1, 1,
                 GridConstraints.ANCHOR_WEST, GridConstraints.FILL_NONE,
                 GridConstraints.SIZEPOLICY_FIXED, GridConstraints.SIZEPOLICY_FIXED,
                 null, null, null, 0, false));
 
         passwordFieldPasswordInput = new JPasswordField();
         passwordFieldPasswordInput.setEchoChar('*');
-        pnlPassword.add(passwordFieldPasswordInput, new GridConstraints(1, 1, 1, 1,
+        pnlPassword.add(passwordFieldPasswordInput, new GridConstraints(2, 1, 1, 1,
                 GridConstraints.ANCHOR_WEST, GridConstraints.FILL_HORIZONTAL,
+                GridConstraints.SIZEPOLICY_WANT_GROW,
+                GridConstraints.SIZEPOLICY_FIXED,
+                null, new Dimension(260, -1), null, 0, false));
+
+        btnLogin = new JButton("Login");
+        pnlPassword.add(btnLogin, new GridConstraints(3, 0, 1, 2,
+                GridConstraints.ANCHOR_CENTER, GridConstraints.FILL_NONE,
                 GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_CAN_GROW,
                 GridConstraints.SIZEPOLICY_FIXED,
                 null, null, null, 0, false));
 
-        btnLogin = new JButton("Login");
-        pnlPassword.add(btnLogin, new GridConstraints(2, 0, 1, 2,
-                GridConstraints.ANCHOR_CENTER, GridConstraints.FILL_NONE,
-                GridConstraints.SIZEPOLICY_FIXED, GridConstraints.SIZEPOLICY_FIXED,
-                null, null, null, 0, false));
-
         btnRegister = new JButton("Create New Account / Register");
-        pnlPassword.add(btnRegister, new GridConstraints(3, 0, 1, 2,
+        pnlPassword.add(btnRegister, new GridConstraints(4, 0, 1, 2,
                 GridConstraints.ANCHOR_CENTER, GridConstraints.FILL_NONE,
-                GridConstraints.SIZEPOLICY_FIXED, GridConstraints.SIZEPOLICY_FIXED,
+                GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_CAN_GROW,
+                GridConstraints.SIZEPOLICY_FIXED,
                 null, null, null, 0, false));
 
         pnl2FA = new JPanel();
-        pnl2FA.setLayout(new GridLayoutManager(5, 2, new Insets(0, 0, 0, 0), -1, -1));
+        pnl2FA.setLayout(new GridLayoutManager(5, 2, new Insets(12, 16, 12, 16), 10, 10));
+        pnl2FA.setBorder(BorderFactory.createTitledBorder(
+                BorderFactory.createEtchedBorder(), "Two-Factor Verification"));
         pnl2FA.setVisible(false);
         pnlMain.add(pnl2FA, new GridConstraints(3, 0, 1, 3,
                 GridConstraints.ANCHOR_CENTER, GridConstraints.FILL_BOTH,
@@ -696,26 +709,29 @@ public class UserLogin extends JFrame {
         textField2FA = new JTextField();
         pnl2FA.add(textField2FA, new GridConstraints(1, 1, 1, 1,
                 GridConstraints.ANCHOR_WEST, GridConstraints.FILL_HORIZONTAL,
-                GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_CAN_GROW,
+                GridConstraints.SIZEPOLICY_WANT_GROW,
                 GridConstraints.SIZEPOLICY_FIXED,
                 null, null, null, 0, false));
 
         btnVerify2FA = new JButton("Verify");
         pnl2FA.add(btnVerify2FA, new GridConstraints(2, 0, 1, 2,
                 GridConstraints.ANCHOR_CENTER, GridConstraints.FILL_NONE,
-                GridConstraints.SIZEPOLICY_FIXED, GridConstraints.SIZEPOLICY_FIXED,
+                GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_CAN_GROW,
+                GridConstraints.SIZEPOLICY_FIXED,
                 null, null, null, 0, false));
 
         btnResendOtp = new JButton("Resend Simulated OTP");
         pnl2FA.add(btnResendOtp, new GridConstraints(3, 0, 1, 2,
                 GridConstraints.ANCHOR_CENTER, GridConstraints.FILL_NONE,
-                GridConstraints.SIZEPOLICY_FIXED, GridConstraints.SIZEPOLICY_FIXED,
+                GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_CAN_GROW,
+                GridConstraints.SIZEPOLICY_FIXED,
                 null, null, null, 0, false));
 
         btnBackToLogin = new JButton("Back to Login");
         pnl2FA.add(btnBackToLogin, new GridConstraints(4, 0, 1, 2,
                 GridConstraints.ANCHOR_CENTER, GridConstraints.FILL_NONE,
-                GridConstraints.SIZEPOLICY_FIXED, GridConstraints.SIZEPOLICY_FIXED,
+                GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_CAN_GROW,
+                GridConstraints.SIZEPOLICY_FIXED,
                 null, null, null, 0, false));
     }
 
