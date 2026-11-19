@@ -5,6 +5,8 @@ import com.intellij.uiDesigner.core.GridLayoutManager;
 import com.intellij.uiDesigner.core.Spacer;
 import com.otog.model.User;
 import com.otog.service.AuthService;
+import com.otog.util.OtogConfig;
+import com.otog.util.UiTheme;
 
 import javax.swing.*;
 import java.awt.*;
@@ -27,7 +29,7 @@ public class RegisterDialog extends JDialog {
     private JButton btnCancel;
 
     public RegisterDialog(Frame parent, AuthService authService) {
-        super(parent, "Register New Account - OTOG E-Wallet", true);
+        super(parent, "Register New Account - " + OtogConfig.getInstance().getAppTitle(), true);
         this.authService = authService;
         if (pnlRoot == null) {
             $$$setupUI$$$();
@@ -37,7 +39,7 @@ public class RegisterDialog extends JDialog {
 
     private void initUI() {
         setContentPane(pnlRoot);
-        setSize(480, 350);
+        setSize(OtogConfig.getInstance().getUiDimension("ui.register.width", "ui.register.height", 480, 350));
         setLocationRelativeTo(getParent());
         setResizable(false);
 
@@ -74,9 +76,10 @@ public class RegisterDialog extends JDialog {
             return;
         }
 
-        if (password.trim().length() < 6) {
+        int minPwdLen = OtogConfig.getInstance().getMinPasswordLength();
+        if (password.trim().length() < minPwdLen) {
             showDialogMessage("Validation Error",
-                    "Password must be at least 6 characters long.",
+                    "Password must be at least " + minPwdLen + " characters long.",
                     JOptionPane.WARNING_MESSAGE);
             return;
         }
@@ -102,7 +105,8 @@ public class RegisterDialog extends JDialog {
                 try {
                     registeredUser = get();
                     showDialogMessage("Registration Complete",
-                            "Registration successful!\nA secure wallet has been created with 0.00 PHP balance.\nYou may now log in.",
+                            "Registration successful!\nA secure wallet has been created with 0.00 "
+                                    + OtogConfig.getInstance().getDefaultCurrency() + " balance.\nYou may now log in.",
                             JOptionPane.INFORMATION_MESSAGE);
                     dispose();
                 } catch (InterruptedException ex) {
@@ -171,11 +175,12 @@ public class RegisterDialog extends JDialog {
     }
 
     private void $$$setupUI$$$() {
+        OtogConfig config = OtogConfig.getInstance();
         pnlRoot = new JPanel();
         pnlRoot.setLayout(new GridLayoutManager(3, 1, new Insets(16, 20, 14, 20), 10, 10));
 
-        JLabel regHeader = new JLabel("Create Your OTOG E-Wallet Account");
-        regHeader.setFont(new Font("SansSerif", Font.BOLD, 14));
+        JLabel regHeader = new JLabel("Create Your " + config.getAppTitle() + " Account");
+        regHeader.setFont(UiTheme.font(UiTheme.FontRole.TITLE));
         pnlRoot.add(regHeader, new GridConstraints(0, 0, 1, 1,
                 GridConstraints.ANCHOR_WEST, GridConstraints.FILL_NONE,
                 GridConstraints.SIZEPOLICY_FIXED, GridConstraints.SIZEPOLICY_FIXED,
@@ -183,8 +188,7 @@ public class RegisterDialog extends JDialog {
 
         pnlForm = new JPanel();
         pnlForm.setLayout(new GridLayoutManager(5, 2, new Insets(10, 12, 10, 12), 10, 10));
-        pnlForm.setBorder(BorderFactory.createTitledBorder(
-                BorderFactory.createEtchedBorder(), "Account Details"));
+        pnlForm.setBorder(UiTheme.titledBorder("Account Details"));
         pnlRoot.add(pnlForm, new GridConstraints(1, 0, 1, 1,
                 GridConstraints.ANCHOR_CENTER, GridConstraints.FILL_BOTH,
                 GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_CAN_GROW,
@@ -221,7 +225,7 @@ public class RegisterDialog extends JDialog {
                 GridConstraints.SIZEPOLICY_WANT_GROW, GridConstraints.SIZEPOLICY_FIXED,
                 null, new Dimension(200, -1), null, 0, false));
 
-        pnlForm.add(new JLabel("Password (min 6 chars):"), new GridConstraints(3, 0, 1, 1,
+        pnlForm.add(new JLabel("Password (min " + config.getMinPasswordLength() + " chars):"), new GridConstraints(3, 0, 1, 1,
                 GridConstraints.ANCHOR_WEST, GridConstraints.FILL_NONE,
                 GridConstraints.SIZEPOLICY_FIXED, GridConstraints.SIZEPOLICY_FIXED,
                 null, null, null, 0, false));

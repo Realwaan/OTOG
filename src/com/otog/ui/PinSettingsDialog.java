@@ -4,6 +4,9 @@ import com.intellij.uiDesigner.core.GridConstraints;
 import com.intellij.uiDesigner.core.GridLayoutManager;
 import com.intellij.uiDesigner.core.Spacer;
 import com.otog.service.AuthService;
+import com.otog.service.SessionManager;
+import com.otog.util.OtogConfig;
+import com.otog.util.UiTheme;
 
 import javax.swing.*;
 import java.awt.*;
@@ -68,7 +71,7 @@ public class PinSettingsDialog extends JDialog {
 
     private void initUI() {
         setContentPane(pnlRoot);
-        setSize(440, 290);
+        setSize(OtogConfig.getInstance().getUiDimension("ui.pin.width", "ui.pin.height", 440, 290));
         setLocationRelativeTo(getParent());
         setResizable(false);
 
@@ -109,14 +112,14 @@ public class PinSettingsDialog extends JDialog {
 
         if (secret.isEmpty() || newPin.isEmpty()) {
             String msg = "Please fill in all fields.";
-            lblPinDialogFeedback.setForeground(new Color(176, 38, 38));
+            lblPinDialogFeedback.setForeground(UiTheme.color(UiTheme.ColorRole.ERROR));
             lblPinDialogFeedback.setText(msg);
             messageCallback.show(this, "Validation Error", msg, JOptionPane.WARNING_MESSAGE);
             return;
         }
         if (!newPin.equals(confirmPin)) {
             String msg = "New PIN and confirmation do not match.";
-            lblPinDialogFeedback.setForeground(new Color(176, 38, 38));
+            lblPinDialogFeedback.setForeground(UiTheme.color(UiTheme.ColorRole.ERROR));
             lblPinDialogFeedback.setText(msg);
             messageCallback.show(this, "Validation Error", msg, JOptionPane.WARNING_MESSAGE);
             return;
@@ -126,7 +129,7 @@ public class PinSettingsDialog extends JDialog {
         btnSavePin.setEnabled(false);
         btnCancel.setEnabled(false);
         setDefaultCloseOperation(WindowConstants.DO_NOTHING_ON_CLOSE);
-        lblPinDialogFeedback.setForeground(new Color(70, 80, 95));
+        lblPinDialogFeedback.setForeground(UiTheme.color(UiTheme.ColorRole.INFO));
         lblPinDialogFeedback.setText("Saving Transaction PIN...");
 
         new SwingWorker<Void, Void>() {
@@ -157,7 +160,7 @@ public class PinSettingsDialog extends JDialog {
                     dispose();
                 } catch (InterruptedException ex) {
                     Thread.currentThread().interrupt();
-                    lblPinDialogFeedback.setForeground(new Color(176, 38, 38));
+                    lblPinDialogFeedback.setForeground(UiTheme.color(UiTheme.ColorRole.ERROR));
                     lblPinDialogFeedback.setText("PIN update interrupted.");
                     messageCallback.show(PinSettingsDialog.this,
                             "Transaction PIN Error",
@@ -168,10 +171,10 @@ public class PinSettingsDialog extends JDialog {
                     String errorMsg = (cause.getMessage() != null && !cause.getMessage().trim().isEmpty())
                             ? cause.getMessage()
                             : cause.getClass().getSimpleName();
-                    lblPinDialogFeedback.setForeground(new Color(176, 38, 38));
+                    lblPinDialogFeedback.setForeground(UiTheme.color(UiTheme.ColorRole.ERROR));
                     lblPinDialogFeedback.setText(errorMsg);
-                    if (com.otog.service.SessionManager.getInstance().isExpiredDueToInactivity()
-                            || com.otog.service.SessionManager.getInstance().isLockedOutByPin()) {
+                    if (SessionManager.getInstance().isExpiredDueToInactivity()
+                            || SessionManager.getInstance().isLockedOutByPin()) {
                         dispose();
                         if (errorInspector != null) {
                             errorInspector.accept(errorMsg);
@@ -215,10 +218,10 @@ public class PinSettingsDialog extends JDialog {
         pnlRoot = new JPanel();
         pnlRoot.setLayout(new GridLayoutManager(2, 1, new Insets(14, 18, 12, 18), 8, 10));
 
+        OtogConfig config = OtogConfig.getInstance();
         pnlForm = new JPanel();
         pnlForm.setLayout(new GridLayoutManager(5, 2, new Insets(10, 12, 10, 12), 8, 8));
-        pnlForm.setBorder(BorderFactory.createTitledBorder(
-                BorderFactory.createEtchedBorder(), "Transaction PIN Security"));
+        pnlForm.setBorder(UiTheme.titledBorder("Transaction PIN Security"));
         pnlRoot.add(pnlForm, new GridConstraints(0, 0, 1, 1,
                 GridConstraints.ANCHOR_CENTER, GridConstraints.FILL_BOTH,
                 GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_CAN_GROW,
@@ -259,7 +262,8 @@ public class PinSettingsDialog extends JDialog {
                 GridConstraints.SIZEPOLICY_WANT_GROW, GridConstraints.SIZEPOLICY_FIXED,
                 null, new Dimension(180, -1), null, 0, false));
 
-        pnlForm.add(new JLabel("New PIN (4-6 digits):"), new GridConstraints(2, 0, 1, 1,
+        pnlForm.add(new JLabel("New PIN (" + config.getPinMinLength() + "-" + config.getPinMaxLength() + " digits):"),
+                new GridConstraints(2, 0, 1, 1,
                 GridConstraints.ANCHOR_WEST, GridConstraints.FILL_NONE,
                 GridConstraints.SIZEPOLICY_FIXED, GridConstraints.SIZEPOLICY_FIXED,
                 null, null, null, 0, false));
@@ -282,7 +286,7 @@ public class PinSettingsDialog extends JDialog {
                 null, new Dimension(180, -1), null, 0, false));
 
         lblPinDialogFeedback = new JLabel(" ");
-        lblPinDialogFeedback.setFont(new Font("SansSerif", Font.PLAIN, 11));
+        lblPinDialogFeedback.setFont(UiTheme.font(UiTheme.FontRole.SMALL));
         pnlForm.add(lblPinDialogFeedback, new GridConstraints(4, 0, 1, 2,
                 GridConstraints.ANCHOR_WEST, GridConstraints.FILL_NONE,
                 GridConstraints.SIZEPOLICY_FIXED, GridConstraints.SIZEPOLICY_FIXED,

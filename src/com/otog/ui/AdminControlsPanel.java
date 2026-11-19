@@ -10,6 +10,8 @@ import com.otog.model.UserRole;
 import com.otog.model.Wallet;
 import com.otog.service.AdminService;
 import com.otog.util.MoneyUtil;
+import com.otog.util.OtogConfig;
+import com.otog.util.UiTheme;
 
 import javax.swing.*;
 import javax.swing.table.DefaultTableModel;
@@ -29,7 +31,7 @@ import java.util.function.Consumer;
  */
 public class AdminControlsPanel extends JPanel {
 
-    private static final DateTimeFormatter DATE_FORMATTER = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm");
+    private final DateTimeFormatter dateFormatter = DateTimeFormatter.ofPattern(OtogConfig.getInstance().getUiDatePattern());
 
     @FunctionalInterface
     public interface DialogMessageCallback {
@@ -150,7 +152,7 @@ public class AdminControlsPanel extends JPanel {
                             });
                         }
                         statusLbl.setText("Last refreshed: " + LocalDateTime.now()
-                                .format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss")));
+                                .format(DateTimeFormatter.ofPattern(OtogConfig.getInstance().getTimestampPattern())));
                     } catch (Exception ex) {
                         Throwable cause = unwrapCause(ex);
                         String message = extractErrorMessage(cause);
@@ -329,7 +331,7 @@ public class AdminControlsPanel extends JPanel {
                     };
                     for (Transaction t : txns) {
                         model.addRow(new Object[]{
-                                t.getCreatedAt() != null ? t.getCreatedAt().format(DATE_FORMATTER) : "-",
+                                t.getCreatedAt() != null ? t.getCreatedAt().format(dateFormatter) : "-",
                                 t.getReferenceNumber(),
                                 t.getType(),
                                 t.getSourceWalletId() != null ? t.getSourceWalletId() : "-",
@@ -390,7 +392,7 @@ public class AdminControlsPanel extends JPanel {
         pnlRoot.setLayout(new GridLayoutManager(3, 1, new Insets(10, 12, 10, 12), 8, 8));
 
         lblTitle = new JLabel("Admin Controls — Account Management & Audit Log");
-        lblTitle.setFont(new Font("SansSerif", Font.BOLD, 14));
+        lblTitle.setFont(UiTheme.font(UiTheme.FontRole.TITLE));
         pnlRoot.add(lblTitle, new GridConstraints(0, 0, 1, 1,
                 GridConstraints.ANCHOR_WEST, GridConstraints.FILL_NONE,
                 GridConstraints.SIZEPOLICY_FIXED, GridConstraints.SIZEPOLICY_FIXED,
@@ -420,8 +422,7 @@ public class AdminControlsPanel extends JPanel {
         userTable.setAutoCreateRowSorter(true);
 
         JScrollPane userScroll = new JScrollPane(userTable);
-        userScroll.setBorder(BorderFactory.createTitledBorder(
-                BorderFactory.createEtchedBorder(), "Registered Accounts & Wallets"));
+        userScroll.setBorder(UiTheme.titledBorder("Registered Accounts & Wallets"));
         pnlUsers.add(userScroll, new GridConstraints(0, 0, 1, 1,
                 GridConstraints.ANCHOR_CENTER, GridConstraints.FILL_BOTH,
                 GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_WANT_GROW,
@@ -486,12 +487,11 @@ public class AdminControlsPanel extends JPanel {
         auditTable.setAutoCreateRowSorter(true);
 
         JScrollPane auditScroll = new JScrollPane(auditTable);
-        auditScroll.setBorder(BorderFactory.createTitledBorder(
-                BorderFactory.createEtchedBorder(), "Admin Action Audit Log"));
+        auditScroll.setBorder(UiTheme.titledBorder("Admin Action Audit Log"));
         splitPane.setBottomComponent(auditScroll);
 
         statusLbl = new JLabel("Loading admin records...");
-        statusLbl.setFont(new Font("SansSerif", Font.PLAIN, 11));
+        statusLbl.setFont(UiTheme.font(UiTheme.FontRole.SMALL));
         pnlRoot.add(statusLbl, new GridConstraints(2, 0, 1, 1,
                 GridConstraints.ANCHOR_WEST, GridConstraints.FILL_NONE,
                 GridConstraints.SIZEPOLICY_FIXED, GridConstraints.SIZEPOLICY_FIXED,

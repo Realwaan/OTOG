@@ -1,5 +1,7 @@
 package com.otog.service;
 
+import com.otog.util.OtogConfig;
+
 import java.security.SecureRandom;
 import java.time.Clock;
 import java.time.Duration;
@@ -11,14 +13,14 @@ import java.util.concurrent.atomic.AtomicReference;
 
 /**
  * Thread-safe in-memory OTP manager enforcing account binding, expiry,
- * one-time consumption, resend cooldown, and failed-attempt limits.
+ * one-time consumption, resend cooldown, and failed-attempt limits sourced from {@link OtogConfig}.
  * Delivery is simulated via stdout and surfaced for UI notification.
  */
 public class OtpService {
-    public static final int OTP_EXPIRY_MINUTES = 5;
-    public static final int RESEND_COOLDOWN_SECONDS = 60;
-    public static final int MAX_ATTEMPTS = 5;
-    public static final int OTP_LENGTH = 6;
+    public static final int OTP_EXPIRY_MINUTES = OtogConfig.getInstance().getOtpExpiryMinutes();
+    public static final int RESEND_COOLDOWN_SECONDS = OtogConfig.getInstance().getOtpResendCooldownSeconds();
+    public static final int MAX_ATTEMPTS = OtogConfig.getInstance().getOtpMaxAttempts();
+    public static final int OTP_LENGTH = OtogConfig.getInstance().getOtpLength();
 
     private final SecureRandom random = new SecureRandom();
     private final Clock clock;
@@ -48,24 +50,28 @@ public class OtpService {
         final String boundUserId = userId.trim();
         final Instant now = clock.instant();
         final AtomicReference<String> issuedCode = new AtomicReference<>();
+        OtogConfig config = OtogConfig.getInstance();
+        final int cooldownSeconds = config.getOtpResendCooldownSeconds();
+        final int expiryMinutes = config.getOtpExpiryMinutes();
+        final int otpLen = config.getOtpLength();
 
         store.compute(boundUserId, (key, existing) -> {
             if (existing != null) {
                 long secondsSinceIssue = Duration.between(existing.getCreatedAt(), now).getSeconds();
-                if (secondsSinceIssue < RESEND_COOLDOWN_SECONDS) {
-                    long waitSeconds = RESEND_COOLDOWN_SECONDS - Math.max(0L, secondsSinceIssue);
+                if (secondsSinceIssue < cooldownSeconds) {
+                    long waitSeconds = cooldownSeconds - Math.max(0L, secondsSinceIssue);
                     throw new IllegalStateException(
                             "Resend cooldown active. Please wait " + waitSeconds + " seconds.");
                 }
             }
-            String code = generateRandomCode();
+            String code = generateRandomCode(otpLen);
             issuedCode.set(code);
             return new OtpRecord(code, boundUserId, now, false, 0);
         });
 
         String code = issuedCode.get();
         System.out.println("[SIMULATED SMS] OTP for " + boundUserId + ": " + code
-                + " (expires in " + OTP_EXPIRY_MINUTES + " minutes)");
+                + " (expires in " + expiryMinutes + " minutes)");
         return code;
     }
 
@@ -83,13 +89,16 @@ public class OtpService {
         final String cleanCode = code.trim();
         final Instant now = clock.instant();
         final AtomicBoolean verified = new AtomicBoolean(false);
+        OtogConfig config = OtogConfig.getInstance();
+        final int maxAttempts = config.getOtpMaxAttempts();
+        final int expiryMinutes = config.getOtpExpiryMinutes();
 
         store.compute(boundUserId, (key, record) -> {
-            if (record == null || record.isUsed() || record.getFailedAttempts() >= MAX_ATTEMPTS) {
+            if (record == null || record.isUsed() || record.getFailedAttempts() >= maxAttempts) {
                 return record;
             }
 
-            if (Duration.between(record.getCreatedAt(), now).compareTo(Duration.ofMinutes(OTP_EXPIRY_MINUTES)) >= 0) {
+            if (Duration.between(record.getCreatedAt(), now).compareTo(Duration.ofMinutes(expiryMinutes)) >= 0) {
                 return new OtpRecord(record.getCode(), record.getUserId(), record.getCreatedAt(),
                         true, record.getFailedAttempts());
             }
@@ -100,7 +109,7 @@ public class OtpService {
 
             if (!record.getCode().equals(cleanCode)) {
                 int newAttempts = record.getFailedAttempts() + 1;
-                boolean exhausted = newAttempts >= MAX_ATTEMPTS;
+                boolean exhausted = newAttempts >= maxAttempts;
                 return new OtpRecord(record.getCode(), record.getUserId(), record.getCreatedAt(),
                         exhausted, newAttempts);
             }
@@ -121,7 +130,7 @@ public class OtpService {
         if (record == null || record.isUsed()) {
             return 0;
         }
-        return Math.max(0, MAX_ATTEMPTS - record.getFailedAttempts());
+        return Math.max(0, OtogConfig.getInstance().getOtpMaxAttempts() - record.getFailedAttempts());
     }
 
     public OtpRecord getRecord(String userId) {
@@ -141,10 +150,13 @@ public class OtpService {
         store.clear();
     }
 
-    private String generateRandomCode() {
-        int bound = (int) Math.pow(10, OTP_LENGTH);
+    private String generateRandomCode(int length) {
+        int bound = 1;
+        for (int i = 0; i < length; i++) {
+            bound *= 10;
+        }
         int code = random.nextInt(bound);
-        return String.format("%0" + OTP_LENGTH + "d", code);
+        return String.format("%0" + length + "d", code);
     }
 
     public static final class OtpRecord {

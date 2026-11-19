@@ -1,6 +1,7 @@
 package com.otog.model;
 
 import com.otog.util.MoneyUtil;
+import com.otog.util.OtogConfig;
 
 import java.math.BigDecimal;
 
@@ -52,7 +53,32 @@ public class InvestMoneyTransaction extends Transaction {
     }
 
     public BigDecimal getReturns() {
-        if (getAmount() == null) return MoneyUtil.ZERO;
-        return getAmount().multiply(new BigDecimal("0.05")).setScale(MoneyUtil.DEFAULT_SCALE, MoneyUtil.DEFAULT_ROUNDING);
+        return getReturns(OtogConfig.getInstance().getInvestmentReturnRate());
+    }
+
+    public BigDecimal getReturns(BigDecimal customRate) {
+        if (getAmount() == null) {
+            return MoneyUtil.ZERO;
+        }
+        BigDecimal effectiveRate = (customRate != null && customRate.compareTo(BigDecimal.ZERO) >= 0)
+                ? customRate
+                : OtogConfig.getInstance().getInvestmentReturnRate();
+        return getAmount().multiply(effectiveRate).setScale(MoneyUtil.DEFAULT_SCALE, MoneyUtil.DEFAULT_ROUNDING);
+    }
+
+    @Override
+    protected void appendSubtypeReceiptLines(ReceiptBuilder builder) {
+        builder.optionalLine("Product", product)
+                .optionalLine("Units", units != null ? units.toPlainString() : null)
+                .optionalLine("Est. Returns", MoneyUtil.format(getReturns(), getCurrency()));
+    }
+
+    @Override
+    public InvestMoneyTransaction copyAsDraft(String newReferenceNumber) {
+        InvestMoneyTransaction draft = new InvestMoneyTransaction();
+        copyBaseDraftFieldsTo(draft, newReferenceNumber);
+        draft.setProduct(this.product);
+        draft.setUnits(this.units);
+        return draft;
     }
 }

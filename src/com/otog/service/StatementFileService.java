@@ -1,7 +1,5 @@
 package com.otog.service;
 
-import com.otog.exception.InvalidAmountException;
-import com.otog.exception.OtogException;
 import com.otog.exception.WalletException;
 import com.otog.model.Transaction;
 import com.otog.model.TransactionStatus;
@@ -9,33 +7,27 @@ import com.otog.model.TransactionType;
 import com.otog.model.User;
 import com.otog.model.Wallet;
 import com.otog.util.MoneyUtil;
+import com.otog.util.OtogConfig;
 
-import java.io.BufferedReader;
-import java.io.BufferedWriter;
-import java.io.IOException;
 import java.math.BigDecimal;
-import java.nio.charset.StandardCharsets;
-import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.Collections;
-import java.util.LinkedHashMap;
 import java.util.List;
-import java.util.Map;
+import java.util.Locale;
 
 /**
  * Provides file-handling capabilities (CSIT227 File Handling: store and load data)
- * for exporting and importing masked wallet statements and transaction receipts
- * using try-with-resources BufferedWriter and BufferedReader streams.
+ * via the Structural Bridge pattern ({@link ExportableDocument} + {@link DocumentFormat}),
+ * supporting both masked pipe-delimited text ({@code .txt}) and CSV ({@code .csv}) formats
+ * using {@code try-with-resources} {@code BufferedWriter} and {@code BufferedReader} streams.
  */
 public class StatementFileService {
 
-    public static final String STATEMENT_HEADER = "OTOG-STATEMENT-V1";
-    public static final String RECEIPT_HEADER = "OTOG-RECEIPT-V1";
-    private static final DateTimeFormatter TIMESTAMP_FORMATTER =
-            DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
+    public static final String STATEMENT_HEADER = PipeTextDocumentFormat.STATEMENT_HEADER;
+    public static final String RECEIPT_HEADER = PipeTextDocumentFormat.RECEIPT_HEADER;
 
     /**
      * Encapsulated immutable record representing a single transaction entry loaded from a statement file.
@@ -169,6 +161,7 @@ public class StatementFileService {
             sb.append("==================================================\n");
             sb.append("         OTOG E-WALLET LOADED STATEMENT           \n");
             sb.append("==================================================\n");
+            sb.append("Format       : ").append(version).append("\n");
             sb.append("Exported At  : ").append(exportedAt).append("\n");
             sb.append("Account Owner: ").append(maskedOwner).append("\n");
             sb.append("Wallet ID    : ").append(maskedWalletId).append("\n");
@@ -184,8 +177,8 @@ public class StatementFileService {
                             entry.getReferenceNumber(),
                             entry.getType().name(),
                             entry.getDirection(),
-                            formatPlain(entry.getAmount()),
-                            formatPlain(entry.getFee()),
+                            PipeTextDocumentFormat.formatPlain(entry.getAmount()),
+                            PipeTextDocumentFormat.formatPlain(entry.getFee()),
                             entry.getStatus().name(),
                             entry.getDescription()));
                 }
@@ -212,246 +205,132 @@ public class StatementFileService {
         return trimmed.substring(0, prefixLen) + "***" + trimmed.substring(trimmed.length() - suffixLen);
     }
 
+    public static DocumentFormat resolveFormatForPath(Path file) {
+        if (file != null && file.getFileName() != null) {
+            String lower = file.getFileName().toString().toLowerCase(Locale.ROOT);
+            if (lower.endsWith(".csv")) {
+                return new CsvDocumentFormat();
+            }
+        }
+        return new PipeTextDocumentFormat();
+    }
+
     /**
-     * Stores a masked wallet statement and transaction history to disk using BufferedWriter.
+     * Stores a masked wallet statement and transaction history to disk using the Bridge format
+     * inferred from the target file extension ({@code .csv} or pipe-delimited {@code .txt}).
      */
     public Path exportWalletStatement(User user,
                                       Wallet wallet,
                                       List<Transaction> transactions,
                                       Path targetFile) {
+        return exportWalletStatement(user, wallet, transactions, targetFile, resolveFormatForPath(targetFile));
+    }
+
+    public Path exportWalletStatement(User user,
+                                      Wallet wallet,
+                                      List<Transaction> transactions,
+                                      Path targetFile,
+                                      DocumentFormat format) {
         if (wallet == null) {
             throw new WalletException("Cannot export statement: wallet is required.");
         }
         if (targetFile == null) {
             throw new WalletException("Cannot export statement: target file path is required.");
         }
+        DocumentFormat effectiveFormat = format != null ? format : resolveFormatForPath(targetFile);
+        DateTimeFormatter formatter = DateTimeFormatter.ofPattern(OtogConfig.getInstance().getTimestampPattern());
         List<Transaction> safeTxns = transactions != null ? transactions : Collections.emptyList();
+
         String ownerDisplay = user != null
                 ? user.getName() + " (" + maskIdentifier(user.getMobileNumber()) + ")"
                 : maskIdentifier(wallet.getUserId());
         String maskedWallet = maskIdentifier(wallet.getWalletId());
-        String exportedAt = LocalDateTime.now().format(TIMESTAMP_FORMATTER);
+        String exportedAt = LocalDateTime.now().format(formatter);
 
-        try {
-            Path parent = targetFile.toAbsolutePath().getParent();
-            if (parent != null && !Files.exists(parent)) {
-                Files.createDirectories(parent);
+        List<StatementEntry> entries = new ArrayList<>();
+        for (Transaction txn : safeTxns) {
+            if (txn == null) {
+                continue;
             }
-            try (BufferedWriter writer = Files.newBufferedWriter(targetFile, StandardCharsets.UTF_8)) {
-                writer.write(STATEMENT_HEADER);
-                writer.newLine();
-                writer.write("EXPORTED_AT=" + sanitizeField(exportedAt));
-                writer.newLine();
-                writer.write("OWNER=" + sanitizeField(ownerDisplay));
-                writer.newLine();
-                writer.write("WALLET_ID=" + sanitizeField(maskedWallet));
-                writer.newLine();
-                writer.write("CURRENCY=" + sanitizeField(wallet.getCurrency()));
-                writer.newLine();
-                writer.write("BALANCE=" + formatPlain(wallet.getBalance()));
-                writer.newLine();
-                writer.write("COUNT=" + safeTxns.size());
-                writer.newLine();
-                writer.write("---TRANSACTIONS---");
-                writer.newLine();
-
-                for (Transaction txn : safeTxns) {
-                    if (txn == null) {
-                        continue;
-                    }
-                    String ts = txn.getCreatedAt() != null
-                            ? txn.getCreatedAt().format(TIMESTAMP_FORMATTER)
-                            : exportedAt;
-                    String direction = resolveDirectionForWallet(wallet.getWalletId(), txn);
-                    String providerRef = txn.getProviderReference() != null && !txn.getProviderReference().trim().isEmpty()
-                            ? txn.getProviderReference().trim()
-                            : "-";
-                    String desc = txn.getDescription() != null ? sanitizeField(txn.getDescription()) : "";
-                    String line = String.join("|",
-                            sanitizeField(ts),
-                            sanitizeField(txn.getReferenceNumber()),
-                            txn.getType().name(),
-                            direction,
-                            formatPlain(txn.getAmount()),
-                            formatPlain(txn.getFee()),
-                            txn.getStatus().name(),
-                            sanitizeField(providerRef),
-                            desc
-                    );
-                    writer.write("TXN|" + line);
-                    writer.newLine();
-                }
-            }
-            return targetFile;
-        } catch (IOException ex) {
-            throw new WalletException("Failed to write wallet statement file: " + ex.getMessage(), ex);
+            String ts = txn.getCreatedAt() != null
+                    ? txn.getCreatedAt().format(formatter)
+                    : exportedAt;
+            String direction = resolveDirectionForWallet(wallet.getWalletId(), txn);
+            String providerRef = txn.getProviderReference() != null && !txn.getProviderReference().trim().isEmpty()
+                    ? txn.getProviderReference().trim()
+                    : "-";
+            String desc = txn.getDescription() != null ? txn.getDescription() : "";
+            entries.add(new StatementEntry(
+                    ts,
+                    txn.getReferenceNumber(),
+                    txn.getType(),
+                    direction,
+                    txn.getAmount(),
+                    txn.getFee(),
+                    txn.getStatus(),
+                    providerRef,
+                    desc
+            ));
         }
+
+        DocumentFormat.StatementData data = new DocumentFormat.StatementData(
+                effectiveFormat.getStatementHeader(),
+                exportedAt,
+                ownerDisplay,
+                maskedWallet,
+                wallet.getCurrency(),
+                wallet.getBalance(),
+                entries
+        );
+        return new WalletStatementDocument(effectiveFormat).exportTo(data, targetFile);
     }
 
     /**
      * Loads and validates a saved OTOG wallet statement file from disk using BufferedReader.
      */
     public LoadedStatement importWalletStatement(Path sourceFile) {
-        if (sourceFile == null || !Files.isRegularFile(sourceFile)) {
-            throw new WalletException("Statement file does not exist: " + sourceFile);
-        }
+        return importWalletStatement(sourceFile, resolveFormatForPath(sourceFile));
+    }
 
-        Map<String, String> metadata = new LinkedHashMap<>();
-        List<StatementEntry> entries = new ArrayList<>();
-        boolean inTransactions = false;
-
-        try (BufferedReader reader = Files.newBufferedReader(sourceFile, StandardCharsets.UTF_8)) {
-            String firstLine = reader.readLine();
-            if (firstLine == null || !STATEMENT_HEADER.equals(firstLine.trim())) {
-                throw new WalletException("Invalid or unsupported statement file header.");
-            }
-
-            String line;
-            while ((line = reader.readLine()) != null) {
-                String trimmed = line.trim();
-                if (trimmed.isEmpty()) {
-                    continue;
-                }
-                if ("---TRANSACTIONS---".equals(trimmed)) {
-                    inTransactions = true;
-                    continue;
-                }
-                if (!inTransactions) {
-                    int eq = trimmed.indexOf('=');
-                    if (eq <= 0) {
-                        throw new WalletException("Malformed metadata line in statement file: " + trimmed);
-                    }
-                    String key = trimmed.substring(0, eq).trim();
-                    String val = trimmed.substring(eq + 1).trim();
-                    metadata.put(key, val);
-                } else {
-                    if (!trimmed.startsWith("TXN|")) {
-                        throw new WalletException("Malformed transaction row in statement file: " + trimmed);
-                    }
-                    String[] parts = trimmed.split("\\|", -1);
-                    if (parts.length < 10) {
-                        throw new WalletException("Incomplete transaction fields in statement row: " + trimmed);
-                    }
-                    try {
-                        String ts = parts[1];
-                        String ref = parts[2];
-                        TransactionType type = TransactionType.valueOf(parts[3]);
-                        String direction = parts[4];
-                        BigDecimal amount = new BigDecimal(parts[5]);
-                        BigDecimal fee = new BigDecimal(parts[6]);
-                        TransactionStatus status = TransactionStatus.valueOf(parts[7]);
-                        String providerRef = parts[8];
-                        String desc = parts[9];
-                        entries.add(new StatementEntry(ts, ref, type, direction, amount, fee, status, providerRef, desc));
-                    } catch (IllegalArgumentException ex) {
-                        throw new InvalidAmountException("Corrupted transaction entry in statement file: " + ex.getMessage());
-                    }
-                }
-            }
-        } catch (IOException ex) {
-            throw new WalletException("Failed to read wallet statement file: " + ex.getMessage(), ex);
-        }
-
-        String exportedAt = metadata.getOrDefault("EXPORTED_AT", "Unknown");
-        String owner = metadata.getOrDefault("OWNER", "Unknown");
-        String walletId = metadata.getOrDefault("WALLET_ID", "Unknown");
-        String currency = metadata.getOrDefault("CURRENCY", MoneyUtil.DEFAULT_CURRENCY);
-        String balanceText = metadata.get("BALANCE");
-        if (balanceText == null) {
-            throw new WalletException("Statement file is missing required BALANCE metadata.");
-        }
-        BigDecimal balance;
-        try {
-            balance = MoneyUtil.validateNonNegativeAmount(new BigDecimal(balanceText));
-        } catch (NumberFormatException ex) {
-            throw new InvalidAmountException("Invalid balance value in statement file: " + balanceText);
-        }
-
-        String expectedCountText = metadata.get("COUNT");
-        if (expectedCountText != null) {
-            try {
-                int expectedCount = Integer.parseInt(expectedCountText);
-                if (expectedCount != entries.size()) {
-                    throw new WalletException("Statement transaction count mismatch: expected "
-                            + expectedCount + " but loaded " + entries.size());
-                }
-            } catch (NumberFormatException ex) {
-                throw new WalletException("Invalid COUNT metadata in statement file: " + expectedCountText, ex);
-            }
-        }
-
-        return new LoadedStatement(STATEMENT_HEADER, exportedAt, owner, walletId, currency, balance, entries);
+    public LoadedStatement importWalletStatement(Path sourceFile, DocumentFormat format) {
+        DocumentFormat effectiveFormat = format != null ? format : resolveFormatForPath(sourceFile);
+        return new WalletStatementDocument(effectiveFormat).importFrom(sourceFile);
     }
 
     /**
-     * Stores a single transaction receipt to a text file using BufferedWriter.
+     * Stores a single transaction receipt to a file using BufferedWriter via the Bridge pattern.
      */
     public Path exportReceipt(Transaction transaction, Path targetFile) {
+        return exportReceipt(transaction, targetFile, resolveFormatForPath(targetFile));
+    }
+
+    public Path exportReceipt(Transaction transaction, Path targetFile, DocumentFormat format) {
         if (transaction == null) {
             throw new WalletException("Cannot export receipt: transaction is required.");
         }
         if (targetFile == null) {
             throw new WalletException("Cannot export receipt: target file path is required.");
         }
-        try {
-            Path parent = targetFile.toAbsolutePath().getParent();
-            if (parent != null && !Files.exists(parent)) {
-                Files.createDirectories(parent);
-            }
-            try (BufferedWriter writer = Files.newBufferedWriter(targetFile, StandardCharsets.UTF_8)) {
-                writer.write(RECEIPT_HEADER);
-                writer.newLine();
-                writer.write("REF=" + sanitizeField(transaction.getReferenceNumber()));
-                writer.newLine();
-                writer.write("SOURCE_WALLET=" + maskIdentifier(transaction.getSourceWalletId()));
-                writer.newLine();
-                writer.write("DEST_WALLET=" + maskIdentifier(transaction.getTargetWalletId()));
-                writer.newLine();
-                writer.write("---RECEIPT---");
-                writer.newLine();
-                writer.write(transaction.getReceipt());
-                writer.newLine();
-            }
-            return targetFile;
-        } catch (IOException ex) {
-            throw new WalletException("Failed to write receipt file: " + ex.getMessage(), ex);
-        }
+        DocumentFormat effectiveFormat = format != null ? format : resolveFormatForPath(targetFile);
+        DocumentFormat.ReceiptData data = new DocumentFormat.ReceiptData(
+                transaction.getReferenceNumber(),
+                maskIdentifier(transaction.getSourceWalletId()),
+                maskIdentifier(transaction.getTargetWalletId()),
+                transaction.getReceipt()
+        );
+        return new TransactionReceiptDocument(effectiveFormat).exportTo(data, targetFile);
     }
 
     /**
      * Loads and validates a saved transaction receipt file from disk using BufferedReader.
      */
     public String importReceipt(Path sourceFile) {
-        if (sourceFile == null || !Files.isRegularFile(sourceFile)) {
-            throw new WalletException("Receipt file does not exist: " + sourceFile);
-        }
-        StringBuilder content = new StringBuilder();
-        try (BufferedReader reader = Files.newBufferedReader(sourceFile, StandardCharsets.UTF_8)) {
-            String firstLine = reader.readLine();
-            if (firstLine == null || !RECEIPT_HEADER.equals(firstLine.trim())) {
-                throw new WalletException("Invalid or unsupported receipt file header.");
-            }
-            String line;
-            boolean inReceiptBody = false;
-            while ((line = reader.readLine()) != null) {
-                if ("---RECEIPT---".equals(line.trim())) {
-                    inReceiptBody = true;
-                    continue;
-                }
-                if (inReceiptBody) {
-                    if (content.length() > 0) {
-                        content.append("\n");
-                    }
-                    content.append(line);
-                }
-            }
-        } catch (IOException ex) {
-            throw new WalletException("Failed to read receipt file: " + ex.getMessage(), ex);
-        }
-        if (content.length() == 0) {
-            throw new OtogException("Receipt file contains no receipt body.");
-        }
-        return content.toString();
+        return importReceipt(sourceFile, resolveFormatForPath(sourceFile));
+    }
+
+    public String importReceipt(Path sourceFile, DocumentFormat format) {
+        DocumentFormat effectiveFormat = format != null ? format : resolveFormatForPath(sourceFile);
+        return new TransactionReceiptDocument(effectiveFormat).importFrom(sourceFile);
     }
 
     private static String resolveDirectionForWallet(String walletId, Transaction txn) {
@@ -468,19 +347,5 @@ public class StatementFileService {
             return "IN";
         }
         return "OUT";
-    }
-
-    private static String formatPlain(BigDecimal amount) {
-        if (amount == null) {
-            return "0.00";
-        }
-        return amount.setScale(MoneyUtil.DEFAULT_SCALE, MoneyUtil.DEFAULT_ROUNDING).toPlainString();
-    }
-
-    private static String sanitizeField(String raw) {
-        if (raw == null) {
-            return "";
-        }
-        return raw.replace("|", "/").replace("\r", " ").replace("\n", " ").trim();
     }
 }

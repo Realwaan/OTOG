@@ -1,32 +1,39 @@
 package com.otog.database;
 
 import com.otog.exception.OtogException;
+import com.otog.util.IdGenerator;
+import com.otog.util.MoneyUtil;
+import com.otog.util.OtogConfig;
+import com.otog.util.PasswordUtil;
 
 import java.io.File;
 import java.sql.Connection;
 import java.sql.DriverManager;
+import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Statement;
+import java.util.List;
 import java.util.UUID;
 
 /**
  * Manages SQLite database connectivity, schema lifecycle, and transactional boundaries.
  */
 public class DatabaseManager implements AutoCloseable {
-    public static final String DEFAULT_DB_PATH = "data/otog.db";
-    public static final String DEFAULT_JDBC_URL = "jdbc:sqlite:" + DEFAULT_DB_PATH;
+    public static final String DEFAULT_DB_PATH = OtogConfig.getInstance().getDefaultDbPath();
+    public static final String DEFAULT_JDBC_URL = OtogConfig.getInstance().getDefaultJdbcUrl();
 
     private final String jdbcUrl;
     private final boolean isMemory;
     private Connection memoryAnchorConnection; // Kept open for in-memory databases to preserve state
 
     public DatabaseManager() {
-        this(DEFAULT_JDBC_URL);
+        this(OtogConfig.getInstance().getDefaultJdbcUrl());
     }
 
     public DatabaseManager(String rawUrl) {
-        String url = (rawUrl != null && !rawUrl.trim().isEmpty()) ? rawUrl : DEFAULT_JDBC_URL;
+        OtogConfig config = OtogConfig.getInstance();
+        String url = (rawUrl != null && !rawUrl.trim().isEmpty()) ? rawUrl : config.getDefaultJdbcUrl();
         if (url.equals("jdbc:sqlite::memory:")) {
             // Use shared in-memory DB so multiple connections share the same memory instance
             String memId = "otog_mem_" + UUID.randomUUID().toString().replace("-", "");
@@ -63,9 +70,10 @@ public class DatabaseManager implements AutoCloseable {
 
     private Connection createRawConnection() throws SQLException {
         Connection conn = DriverManager.getConnection(jdbcUrl);
+        int busyTimeoutMs = OtogConfig.getInstance().getDbBusyTimeoutMs();
         try (Statement stmt = conn.createStatement()) {
             stmt.execute("PRAGMA foreign_keys = ON;");
-            stmt.execute("PRAGMA busy_timeout = 5000;");
+            stmt.execute("PRAGMA busy_timeout = " + busyTimeoutMs + ";");
         }
         return conn;
     }
@@ -251,56 +259,64 @@ public class DatabaseManager implements AutoCloseable {
     }
 
     private void seedDemoPaymentMethods(Connection conn) {
-        String checkSql = "SELECT payment_method_id FROM payment_methods WHERE user_id = 'USR-ADMIN-01'";
-        try (Statement stmt = conn.createStatement();
-             ResultSet rs = stmt.executeQuery(checkSql)) {
-            if (!rs.next()) {
-                String now = java.time.LocalDateTime.now().toString();
-                String insertBdo = "INSERT OR IGNORE INTO payment_methods (payment_method_id, user_id, type, provider_name, account_name, account_number, is_default, status, created_at) " +
-                        "VALUES ('PM-DEMO-BDO', 'USR-ADMIN-01', 'BANK_ACCOUNT', 'BDO Unibank', 'Admin BDO Demo', '•••• 1234', 1, 'ACTIVE', '" + now + "')";
-                stmt.executeUpdate(insertBdo);
+        OtogConfig config = OtogConfig.getInstance();
+        List<OtogConfig.DemoBankAccount> demoAccounts = config.getDemoPaymentMethods();
+        OtogConfig.AdminSeedConfig adminSeed = config.getAdminSeedConfig();
 
-                String insertBpi = "INSERT OR IGNORE INTO payment_methods (payment_method_id, user_id, type, provider_name, account_name, account_number, is_default, status, created_at) " +
-                        "VALUES ('PM-DEMO-BPI', 'USR-ADMIN-01', 'BANK_ACCOUNT', 'Bank of the Philippine Islands (BPI)', 'Admin BPI Demo', '•••• 5678', 0, 'ACTIVE', '" + now + "')";
-                stmt.executeUpdate(insertBpi);
+        String checkSql = "SELECT payment_method_id FROM payment_methods WHERE user_id = ?";
+        String insertSql = "INSERT OR IGNORE INTO payment_methods (payment_method_id, user_id, type, provider_name, " +
+                "account_name, account_number, is_default, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)";
 
-                String insertMetro = "INSERT OR IGNORE INTO payment_methods (payment_method_id, user_id, type, provider_name, account_name, account_number, is_default, status, created_at) " +
-                        "VALUES ('PM-DEMO-METRO', 'USR-ADMIN-01', 'BANK_ACCOUNT', 'Metrobank', 'Admin Metrobank Demo', '•••• 9012', 0, 'ACTIVE', '" + now + "')";
-                stmt.executeUpdate(insertMetro);
-            }
-        } catch (SQLException e) {
-            if (e.getMessage() == null || !e.getMessage().toUpperCase().contains("CONSTRAINT")) {
-                throw new OtogException("Failed to seed admin demo payment methods", e);
+        if (adminSeed.enabled()) {
+            try (PreparedStatement checkPs = conn.prepareStatement(checkSql)) {
+                checkPs.setString(1, adminSeed.userId());
+                try (ResultSet rs = checkPs.executeQuery()) {
+                    if (!rs.next()) {
+                        String now = java.time.LocalDateTime.now().toString();
+                        try (PreparedStatement ps = conn.prepareStatement(insertSql)) {
+                            for (OtogConfig.DemoBankAccount demo : demoAccounts) {
+                                ps.setString(1, "PM-DEMO-" + demo.idSuffix());
+                                ps.setString(2, adminSeed.userId());
+                                ps.setString(3, "BANK_ACCOUNT");
+                                ps.setString(4, demo.providerName());
+                                ps.setString(5, "Admin " + demo.accountSuffix());
+                                ps.setString(6, demo.maskedNumber());
+                                ps.setInt(7, demo.isDefault() ? 1 : 0);
+                                ps.setString(8, "ACTIVE");
+                                ps.setString(9, now);
+                                ps.addBatch();
+                            }
+                            ps.executeBatch();
+                        }
+                    }
+                }
+            } catch (SQLException e) {
+                if (e.getMessage() == null || !e.getMessage().toUpperCase().contains("CONSTRAINT")) {
+                    throw new OtogException("Failed to seed admin demo payment methods", e);
+                }
             }
         }
 
         // Backfill demo bank methods for any pre-existing users lacking payment methods
         String missingUsersSql = "SELECT u.user_id, u.name FROM users u " +
                 "WHERE NOT EXISTS (SELECT 1 FROM payment_methods pm WHERE pm.user_id = u.user_id)";
-        String insertSql = "INSERT OR IGNORE INTO payment_methods (payment_method_id, user_id, type, provider_name, " +
-                "account_name, account_number, is_default, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)";
         try (Statement stmt = conn.createStatement();
              ResultSet rs = stmt.executeQuery(missingUsersSql);
-             java.sql.PreparedStatement ps = conn.prepareStatement(insertSql)) {
+             PreparedStatement ps = conn.prepareStatement(insertSql)) {
             String now = java.time.LocalDateTime.now().toString();
             while (rs.next()) {
                 String uid = rs.getString("user_id");
                 String uname = rs.getString("name");
                 String displayName = (uname != null && !uname.trim().isEmpty()) ? uname.trim() : "Demo User";
 
-                Object[][] demos = {
-                        {com.otog.util.IdGenerator.nextPaymentMethodId(), "BDO Unibank", displayName + " BDO Demo", "•••• 1234", 1},
-                        {com.otog.util.IdGenerator.nextPaymentMethodId(), "Bank of the Philippine Islands (BPI)", displayName + " BPI Demo", "•••• 5678", 0},
-                        {com.otog.util.IdGenerator.nextPaymentMethodId(), "Metrobank", displayName + " Metrobank Demo", "•••• 9012", 0}
-                };
-                for (Object[] row : demos) {
-                    ps.setString(1, (String) row[0]);
+                for (OtogConfig.DemoBankAccount demo : demoAccounts) {
+                    ps.setString(1, IdGenerator.nextPaymentMethodId());
                     ps.setString(2, uid);
                     ps.setString(3, "BANK_ACCOUNT");
-                    ps.setString(4, (String) row[1]);
-                    ps.setString(5, (String) row[2]);
-                    ps.setString(6, (String) row[3]);
-                    ps.setInt(7, (Integer) row[4]);
+                    ps.setString(4, demo.providerName());
+                    ps.setString(5, displayName + " " + demo.accountSuffix());
+                    ps.setString(6, demo.maskedNumber());
+                    ps.setInt(7, demo.isDefault() ? 1 : 0);
                     ps.setString(8, "ACTIVE");
                     ps.setString(9, now);
                     ps.addBatch();
@@ -315,27 +331,63 @@ public class DatabaseManager implements AutoCloseable {
     }
 
     private void seedDefaultAdmin(Connection conn) {
-        String checkSql = "SELECT user_id FROM users WHERE user_id = 'USR-ADMIN-01' OR LOWER(name) = 'admin'";
-        try (Statement stmt = conn.createStatement();
-             ResultSet rs = stmt.executeQuery(checkSql)) {
-            if (!rs.next()) {
-                String salt = "a1b2c3d4e5f60718293a4b5c6d7e8f90";
-                String hash = com.otog.util.PasswordUtil.hashPassword("password", salt);
-                String pinSalt = "f0e1d2c3b4a5968778695a4b3c2d1e0f";
-                String pinHash = com.otog.util.PasswordUtil.hashPassword("123456", pinSalt);
-                String now = java.time.LocalDateTime.now().toString();
+        OtogConfig config = OtogConfig.getInstance();
+        OtogConfig.AdminSeedConfig seed = config.getAdminSeedConfig();
+        if (!seed.enabled()) {
+            return;
+        }
+        String checkSql = "SELECT user_id FROM users WHERE user_id = ? OR LOWER(name) = LOWER(?)";
+        try (PreparedStatement checkPs = conn.prepareStatement(checkSql)) {
+            checkPs.setString(1, seed.userId());
+            checkPs.setString(2, seed.username());
+            try (ResultSet rs = checkPs.executeQuery()) {
+                if (!rs.next()) {
+                    String salt = PasswordUtil.generateSalt();
+                    String hash = PasswordUtil.hashPassword(seed.password(), salt);
+                    String pinSalt = PasswordUtil.generateSalt();
+                    String pinHash = PasswordUtil.hashPassword(seed.pin(), pinSalt);
+                    String now = java.time.LocalDateTime.now().toString();
+                    String currency = MoneyUtil.validateCurrency(config.getDefaultCurrency());
 
-                String insertUser = "INSERT OR IGNORE INTO users (user_id, name, mobile_number, email, role, status, created_at, updated_at) " +
-                        "VALUES ('USR-ADMIN-01', 'admin', '09000000000', 'admin@otog.ph', 'ADMIN', 'ACTIVE', '" + now + "', '" + now + "')";
-                stmt.executeUpdate(insertUser);
+                    String insertUserSql = "INSERT OR IGNORE INTO users " +
+                            "(user_id, name, mobile_number, email, role, status, created_at, updated_at) " +
+                            "VALUES (?, ?, ?, ?, 'ADMIN', 'ACTIVE', ?, ?)";
+                    try (PreparedStatement ps = conn.prepareStatement(insertUserSql)) {
+                        ps.setString(1, seed.userId());
+                        ps.setString(2, seed.username());
+                        ps.setString(3, seed.mobile());
+                        ps.setString(4, seed.email());
+                        ps.setString(5, now);
+                        ps.setString(6, now);
+                        ps.executeUpdate();
+                    }
 
-                String insertCred = "INSERT OR IGNORE INTO credentials (user_id, password_hash, salt, failed_attempts, locked_until, pin_hash, pin_salt, pin_failed_attempts, updated_at) " +
-                        "VALUES ('USR-ADMIN-01', '" + hash + "', '" + salt + "', 0, NULL, '" + pinHash + "', '" + pinSalt + "', 0, '" + now + "')";
-                stmt.executeUpdate(insertCred);
+                    String insertCredSql = "INSERT OR IGNORE INTO credentials " +
+                            "(user_id, password_hash, salt, failed_attempts, locked_until, pin_hash, pin_salt, pin_failed_attempts, updated_at) " +
+                            "VALUES (?, ?, ?, 0, NULL, ?, ?, 0, ?)";
+                    try (PreparedStatement ps = conn.prepareStatement(insertCredSql)) {
+                        ps.setString(1, seed.userId());
+                        ps.setString(2, hash);
+                        ps.setString(3, salt);
+                        ps.setString(4, pinHash);
+                        ps.setString(5, pinSalt);
+                        ps.setString(6, now);
+                        ps.executeUpdate();
+                    }
 
-                String insertWallet = "INSERT OR IGNORE INTO wallets (wallet_id, user_id, balance, currency, status, created_at, updated_at) " +
-                        "VALUES ('WLT-ADMIN-01', 'USR-ADMIN-01', '1000.00', 'PHP', 'ACTIVE', '" + now + "', '" + now + "')";
-                stmt.executeUpdate(insertWallet);
+                    String insertWalletSql = "INSERT OR IGNORE INTO wallets " +
+                            "(wallet_id, user_id, balance, currency, status, created_at, updated_at) " +
+                            "VALUES (?, ?, ?, ?, 'ACTIVE', ?, ?)";
+                    try (PreparedStatement ps = conn.prepareStatement(insertWalletSql)) {
+                        ps.setString(1, seed.walletId());
+                        ps.setString(2, seed.userId());
+                        ps.setString(3, seed.initialBalance().toPlainString());
+                        ps.setString(4, currency);
+                        ps.setString(5, now);
+                        ps.setString(6, now);
+                        ps.executeUpdate();
+                    }
+                }
             }
         } catch (SQLException e) {
             if (e.getMessage() == null || !e.getMessage().toUpperCase().contains("CONSTRAINT")) {

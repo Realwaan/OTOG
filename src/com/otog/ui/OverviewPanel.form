@@ -85,7 +85,146 @@
             </constraints>
             <properties/>
             <border type="none"/>
-            <children/>
+            <children>
+              <grid id="loadingCardGrid" binding="pnlLoadingCard" layout-manager="GridBagLayout">
+                <constraints>
+                  <card name="LOADING"/>
+                </constraints>
+                <properties/>
+                <border type="none"/>
+                <children>
+                  <component id="lblLoadingId" class="javax.swing.JLabel" binding="lblLoadingState">
+                    <constraints>
+                      <grid row="0" column="0" row-span="1" col-span="1" vsize-policy="0" hsize-policy="0" anchor="0" fill="0" indent="0" use-parent-layout="false"/>
+                      <gridbag weightx="0.0" weighty="0.0"/>
+                    </constraints>
+                    <properties>
+                      <font name="SansSerif" size="13" style="2"/>
+                      <text value="Loading wallet balance and recent activity..."/>
+                    </properties>
+                  </component>
+                </children>
+              </grid>
+              <grid id="emptyCardGrid" binding="pnlEmptyCard" layout-manager="GridBagLayout">
+                <constraints>
+                  <card name="EMPTY"/>
+                </constraints>
+                <properties/>
+                <border type="none"/>
+                <children>
+                  <component id="lblEmptyId" class="javax.swing.JLabel" binding="lblEmptyState">
+                    <constraints>
+                      <grid row="0" column="0" row-span="1" col-span="1" vsize-policy="0" hsize-policy="0" anchor="0" fill="0" indent="0" use-parent-layout="false"/>
+                      <gridbag weightx="0.0" weighty="0.0"/>
+                    </constraints>
+                    <properties>
+                      <font name="SansSerif" size="13" style="0"/>
+                      <text value="No recent transactions yet. Use Cash In or Send Money to get started."/>
+                    </properties>
+                  </component>
+                </children>
+              </grid>
+              <grid id="errorCardGrid" binding="pnlErrorCard" layout-manager="GridBagLayout">
+                <constraints>
+                  <card name="ERROR"/>
+                </constraints>
+                <properties/>
+                <border type="none"/>
+                <children>
+                  <grid id="errorInnerGrid" binding="pnlErrorInner" layout-manager="BorderLayout" hgap="8" vgap="10">
+                    <constraints>
+                      <grid row="0" column="0" row-span="1" col-span="1" vsize-policy="3" hsize-policy="3" anchor="0" fill="0" indent="0" use-parent-layout="false"/>
+                      <gridbag weightx="0.0" weighty="0.0"/>
+                    </constraints>
+                    <properties/>
+                    <border type="none"/>
+                    <children>
+                      <component id="lblErrorId" class="javax.swing.JLabel" binding="lblErrorState">
+                        <constraints border-constraint="Center"/>
+                        <properties>
+                          <font name="SansSerif" size="13" style="0"/>
+                          <horizontalAlignment value="0"/>
+                          <text value="Unable to load wallet activity."/>
+                        </properties>
+                      </component>
+                      <grid id="retryWrapperGrid" binding="pnlRetryWrapper" layout-manager="FlowLayout" hgap="5" vgap="5" flow-align="1">
+                        <constraints border-constraint="South"/>
+                        <properties/>
+                        <border type="none"/>
+                        <children>
+                          <component id="btnRetryId" class="javax.swing.JButton" binding="btnRetryLoad">
+                            <constraints/>
+                            <properties>
+                              <text value="Retry"/>
+                            </properties>
+                          </component>
+                        </children>
+                      </grid>
+                    </children>
+                  </grid>
+                </children>
+              </grid>
+              <grid id="readyCardGrid" binding="pnlReadyCard" layout-manager="BorderLayout" hgap="6" vgap="6">
+                <constraints>
+                  <card name="READY"/>
+                </constraints>
+                <properties/>
+                <border type="none"/>
+                <children>
+                  <scrollpane id="txnsScrollPane">
+                    <constraints border-constraint="Center"/>
+                    <properties/>
+                    <border type="none"/>
+                    <children>
+                      <component id="tblTxnsId" class="javax.swing.JTable" binding="tblTransactions">
+                        <constraints/>
+                        <properties/>
+                      </component>
+                    </children>
+                  </scrollpane>
+                  <grid id="tableActionsGrid" binding="pnlTableActions" layout-manager="BorderLayout" hgap="8" vgap="0">
+                    <constraints border-constraint="South"/>
+                    <properties/>
+                    <border type="none"/>
+                    <children>
+                      <component id="lblFeedbackId" class="javax.swing.JLabel" binding="lblActivityFeedback">
+                        <constraints border-constraint="West"/>
+                        <properties>
+                          <font name="SansSerif" size="12" style="0"/>
+                          <text value=" "/>
+                        </properties>
+                      </component>
+                      <grid id="tableActionButtonsGrid" binding="pnlTableActionButtons" layout-manager="FlowLayout" hgap="8" vgap="0" flow-align="2">
+                        <constraints border-constraint="East"/>
+                        <properties/>
+                        <border type="none"/>
+                        <children>
+                          <component id="btnStatusId" class="javax.swing.JButton" binding="btnCheckStatus">
+                            <constraints/>
+                            <properties>
+                              <enabled value="false"/>
+                              <text value="Lookup Status"/>
+                            </properties>
+                          </component>
+                          <component id="btnReceiptId" class="javax.swing.JButton" binding="btnViewReceipt">
+                            <constraints/>
+                            <properties>
+                              <text value="View Receipt"/>
+                            </properties>
+                          </component>
+                          <component id="btnExportReceiptId" class="javax.swing.JButton" binding="btnExportReceipt">
+                            <constraints/>
+                            <properties>
+                              <text value="Save Receipt File"/>
+                            </properties>
+                          </component>
+                        </children>
+                      </grid>
+                    </children>
+                  </grid>
+                </children>
+              </grid>
+            </children>
           </grid>
         </children>
       </grid>

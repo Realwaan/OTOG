@@ -4,6 +4,9 @@ import com.otog.exception.EntityNotFoundException;
 import com.otog.exception.InsufficientFundsException;
 import com.otog.exception.InvalidAmountException;
 import com.otog.exception.WalletException;
+import com.otog.model.CompositeFeePolicy;
+import com.otog.model.FeeComponent;
+import com.otog.model.ReceiptBuilder;
 import com.otog.model.Transaction;
 import com.otog.model.User;
 import com.otog.model.Wallet;
@@ -11,6 +14,7 @@ import com.otog.model.WalletStatus;
 import com.otog.repository.UserRepository;
 import com.otog.util.IdGenerator;
 import com.otog.util.MoneyUtil;
+import com.otog.util.OtogConfig;
 
 import java.math.BigDecimal;
 import java.util.Optional;
@@ -22,8 +26,8 @@ import java.util.Optional;
  */
 public class SendMoneyService {
 
-    public static final BigDecimal MIN_SEND_AMOUNT = new BigDecimal("1.00");
-    public static final BigDecimal MAX_SEND_AMOUNT = new BigDecimal("50000.00");
+    public static final BigDecimal MIN_SEND_AMOUNT = OtogConfig.getInstance().getSendMinAmount();
+    public static final BigDecimal MAX_SEND_AMOUNT = OtogConfig.getInstance().getSendMaxAmount();
 
     private final WalletOperations walletService;
     private final UserRepository userRepository;
@@ -124,18 +128,21 @@ public class SendMoneyService {
             throw new InvalidAmountException("Monetary amount cannot be null");
         }
         BigDecimal validAmount = MoneyUtil.validatePositiveAmount(amount);
+        OtogConfig config = OtogConfig.getInstance();
+        BigDecimal minSend = config.getSendMinAmount();
+        BigDecimal maxSend = config.getSendMaxAmount();
 
-        if (validAmount.compareTo(MIN_SEND_AMOUNT) < 0) {
+        if (validAmount.compareTo(minSend) < 0) {
             throw new InvalidAmountException(String.format(
-                    "Amount %s is below minimum send amount of %s", validAmount, MIN_SEND_AMOUNT));
+                    "Amount %s is below minimum send amount of %s", validAmount, minSend));
         }
-        if (validAmount.compareTo(MAX_SEND_AMOUNT) > 0) {
+        if (validAmount.compareTo(maxSend) > 0) {
             throw new InvalidAmountException(String.format(
-                    "Amount %s exceeds maximum send amount of %s", validAmount, MAX_SEND_AMOUNT));
+                    "Amount %s exceeds maximum send amount of %s", validAmount, maxSend));
         }
 
-        // 6. Fee validation
-        BigDecimal validFee = fee != null ? MoneyUtil.validateNonNegativeAmount(fee) : MoneyUtil.ZERO;
+        // 6. Fee calculation & validation (CompositeFeePolicy when fee is omitted)
+        BigDecimal validFee = resolveEffectiveFee(validAmount, fee);
 
         // 7. Balance check (amount + fee)
         BigDecimal totalDebit = validAmount.add(validFee).setScale(MoneyUtil.DEFAULT_SCALE, MoneyUtil.DEFAULT_ROUNDING);
@@ -206,13 +213,16 @@ public class SendMoneyService {
         }
 
         BigDecimal validAmount = MoneyUtil.validatePositiveAmount(amount);
-        if (validAmount.compareTo(MIN_SEND_AMOUNT) < 0) {
+        OtogConfig config = OtogConfig.getInstance();
+        BigDecimal minSend = config.getSendMinAmount();
+        BigDecimal maxSend = config.getSendMaxAmount();
+        if (validAmount.compareTo(minSend) < 0) {
             throw new InvalidAmountException("Amount is below minimum send amount");
         }
-        if (validAmount.compareTo(MAX_SEND_AMOUNT) > 0) {
+        if (validAmount.compareTo(maxSend) > 0) {
             throw new InvalidAmountException("Amount exceeds maximum send amount");
         }
-        BigDecimal validFee = fee != null ? MoneyUtil.validateNonNegativeAmount(fee) : MoneyUtil.ZERO;
+        BigDecimal validFee = resolveEffectiveFee(validAmount, fee);
 
         String description = (note != null && !note.trim().isEmpty())
                 ? note.trim()
@@ -228,6 +238,14 @@ public class SendMoneyService {
         );
     }
 
+    private static BigDecimal resolveEffectiveFee(BigDecimal principalAmount, BigDecimal suppliedFee) {
+        if (suppliedFee != null) {
+            return MoneyUtil.validateNonNegativeAmount(suppliedFee);
+        }
+        FeeComponent defaultPolicy = CompositeFeePolicy.fromConfig();
+        return defaultPolicy.calculate(principalAmount);
+    }
+
     /**
      * Executes the complete end-to-end sender-to-recipient flow: validates preview, verifies PIN,
      * and atomically transfers funds.
@@ -239,7 +257,9 @@ public class SendMoneyService {
                 && amount != null && amount.compareTo(BigDecimal.ZERO) > 0) {
             Wallet senderWallet = walletService.getWalletByUserId(senderUserId.trim());
             if (senderWallet != null) {
-                BigDecimal validFee = (fee != null && fee.compareTo(BigDecimal.ZERO) >= 0) ? fee : MoneyUtil.ZERO;
+                BigDecimal validFee = (fee != null && fee.compareTo(BigDecimal.ZERO) >= 0)
+                        ? fee
+                        : CompositeFeePolicy.fromConfig().calculate(amount);
                 BigDecimal totalDebit = amount.add(validFee);
                 if (senderWallet.getBalance().compareTo(totalDebit) < 0) {
                     throw new InsufficientFundsException(senderWallet.getWalletId(), senderWallet.getBalance(), totalDebit);
@@ -331,22 +351,19 @@ public class SendMoneyService {
         }
 
         public String toConfirmationText() {
-            StringBuilder sb = new StringBuilder();
-            sb.append("========================================\n");
-            sb.append("         SEND MONEY CONFIRMATION        \n");
-            sb.append("========================================\n");
-            sb.append("Reference:       ").append(referenceNumber).append("\n");
-            sb.append("Recipient Name:  ").append(recipientName).append("\n");
-            sb.append("Recipient No:    ").append(recipientNumber).append("\n");
-            sb.append("Amount:          ").append(MoneyUtil.format(amount, "PHP")).append("\n");
-            sb.append("Fee:             ").append(MoneyUtil.format(fee, "PHP")).append("\n");
-            sb.append("----------------------------------------\n");
-            sb.append("Total Debit:     ").append(MoneyUtil.format(totalDebit, "PHP")).append("\n");
-            if (note != null && !note.trim().isEmpty()) {
-                sb.append("Note:            ").append(note.trim()).append("\n");
-            }
-            sb.append("========================================\n");
-            return sb.toString();
+            String currency = OtogConfig.getInstance().getDefaultCurrency();
+            return new ReceiptBuilder()
+                    .labelWidth(17)
+                    .banner("SEND MONEY CONFIRMATION")
+                    .line("Reference", referenceNumber)
+                    .line("Recipient Name", recipientName)
+                    .line("Recipient No", recipientNumber)
+                    .moneyLine("Amount", amount, currency)
+                    .moneyLine("Fee", fee, currency)
+                    .divider()
+                    .moneyLine("Total Debit", totalDebit, currency)
+                    .optionalLine("Note", note)
+                    .build();
         }
     }
 }

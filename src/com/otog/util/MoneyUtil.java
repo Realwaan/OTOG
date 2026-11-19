@@ -12,7 +12,7 @@ import java.util.Locale;
  * Utility for monetary validations, explicit PHP currency precision, and formatting.
  */
 public final class MoneyUtil {
-    public static final String DEFAULT_CURRENCY = "PHP";
+    public static final String DEFAULT_CURRENCY = OtogConfig.getInstance().getDefaultCurrency();
     public static final int DEFAULT_SCALE = 2;
     public static final RoundingMode DEFAULT_ROUNDING = RoundingMode.HALF_EVEN;
     public static final BigDecimal ZERO = BigDecimal.ZERO.setScale(DEFAULT_SCALE, DEFAULT_ROUNDING);
@@ -67,7 +67,7 @@ public final class MoneyUtil {
      */
     public static String validateCurrency(String currency) {
         if (currency == null || currency.trim().isEmpty()) {
-            return DEFAULT_CURRENCY;
+            return OtogConfig.getInstance().getDefaultCurrency();
         }
         String normalized = currency.trim().toUpperCase(Locale.ROOT);
         if (normalized.length() != 3) {
@@ -92,13 +92,14 @@ public final class MoneyUtil {
      * Formats an amount with currency symbol/code (e.g. "PHP 1,234.50").
      */
     public static String format(BigDecimal amount, String currency) {
+        String defaultCurrency = OtogConfig.getInstance().getDefaultCurrency();
         if (amount == null) {
-            return (currency != null ? currency : DEFAULT_CURRENCY) + " 0.00";
+            return (currency != null ? currency : defaultCurrency) + " 0.00";
         }
         BigDecimal scaled = amount.setScale(DEFAULT_SCALE, DEFAULT_ROUNDING);
         DecimalFormatSymbols symbols = new DecimalFormatSymbols(Locale.US);
         DecimalFormat df = new DecimalFormat("#,##0.00", symbols);
-        String curr = (currency != null && !currency.trim().isEmpty()) ? currency.trim().toUpperCase(Locale.ROOT) : DEFAULT_CURRENCY;
+        String curr = (currency != null && !currency.trim().isEmpty()) ? currency.trim().toUpperCase(Locale.ROOT) : defaultCurrency;
         return curr + " " + df.format(scaled);
     }
 

@@ -13,13 +13,14 @@ import com.otog.repository.CredentialRepository;
 import com.otog.repository.UserRepository;
 import com.otog.util.IdGenerator;
 import com.otog.util.MoneyUtil;
+import com.otog.util.OtogConfig;
 import com.otog.util.PasswordUtil;
 
 import java.time.LocalDateTime;
 import java.util.Optional;
 
 public class AuthServiceImpl implements AuthService {
-    public static final int MAX_FAILED_ATTEMPTS = 5;
+    public static final int MAX_FAILED_ATTEMPTS = OtogConfig.getInstance().getAuthMaxFailedAttempts();
 
     private final DatabaseManager databaseManager;
     private final UserRepository userRepository;
@@ -89,12 +90,15 @@ public class AuthServiceImpl implements AuthService {
         if (mobileNumber == null || mobileNumber.trim().isEmpty()) {
             throw new OtogException("Mobile number is required for registration.");
         }
+        OtogConfig config = OtogConfig.getInstance();
         String cleanMobile = normalizeMobile(mobileNumber.trim());
-        if (cleanMobile == null || !cleanMobile.matches("^09[0-9]{9}$")) {
+        String mobileRegex = config.getMobileRegex();
+        if (cleanMobile == null || !cleanMobile.matches(mobileRegex)) {
             throw new OtogException("Invalid mobile number format: " + mobileNumber);
         }
-        if (rawPassword == null || rawPassword.trim().length() < 6) {
-            throw new OtogException("Password must be at least 6 characters long.");
+        int minPasswordLength = config.getMinPasswordLength();
+        if (rawPassword == null || rawPassword.trim().length() < minPasswordLength) {
+            throw new OtogException("Password must be at least " + minPasswordLength + " characters long.");
         }
 
         // Check for duplicate account identifiers using normalized mobile
@@ -114,7 +118,7 @@ public class AuthServiceImpl implements AuthService {
         Credential credential = new Credential(userId, hash, salt, 0, null, LocalDateTime.now());
 
         String walletId = IdGenerator.nextWalletId();
-        Wallet wallet = new Wallet(walletId, userId, MoneyUtil.ZERO, "PHP");
+        Wallet wallet = new Wallet(walletId, userId, MoneyUtil.ZERO, config.getDefaultCurrency());
 
         // Atomic transaction: persist user, credentials, wallet, and seeded demo bank accounts in a single rollback unit
         return databaseManager.executeInTransaction(conn -> {
@@ -127,18 +131,18 @@ public class AuthServiceImpl implements AuthService {
     }
 
     private void seedDemoPaymentMethodsForUser(String userId, String userName, java.sql.Connection conn) throws java.sql.SQLException {
-        PaymentMethod bdo = new PaymentMethod(IdGenerator.nextPaymentMethodId(), userId,
-                PaymentMethodType.BANK_ACCOUNT, "BDO Unibank", userName + " BDO Demo", "•••• 1234");
-        bdo.setDefault(true);
-        walletService.getPaymentMethodRepository().save(bdo, conn);
-
-        PaymentMethod bpi = new PaymentMethod(IdGenerator.nextPaymentMethodId(), userId,
-                PaymentMethodType.BANK_ACCOUNT, "Bank of the Philippine Islands (BPI)", userName + " BPI Demo", "•••• 5678");
-        walletService.getPaymentMethodRepository().save(bpi, conn);
-
-        PaymentMethod metro = new PaymentMethod(IdGenerator.nextPaymentMethodId(), userId,
-                PaymentMethodType.BANK_ACCOUNT, "Metrobank", userName + " Metrobank Demo", "•••• 9012");
-        walletService.getPaymentMethodRepository().save(metro, conn);
+        for (OtogConfig.DemoBankAccount demo : OtogConfig.getInstance().getDemoPaymentMethods()) {
+            PaymentMethod pm = new PaymentMethod(
+                    IdGenerator.nextPaymentMethodId(),
+                    userId,
+                    PaymentMethodType.BANK_ACCOUNT,
+                    demo.providerName(),
+                    userName + " " + demo.accountSuffix(),
+                    demo.maskedNumber()
+            );
+            pm.setDefault(demo.isDefault());
+            walletService.getPaymentMethodRepository().save(pm, conn);
+        }
     }
 
     @Override
@@ -174,11 +178,12 @@ public class AuthServiceImpl implements AuthService {
             credentialRepository.resetFailedAttempts(user.getUserId());
             return Optional.of(user);
         } else {
+            int maxFailed = OtogConfig.getInstance().getAuthMaxFailedAttempts();
             int failed = credentialRepository.recordFailedAttempt(user.getUserId());
-            if (failed >= MAX_FAILED_ATTEMPTS) {
+            if (failed >= maxFailed) {
                 user.setStatus(UserStatus.LOCKED);
                 userRepository.update(user);
-                throw new OtogException("Account locked: maximum failed login attempts (" + MAX_FAILED_ATTEMPTS + ") reached.");
+                throw new OtogException("Account locked: maximum failed login attempts (" + maxFailed + ") reached.");
             }
             return Optional.empty();
         }
@@ -279,7 +284,8 @@ public class AuthServiceImpl implements AuthService {
         if (!cred.hasPin()) {
             throw new SecurityException("Transaction PIN is not set. Please set a PIN before authorizing payments.");
         }
-        if (cred.getPinFailedAttempts() >= SessionManager.MAX_PIN_ATTEMPTS || session.isLockedOutByPin()) {
+        int maxPinAttempts = OtogConfig.getInstance().getMaxPinAttempts();
+        if (cred.getPinFailedAttempts() >= maxPinAttempts || session.isLockedOutByPin()) {
             throw new SecurityException("Transaction PIN is locked due to too many failed attempts.");
         }
 
@@ -294,15 +300,19 @@ public class AuthServiceImpl implements AuthService {
 
         int dbFailedAttempts = credentialRepository.recordPinFailedAttempt(cleanUserId);
         boolean sessionLocked = session.recordFailedPinAttempt();
-        if (dbFailedAttempts >= SessionManager.MAX_PIN_ATTEMPTS && !sessionLocked) {
+        if (dbFailedAttempts >= maxPinAttempts && !sessionLocked) {
             session.lockOutByPin();
         }
         return false;
     }
 
     private String validatePinFormat(String rawPin) {
-        if (rawPin == null || !rawPin.matches("^[0-9]{4,6}$")) {
-            throw new OtogException("Transaction PIN must be 4 to 6 numeric digits.");
+        OtogConfig config = OtogConfig.getInstance();
+        int minLen = config.getPinMinLength();
+        int maxLen = config.getPinMaxLength();
+        String pattern = "^[0-9]{" + minLen + "," + maxLen + "}$";
+        if (rawPin == null || !rawPin.matches(pattern)) {
+            throw new OtogException("Transaction PIN must be " + minLen + " to " + maxLen + " numeric digits.");
         }
         return rawPin;
     }

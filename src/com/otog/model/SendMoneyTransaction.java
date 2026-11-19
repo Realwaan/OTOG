@@ -1,5 +1,7 @@
 package com.otog.model;
 
+import com.otog.util.OtogConfig;
+
 import java.math.BigDecimal;
 
 /**
@@ -41,10 +43,25 @@ public class SendMoneyTransaction extends Transaction {
     }
 
     public boolean validateRecipient() {
-        return recipientNumber != null && recipientNumber.trim().length() >= 10;
+        int minLength = OtogConfig.getInstance().getMinRecipientLength();
+        return recipientNumber != null && recipientNumber.trim().length() >= minLength;
     }
 
     public void send() {
         execute();
+    }
+
+    @Override
+    protected void appendSubtypeReceiptLines(ReceiptBuilder builder) {
+        builder.optionalLine("Recipient", recipientNumber);
+    }
+
+    @Override
+    public SendMoneyTransaction copyAsDraft(String newReferenceNumber) {
+        SendMoneyTransaction draft = new SendMoneyTransaction();
+        copyBaseDraftFieldsTo(draft, newReferenceNumber);
+        draft.setRecipientNumber(this.recipientNumber);
+        draft.setNote(this.note);
+        return draft;
     }
 }

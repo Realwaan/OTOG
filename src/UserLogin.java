@@ -6,11 +6,14 @@ import com.otog.model.User;
 import com.otog.model.Wallet;
 import com.otog.service.AuthService;
 import com.otog.service.AuthServiceImpl;
+import com.otog.service.ProtectedWalletOperationsProxy;
 import com.otog.service.SessionManager;
 import com.otog.service.WalletOperations;
 import com.otog.service.WalletService;
 import com.otog.ui.RegisterDialog;
 import com.otog.util.MoneyUtil;
+import com.otog.util.OtogConfig;
+import com.otog.util.UiTheme;
 
 import javax.swing.*;
 import java.awt.*;
@@ -318,7 +321,8 @@ public class UserLogin extends JFrame {
                     if (newCode != null && pnlMain.isShowing()) {
                         showDialogMessage("Two-Factor Authentication",
                                 "[Simulated SMS] A new 2FA code has been issued: " + newCode
-                                        + "\n(Valid for 5 minutes, one-time use)",
+                                        + "\n(Valid for " + OtogConfig.getInstance().getOtpExpiryMinutes()
+                                        + " minutes, one-time use)",
                                 JOptionPane.INFORMATION_MESSAGE);
                     }
                 } catch (InterruptedException ex) {
@@ -365,7 +369,9 @@ public class UserLogin extends JFrame {
     public com.otog.ui.Main openDashboard() {
         com.otog.ui.Main dashboard;
         if (this.walletService != null) {
-            dashboard = new com.otog.ui.Main(this.walletService, this.authService);
+            dashboard = new com.otog.ui.Main(
+                    ProtectedWalletOperationsProxy.wrap(this.walletService),
+                    this.authService);
         } else {
             DatabaseManager ownedDb = (preparedDashboardDatabase != null)
                     ? preparedDashboardDatabase
@@ -376,13 +382,14 @@ public class UserLogin extends JFrame {
         }
         final AuthService sharedAuthService = this.authService;
         final WalletOperations sharedWalletService = this.walletService;
+        OtogConfig config = OtogConfig.getInstance();
         dashboard.setOnLogoutCallback(() -> {
-            JFrame frame = new JFrame("User Login - OTOG E-Wallet");
+            JFrame frame = new JFrame("User Login - " + config.getAppTitle());
             // Reuse the same service instances (and their database) instead of opening a new disk DB on the EDT.
             UserLogin fresh = new UserLogin(sharedAuthService, sharedWalletService);
             frame.setContentPane(fresh.getMainPanel());
             frame.setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
-            frame.setSize(750, 420);
+            frame.setSize(config.getUiDimension("ui.login.width", "ui.login.height", 750, 420));
             frame.setLocationRelativeTo(null);
             frame.setResizable(false);
             frame.setVisible(true);
@@ -433,9 +440,10 @@ public class UserLogin extends JFrame {
         String identifier = username.trim();
         String identifierKey = identifier.toLowerCase(Locale.ROOT);
 
-        if (failedAttemptsByIdentifier.getOrDefault(identifierKey, 0) >= AuthServiceImpl.MAX_FAILED_ATTEMPTS) {
+        int maxFailedAttempts = OtogConfig.getInstance().getAuthMaxFailedAttempts();
+        if (failedAttemptsByIdentifier.getOrDefault(identifierKey, 0) >= maxFailedAttempts) {
             return LoginOutcome.failure("Account locked: maximum failed login attempts ("
-                    + AuthServiceImpl.MAX_FAILED_ATTEMPTS + ") reached.");
+                    + maxFailedAttempts + ") reached.");
         }
 
         if (authService != null) {
@@ -450,7 +458,7 @@ public class UserLogin extends JFrame {
                                 wallet = walletService.getWalletByUserId(user.getUserId());
                             } catch (EntityNotFoundException notFound) {
                                 wallet = walletService.createWallet(
-                                        user.getUserId(), MoneyUtil.ZERO, MoneyUtil.DEFAULT_CURRENCY);
+                                        user.getUserId(), MoneyUtil.ZERO, OtogConfig.getInstance().getDefaultCurrency());
                             }
                         } catch (RuntimeException walletFailure) {
                             // Credentials were correct; do not count this as a failed attempt.
@@ -463,11 +471,11 @@ public class UserLogin extends JFrame {
                     return LoginOutcome.success(user, wallet, identifierKey, issuedOtp);
                 }
 
-                return recordFailedAttempt(identifierKey);
+                return recordFailedAttempt(identifierKey, maxFailedAttempts);
             } catch (Exception ex) {
                 String msg = ex.getMessage();
                 if (msg != null && msg.contains("locked")) {
-                    failedAttemptsByIdentifier.put(identifierKey, AuthServiceImpl.MAX_FAILED_ATTEMPTS);
+                    failedAttemptsByIdentifier.put(identifierKey, maxFailedAttempts);
                     return LoginOutcome.failure(msg);
                 }
                 return LoginOutcome.failure(msg != null && !msg.trim().isEmpty()
@@ -479,14 +487,14 @@ public class UserLogin extends JFrame {
         }
     }
 
-    private LoginOutcome recordFailedAttempt(String identifierKey) {
+    private LoginOutcome recordFailedAttempt(String identifierKey, int maxFailedAttempts) {
         int attempts = failedAttemptsByIdentifier.merge(identifierKey, 1, Integer::sum);
-        if (attempts >= AuthServiceImpl.MAX_FAILED_ATTEMPTS) {
+        if (attempts >= maxFailedAttempts) {
             return LoginOutcome.failure("Account locked: maximum failed login attempts ("
-                    + AuthServiceImpl.MAX_FAILED_ATTEMPTS + ") reached.");
+                    + maxFailedAttempts + ") reached.");
         }
         return LoginOutcome.failure("Wrong credentials! Attempt " + attempts + " of "
-                + AuthServiceImpl.MAX_FAILED_ATTEMPTS + ".");
+                + maxFailedAttempts + ".");
     }
 
     /** EDT-only UI transition after a login attempt. */
@@ -512,7 +520,8 @@ public class UserLogin extends JFrame {
                 showDialogMessage(
                         "Two-Factor Authentication",
                         "[Simulated SMS] Your 2FA verification code is: " + lastIssuedOtp
-                                + "\n(Valid for 5 minutes, one-time use)",
+                                + "\n(Valid for " + OtogConfig.getInstance().getOtpExpiryMinutes()
+                                + " minutes, one-time use)",
                         JOptionPane.INFORMATION_MESSAGE
                 );
             }
@@ -545,7 +554,8 @@ public class UserLogin extends JFrame {
     }
 
     private String buildSimulatedOtpBanner(String code) {
-        return "[Simulated SMS] OTP code: " + (code != null ? code : "") + " (valid 5 min, 1-time use):";
+        return "[Simulated SMS] OTP code: " + (code != null ? code : "")
+                + " (valid " + OtogConfig.getInstance().getOtpExpiryMinutes() + " min, 1-time use):";
     }
 
     public boolean verifyTwoFactorCode(String code) {
@@ -627,16 +637,15 @@ public class UserLogin extends JFrame {
 
         pnlPassword = new JPanel();
         pnlPassword.setLayout(new GridLayoutManager(5, 2, new Insets(12, 16, 12, 16), 10, 10));
-        pnlPassword.setBorder(BorderFactory.createTitledBorder(
-                BorderFactory.createEtchedBorder(), "OTOG E-Wallet — Sign In"));
+        pnlPassword.setBorder(UiTheme.titledBorder(OtogConfig.getInstance().getAppTitle() + " \u2014 Sign In"));
         pnlMain.add(pnlPassword, new GridConstraints(0, 0, 3, 3,
                 GridConstraints.ANCHOR_CENTER, GridConstraints.FILL_BOTH,
                 GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_CAN_GROW,
                 GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_CAN_GROW,
                 null, null, null, 0, false));
 
-        JLabel loginBannerLabel = new JLabel("One Team One Goal — Digital E-Wallet");
-        loginBannerLabel.setFont(new Font("SansSerif", Font.BOLD, 16));
+        JLabel loginBannerLabel = new JLabel("One Team One Goal \u2014 Digital E-Wallet");
+        loginBannerLabel.setFont(UiTheme.font(UiTheme.FontRole.BANNER));
         pnlPassword.add(loginBannerLabel, new GridConstraints(0, 0, 1, 2,
                 GridConstraints.ANCHOR_CENTER, GridConstraints.FILL_NONE,
                 GridConstraints.SIZEPOLICY_FIXED, GridConstraints.SIZEPOLICY_FIXED,
@@ -685,8 +694,7 @@ public class UserLogin extends JFrame {
 
         pnl2FA = new JPanel();
         pnl2FA.setLayout(new GridLayoutManager(5, 2, new Insets(12, 16, 12, 16), 10, 10));
-        pnl2FA.setBorder(BorderFactory.createTitledBorder(
-                BorderFactory.createEtchedBorder(), "Two-Factor Verification"));
+        pnl2FA.setBorder(UiTheme.titledBorder("Two-Factor Verification"));
         pnl2FA.setVisible(false);
         pnlMain.add(pnl2FA, new GridConstraints(3, 0, 1, 3,
                 GridConstraints.ANCHOR_CENTER, GridConstraints.FILL_BOTH,
@@ -775,11 +783,12 @@ public class UserLogin extends JFrame {
 
         SwingUtilities.invokeLater(() -> {
             UserLogin app = new UserLogin(authService, walletService);
+            OtogConfig config = OtogConfig.getInstance();
 
-            JFrame frame = new JFrame("User Login - OTOG E-Wallet");
+            JFrame frame = new JFrame("User Login - " + config.getAppTitle());
             frame.setContentPane(app.pnlMain);
             frame.setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
-            frame.setSize(750, 420);
+            frame.setSize(config.getUiDimension("ui.login.width", "ui.login.height", 750, 420));
             frame.setLocationRelativeTo(null);
             frame.setResizable(false);
             frame.setVisible(true);

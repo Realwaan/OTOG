@@ -5,6 +5,7 @@ import com.otog.exception.OtogException;
 import com.otog.model.CashInOutTransaction;
 import com.otog.model.SendMoneyTransaction;
 import com.otog.model.Transaction;
+import com.otog.model.TransactionFactory;
 import com.otog.model.TransactionStatus;
 import com.otog.model.TransactionType;
 import com.otog.util.MoneyUtil;
@@ -233,19 +234,13 @@ public class TransactionRepository {
 
     private Transaction mapRow(ResultSet rs) throws SQLException {
         TransactionType type = TransactionType.valueOf(rs.getString("type"));
-        Transaction t;
-        if (type == TransactionType.CASH_IN || type == TransactionType.CASH_OUT) {
-            CashInOutTransaction cio = new CashInOutTransaction();
+        Transaction t = TransactionFactory.createEmptyForType(type);
+        if (t instanceof CashInOutTransaction cio) {
             cio.setCashOperationType(type == TransactionType.CASH_IN ? "CASH_IN" : "CASH_OUT");
             cio.setChannel(rs.getString("channel"));
-            t = cio;
-        } else if (type == TransactionType.SEND_MONEY) {
-            SendMoneyTransaction smt = new SendMoneyTransaction();
+        } else if (t instanceof SendMoneyTransaction smt) {
             smt.setRecipientNumber(rs.getString("target_wallet_id"));
             smt.setNote(rs.getString("description"));
-            t = smt;
-        } else {
-            t = new Transaction();
         }
         t.setTransactionId(rs.getString("transaction_id"));
         t.setReferenceNumber(rs.getString("reference_number"));
