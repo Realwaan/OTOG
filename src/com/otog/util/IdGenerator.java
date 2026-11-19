@@ -33,6 +33,10 @@ public final class IdGenerator {
         return "ACT-" + shortUuid();
     }
 
+    public static String nextNotificationId() {
+        return "NTF-" + shortUuid();
+    }
+
     public static String nextReferenceNumber() {
         return "REQ-" + System.currentTimeMillis() + "-" + shortUuid().substring(0, 6);
     }

@@ -3,6 +3,8 @@ package com.otog.ui;
 import com.intellij.uiDesigner.core.GridConstraints;
 import com.intellij.uiDesigner.core.GridLayoutManager;
 import com.intellij.uiDesigner.core.Spacer;
+import com.otog.model.TransactionStatus;
+import com.otog.model.TransactionType;
 import com.otog.util.OtogConfig;
 import com.otog.util.UiTheme;
 
@@ -12,13 +14,18 @@ import java.awt.*;
 
 /**
  * Bound IntelliJ Swing form panel for the Dashboard Overview tab:
- * Quick Actions, Statement File Export/Import buttons, and Recent Activity state cards.
+ * Quick Actions, Statement File Export/Import buttons, Transaction History Filters,
+ * and Recent Activity state cards.
  */
 public class OverviewPanel extends JPanel {
+
+    public static final String ALL_TYPES_OPTION = "All Types";
+    public static final String ALL_STATUSES_OPTION = "All Statuses";
 
     private JPanel pnlRoot;
     private JPanel pnlQuickActions;
     private JPanel pnlRecentActivity;
+    private JPanel pnlHistoryFilters;
 
     private JButton btnNavCashIn;
     private JButton btnNavCashOut;
@@ -26,6 +33,13 @@ public class OverviewPanel extends JPanel {
     private JButton btnNavPinSettings;
     private JButton btnExportStatement;
     private JButton btnLoadStatement;
+
+    private JComboBox<String> cmbFilterType;
+    private JComboBox<String> cmbFilterStatus;
+    private JTextField txtFilterFromDate;
+    private JTextField txtFilterToDate;
+    private JButton btnApplyFilters;
+    private JButton btnClearFilters;
 
     private CardLayout activityCardLayout;
     private JPanel activityCardPanel;
@@ -44,6 +58,7 @@ public class OverviewPanel extends JPanel {
     private DefaultTableModel transactionsTableModel;
     private JTable tblTransactions;
     private JButton btnCheckStatus;
+    private JButton btnRepeatDraft;
     private JButton btnViewReceipt;
     private JButton btnExportReceipt;
     private JLabel lblActivityFeedback;
@@ -84,6 +99,30 @@ public class OverviewPanel extends JPanel {
         return btnLoadStatement;
     }
 
+    public JComboBox<String> getFilterTypeComboBox() {
+        return cmbFilterType;
+    }
+
+    public JComboBox<String> getFilterStatusComboBox() {
+        return cmbFilterStatus;
+    }
+
+    public JTextField getFilterFromDateField() {
+        return txtFilterFromDate;
+    }
+
+    public JTextField getFilterToDateField() {
+        return txtFilterToDate;
+    }
+
+    public JButton getApplyFiltersButton() {
+        return btnApplyFilters;
+    }
+
+    public JButton getClearFiltersButton() {
+        return btnClearFilters;
+    }
+
     public CardLayout getActivityCardLayout() {
         return activityCardLayout;
     }
@@ -118,6 +157,10 @@ public class OverviewPanel extends JPanel {
 
     public JButton getCheckStatusButton() {
         return btnCheckStatus;
+    }
+
+    public JButton getRepeatDraftButton() {
+        return btnRepeatDraft;
     }
 
     public JButton getViewReceiptButton() {
@@ -195,12 +238,107 @@ public class OverviewPanel extends JPanel {
                 null, null, null, 0, false));
 
         pnlRecentActivity = new JPanel();
-        pnlRecentActivity.setLayout(new GridLayoutManager(1, 1, new Insets(6, 8, 6, 8), 8, 8));
-        pnlRecentActivity.setBorder(UiTheme.titledBorder("Recent Activity"));
+        pnlRecentActivity.setLayout(new GridLayoutManager(2, 1, new Insets(6, 8, 6, 8), 8, 8));
+        pnlRecentActivity.setBorder(UiTheme.titledBorder("Recent Activity & History"));
         pnlRoot.add(pnlRecentActivity, new GridConstraints(1, 0, 1, 1,
                 GridConstraints.ANCHOR_CENTER, GridConstraints.FILL_BOTH,
                 GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_WANT_GROW,
                 GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_WANT_GROW,
+                null, null, null, 0, false));
+
+        pnlHistoryFilters = new JPanel();
+        pnlHistoryFilters.setLayout(new GridLayoutManager(1, 11, new Insets(2, 2, 4, 2), 6, 0));
+        pnlRecentActivity.add(pnlHistoryFilters, new GridConstraints(0, 0, 1, 1,
+                GridConstraints.ANCHOR_CENTER, GridConstraints.FILL_HORIZONTAL,
+                GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_CAN_GROW,
+                GridConstraints.SIZEPOLICY_FIXED,
+                null, null, null, 0, false));
+
+        JLabel lblType = new JLabel("Type:");
+        lblType.setFont(UiTheme.font(UiTheme.FontRole.SMALL));
+        pnlHistoryFilters.add(lblType, new GridConstraints(0, 0, 1, 1,
+                GridConstraints.ANCHOR_WEST, GridConstraints.FILL_NONE,
+                GridConstraints.SIZEPOLICY_FIXED, GridConstraints.SIZEPOLICY_FIXED,
+                null, null, null, 0, false));
+
+        cmbFilterType = new JComboBox<>();
+        cmbFilterType.addItem(ALL_TYPES_OPTION);
+        for (TransactionType type : TransactionType.values()) {
+            cmbFilterType.addItem(type.name());
+        }
+        pnlHistoryFilters.add(cmbFilterType, new GridConstraints(0, 1, 1, 1,
+                GridConstraints.ANCHOR_WEST, GridConstraints.FILL_HORIZONTAL,
+                GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_CAN_GROW,
+                GridConstraints.SIZEPOLICY_FIXED,
+                null, new Dimension(130, -1), null, 0, false));
+
+        JLabel lblStatus = new JLabel("Status:");
+        lblStatus.setFont(UiTheme.font(UiTheme.FontRole.SMALL));
+        pnlHistoryFilters.add(lblStatus, new GridConstraints(0, 2, 1, 1,
+                GridConstraints.ANCHOR_WEST, GridConstraints.FILL_NONE,
+                GridConstraints.SIZEPOLICY_FIXED, GridConstraints.SIZEPOLICY_FIXED,
+                null, null, null, 0, false));
+
+        cmbFilterStatus = new JComboBox<>();
+        cmbFilterStatus.addItem(ALL_STATUSES_OPTION);
+        for (TransactionStatus status : TransactionStatus.values()) {
+            cmbFilterStatus.addItem(status.name());
+        }
+        pnlHistoryFilters.add(cmbFilterStatus, new GridConstraints(0, 3, 1, 1,
+                GridConstraints.ANCHOR_WEST, GridConstraints.FILL_HORIZONTAL,
+                GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_CAN_GROW,
+                GridConstraints.SIZEPOLICY_FIXED,
+                null, new Dimension(110, -1), null, 0, false));
+
+        JLabel lblFrom = new JLabel("From:");
+        lblFrom.setFont(UiTheme.font(UiTheme.FontRole.SMALL));
+        pnlHistoryFilters.add(lblFrom, new GridConstraints(0, 4, 1, 1,
+                GridConstraints.ANCHOR_WEST, GridConstraints.FILL_NONE,
+                GridConstraints.SIZEPOLICY_FIXED, GridConstraints.SIZEPOLICY_FIXED,
+                null, null, null, 0, false));
+
+        txtFilterFromDate = new JTextField(9);
+        txtFilterFromDate.setToolTipText("Start date (YYYY-MM-DD)");
+        pnlHistoryFilters.add(txtFilterFromDate, new GridConstraints(0, 5, 1, 1,
+                GridConstraints.ANCHOR_WEST, GridConstraints.FILL_HORIZONTAL,
+                GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_CAN_GROW,
+                GridConstraints.SIZEPOLICY_FIXED,
+                null, new Dimension(92, -1), null, 0, false));
+
+        JLabel lblTo = new JLabel("To:");
+        lblTo.setFont(UiTheme.font(UiTheme.FontRole.SMALL));
+        pnlHistoryFilters.add(lblTo, new GridConstraints(0, 6, 1, 1,
+                GridConstraints.ANCHOR_WEST, GridConstraints.FILL_NONE,
+                GridConstraints.SIZEPOLICY_FIXED, GridConstraints.SIZEPOLICY_FIXED,
+                null, null, null, 0, false));
+
+        txtFilterToDate = new JTextField(9);
+        txtFilterToDate.setToolTipText("End date (YYYY-MM-DD)");
+        pnlHistoryFilters.add(txtFilterToDate, new GridConstraints(0, 7, 1, 1,
+                GridConstraints.ANCHOR_WEST, GridConstraints.FILL_HORIZONTAL,
+                GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_CAN_GROW,
+                GridConstraints.SIZEPOLICY_FIXED,
+                null, new Dimension(92, -1), null, 0, false));
+
+        btnApplyFilters = new JButton("Filter");
+        btnApplyFilters.setToolTipText("Filter owned transaction history by date, type, and status");
+        pnlHistoryFilters.add(btnApplyFilters, new GridConstraints(0, 8, 1, 1,
+                GridConstraints.ANCHOR_CENTER, GridConstraints.FILL_HORIZONTAL,
+                GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_CAN_GROW,
+                GridConstraints.SIZEPOLICY_FIXED,
+                null, null, null, 0, false));
+
+        btnClearFilters = new JButton("Reset");
+        btnClearFilters.setToolTipText("Clear active filters and show recent activity");
+        pnlHistoryFilters.add(btnClearFilters, new GridConstraints(0, 9, 1, 1,
+                GridConstraints.ANCHOR_CENTER, GridConstraints.FILL_HORIZONTAL,
+                GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_CAN_GROW,
+                GridConstraints.SIZEPOLICY_FIXED,
+                null, null, null, 0, false));
+
+        pnlHistoryFilters.add(new Spacer(), new GridConstraints(0, 10, 1, 1,
+                GridConstraints.ANCHOR_CENTER, GridConstraints.FILL_HORIZONTAL,
+                GridConstraints.SIZEPOLICY_WANT_GROW, 1,
                 null, null, null, 0, false));
 
         activityCardLayout = new CardLayout();
@@ -250,9 +388,13 @@ public class OverviewPanel extends JPanel {
         pnlTableActionButtons = new JPanel(new FlowLayout(FlowLayout.RIGHT, 8, 0));
         btnCheckStatus = new JButton("Lookup Status");
         btnCheckStatus.setEnabled(false);
+        btnRepeatDraft = new JButton("Repeat Draft");
+        btnRepeatDraft.setToolTipText("Clone selected transaction into a fresh repeat draft with a new reference number");
+        btnRepeatDraft.setEnabled(false);
         btnViewReceipt = new JButton("View Receipt");
         btnExportReceipt = new JButton("Save Receipt File");
         pnlTableActionButtons.add(btnCheckStatus);
+        pnlTableActionButtons.add(btnRepeatDraft);
         pnlTableActionButtons.add(btnViewReceipt);
         pnlTableActionButtons.add(btnExportReceipt);
         pnlTableActions.add(lblActivityFeedback, BorderLayout.WEST);
@@ -264,7 +406,7 @@ public class OverviewPanel extends JPanel {
         activityCardPanel.add(pnlErrorCard, Main.DashboardState.ERROR.name());
         activityCardPanel.add(pnlReadyCard, Main.DashboardState.READY.name());
 
-        pnlRecentActivity.add(activityCardPanel, new GridConstraints(0, 0, 1, 1,
+        pnlRecentActivity.add(activityCardPanel, new GridConstraints(1, 0, 1, 1,
                 GridConstraints.ANCHOR_CENTER, GridConstraints.FILL_BOTH,
                 GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_WANT_GROW,
                 GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_WANT_GROW,

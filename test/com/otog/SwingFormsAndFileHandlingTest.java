@@ -15,6 +15,7 @@ import com.otog.service.WalletService;
 import com.otog.ui.AdminControlsPanel;
 import com.otog.ui.CashInOutPanel;
 import com.otog.ui.Main;
+import com.otog.ui.NotificationInboxDialog;
 import com.otog.ui.OverviewPanel;
 import com.otog.ui.PinSettingsDialog;
 import com.otog.ui.RegisterDialog;
@@ -78,7 +79,8 @@ public class SwingFormsAndFileHandlingTest {
                 "com/otog/ui/OverviewPanel.form", "com.otog.ui.OverviewPanel",
                 "com/otog/ui/CashInOutPanel.form", "com.otog.ui.CashInOutPanel",
                 "com/otog/ui/SendMoneyPanel.form", "com.otog.ui.SendMoneyPanel",
-                "com/otog/ui/AdminControlsPanel.form", "com.otog.ui.AdminControlsPanel"
+                "com/otog/ui/AdminControlsPanel.form", "com.otog.ui.AdminControlsPanel",
+                "com/otog/ui/NotificationInboxDialog.form", "com.otog.ui.NotificationInboxDialog"
         );
 
         for (Map.Entry<String, String> entry : expectedForms.entrySet()) {
@@ -143,6 +145,19 @@ public class SwingFormsAndFileHandlingTest {
         AdminControlsPanel adminPanel = new AdminControlsPanel(null, null, null, null);
         assertNotNull(adminPanel.$$$getRootComponent$$$());
         assertInstanceOf(GridLayoutManager.class, adminPanel.getRootPanel().getLayout());
+
+        NotificationInboxDialog notifDialog = new NotificationInboxDialog(null, null, null, null, null);
+        try {
+            assertNotNull(notifDialog.$$$getRootComponent$$$());
+            assertInstanceOf(GridLayoutManager.class, notifDialog.getRootPanel().getLayout());
+            assertNotNull(notifDialog.getNotificationsTable());
+            assertNotNull(notifDialog.getMarkReadButton());
+            assertNotNull(notifDialog.getMarkUnreadButton());
+            assertNotNull(notifDialog.getMarkAllReadButton());
+            assertNotNull(notifDialog.getViewLinkedReceiptButton());
+        } finally {
+            notifDialog.dispose();
+        }
     }
 
     @Test

@@ -53,7 +53,7 @@ public class SendMoneyTransaction extends Transaction {
 
     @Override
     protected void appendSubtypeReceiptLines(ReceiptBuilder builder) {
-        builder.optionalLine("Recipient", recipientNumber);
+        builder.maskedLine("Recipient", recipientNumber);
     }
 
     @Override
