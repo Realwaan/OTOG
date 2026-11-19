@@ -3,6 +3,7 @@ package com.otog.service;
 import com.otog.exception.WalletException;
 import com.otog.model.User;
 import com.otog.model.Wallet;
+import com.otog.util.OtogConfig;
 
 import java.time.Clock;
 import java.time.Duration;
@@ -14,13 +15,13 @@ import java.util.Objects;
  * inactivity expiration, PIN attempt limits, and payment authorization state.
  */
 public class SessionManager {
-    public static final int MAX_PIN_ATTEMPTS = 3;
-    public static final long INACTIVITY_TIMEOUT_MINUTES = 15L;
+    public static final int MAX_PIN_ATTEMPTS = OtogConfig.getInstance().getMaxPinAttempts();
+    public static final long INACTIVITY_TIMEOUT_MINUTES = OtogConfig.getInstance().getSessionInactivityMinutes();
 
     private static volatile SessionManager instance;
 
     private Clock clock = Clock.systemUTC();
-    private long inactivityTimeoutMillis = INACTIVITY_TIMEOUT_MINUTES * 60_000L;
+    private Duration customInactivityTimeout;
 
     private User currentUser;
     private Wallet currentWallet;
@@ -43,6 +44,13 @@ public class SessionManager {
             }
         }
         return instance;
+    }
+
+    private long getEffectiveInactivityTimeoutMillis() {
+        if (customInactivityTimeout != null) {
+            return customInactivityTimeout.toMillis();
+        }
+        return OtogConfig.getInstance().getSessionInactivityMinutes() * 60_000L;
     }
 
     public synchronized void login(User user, Wallet wallet) {
@@ -84,7 +92,7 @@ public class SessionManager {
             return false;
         }
         long elapsedMillis = Duration.between(lastActivityAt, clock.instant()).toMillis();
-        if (elapsedMillis >= inactivityTimeoutMillis) {
+        if (elapsedMillis >= getEffectiveInactivityTimeoutMillis()) {
             clearSessionState(true, false);
             return true;
         }
@@ -204,7 +212,7 @@ public class SessionManager {
         }
         this.pinVerified = false;
         this.failedPinAttempts++;
-        if (this.failedPinAttempts >= MAX_PIN_ATTEMPTS) {
+        if (this.failedPinAttempts >= OtogConfig.getInstance().getMaxPinAttempts()) {
             clearSessionState(false, true);
             return true;
         }
@@ -260,12 +268,12 @@ public class SessionManager {
         if (timeout == null || timeout.isNegative() || timeout.isZero()) {
             throw new IllegalArgumentException("Inactivity timeout must be positive");
         }
-        this.inactivityTimeoutMillis = timeout.toMillis();
+        this.customInactivityTimeout = timeout;
     }
 
     public synchronized void reset() {
         clearSessionState(false, false);
         this.clock = Clock.systemUTC();
-        this.inactivityTimeoutMillis = INACTIVITY_TIMEOUT_MINUTES * 60_000L;
+        this.customInactivityTimeout = null;
     }
 }

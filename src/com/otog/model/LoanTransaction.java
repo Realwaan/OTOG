@@ -1,5 +1,7 @@
 package com.otog.model;
 
+import com.otog.util.MoneyUtil;
+
 import java.math.BigDecimal;
 import java.time.LocalDate;
 
@@ -20,10 +22,10 @@ public class LoanTransaction extends Transaction {
 
     public LoanTransaction(String transactionId, String referenceNumber, String walletId,
                            BigDecimal principal, BigDecimal interestRate, int termMonths, LocalDate dueDate) {
-        super(transactionId, referenceNumber, null, walletId, principal, BigDecimal.ZERO,
+        super(transactionId, referenceNumber, null, walletId, principal, MoneyUtil.ZERO,
                 TransactionType.LOAN_DISBURSEMENT, "Loan disbursement of " + principal);
-        this.principal = principal;
-        this.interestRate = interestRate;
+        this.principal = principal != null ? MoneyUtil.validatePositiveAmount(principal) : MoneyUtil.ZERO;
+        this.interestRate = interestRate != null ? interestRate : BigDecimal.ZERO;
         this.termMonths = termMonths;
         this.dueDate = dueDate;
     }
@@ -71,5 +73,24 @@ public class LoanTransaction extends Transaction {
     public void repay() {
         setType(TransactionType.LOAN_REPAYMENT);
         execute();
+    }
+
+    @Override
+    protected void appendSubtypeReceiptLines(ReceiptBuilder builder) {
+        builder.optionalLine("Principal", principal != null ? MoneyUtil.format(principal, getCurrency()) : null)
+                .optionalLine("Interest", interestRate != null ? interestRate.toPlainString() : null)
+                .optionalLine("Term", termMonths > 0 ? termMonths + " months" : null)
+                .optionalLine("Due Date", dueDate != null ? dueDate.toString() : null);
+    }
+
+    @Override
+    public LoanTransaction copyAsDraft(String newReferenceNumber) {
+        LoanTransaction draft = new LoanTransaction();
+        copyBaseDraftFieldsTo(draft, newReferenceNumber);
+        draft.setPrincipal(this.principal);
+        draft.setInterestRate(this.interestRate);
+        draft.setTermMonths(this.termMonths);
+        draft.setDueDate(this.dueDate);
+        return draft;
     }
 }

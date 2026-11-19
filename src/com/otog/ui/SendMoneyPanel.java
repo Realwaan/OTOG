@@ -3,6 +3,8 @@ package com.otog.ui;
 import com.intellij.uiDesigner.core.GridConstraints;
 import com.intellij.uiDesigner.core.GridLayoutManager;
 import com.intellij.uiDesigner.core.Spacer;
+import com.otog.util.OtogConfig;
+import com.otog.util.UiTheme;
 
 import javax.swing.*;
 import java.awt.*;
@@ -67,10 +69,10 @@ public class SendMoneyPanel extends JPanel {
         pnlRoot = new JPanel();
         pnlRoot.setLayout(new GridLayoutManager(2, 1, new Insets(16, 16, 16, 16), 10, 10));
 
+        OtogConfig config = OtogConfig.getInstance();
         pnlForm = new JPanel();
         pnlForm.setLayout(new GridLayoutManager(6, 2, new Insets(12, 14, 12, 14), 10, 10));
-        pnlForm.setBorder(BorderFactory.createTitledBorder(
-                BorderFactory.createEtchedBorder(), "Wallet-to-Wallet Transfer"));
+        pnlForm.setBorder(UiTheme.titledBorder("Wallet-to-Wallet Transfer"));
         pnlRoot.add(pnlForm, new GridConstraints(0, 0, 1, 1,
                 GridConstraints.ANCHOR_CENTER, GridConstraints.FILL_BOTH,
                 GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_CAN_GROW,
@@ -81,10 +83,11 @@ public class SendMoneyPanel extends JPanel {
         txtSendAmount = new JTextField(22);
         txtSendNote = new JTextField(22);
         txtSendPin = new JPasswordField(22);
-        txtSendPin.setToolTipText("Enter your 4-6 digit Transaction PIN to authorize outgoing transfer");
+        txtSendPin.setToolTipText("Enter your " + config.getPinMinLength() + "-" + config.getPinMaxLength()
+                + " digit Transaction PIN to authorize outgoing transfer");
 
         addRow(pnlForm, 0, "Recipient (Mobile / Email / Name / Wallet ID):", txtRecipient);
-        addRow(pnlForm, 1, "Amount (PHP):", txtSendAmount);
+        addRow(pnlForm, 1, "Amount (" + config.getDefaultCurrency() + "):", txtSendAmount);
         addRow(pnlForm, 2, "Note (Optional):", txtSendNote);
         addRow(pnlForm, 3, "Transaction PIN:", txtSendPin);
 
@@ -116,7 +119,7 @@ public class SendMoneyPanel extends JPanel {
                 null, null, null, 0, false));
 
         lblSendFeedback = new JLabel(" ");
-        lblSendFeedback.setFont(new Font("SansSerif", Font.PLAIN, 12));
+        lblSendFeedback.setFont(UiTheme.font(UiTheme.FontRole.LABEL));
         pnlForm.add(lblSendFeedback, new GridConstraints(5, 0, 1, 2,
                 GridConstraints.ANCHOR_WEST, GridConstraints.FILL_HORIZONTAL,
                 GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_CAN_GROW,

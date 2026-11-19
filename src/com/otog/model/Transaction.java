@@ -1,6 +1,8 @@
 package com.otog.model;
 
+import com.otog.util.IdGenerator;
 import com.otog.util.MoneyUtil;
+import com.otog.util.OtogConfig;
 
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
@@ -10,9 +12,10 @@ import java.util.Objects;
 
 /**
  * Represents a financial transaction within the OTOG E-Wallet platform.
- * Supports idempotency via unique referenceNumber and maintains BigDecimal financial precision.
+ * Supports idempotency via unique referenceNumber, {@link TransactionPrototype} draft cloning,
+ * {@link ReceiptComponent} composite receipt generation, and {@link BigDecimal} financial precision.
  */
-public class Transaction implements Comparable<Transaction> {
+public class Transaction implements Comparable<Transaction>, TransactionPrototype {
     private String transactionId;
     private String referenceNumber;
     private String sourceWalletId;
@@ -33,7 +36,7 @@ public class Transaction implements Comparable<Transaction> {
         this.amount = MoneyUtil.ZERO;
         this.fee = MoneyUtil.ZERO;
         this.totalAmount = MoneyUtil.ZERO;
-        this.currency = MoneyUtil.DEFAULT_CURRENCY;
+        this.currency = OtogConfig.getInstance().getDefaultCurrency();
         this.status = TransactionStatus.PENDING;
         this.createdAt = LocalDateTime.now();
     }
@@ -196,40 +199,71 @@ public class Transaction implements Comparable<Transaction> {
     }
 
     /**
-     * Generates a readable receipt string for the transaction.
+     * Generates a Composite {@link ReceiptComponent} tree for this transaction via {@link ReceiptBuilder}.
+     */
+    public ReceiptComponent buildReceiptComponent() {
+        DateTimeFormatter dtf = DateTimeFormatter.ofPattern(OtogConfig.getInstance().getTimestampPattern());
+        ReceiptBuilder builder = new ReceiptBuilder()
+                .banner("OTOG E-WALLET RECEIPT")
+                .line("Txn ID", transactionId)
+                .line("Reference", referenceNumber)
+                .optionalLine("Provider Ref", providerReference);
+        appendSubtypeReceiptLines(builder);
+        builder.line("Type", type)
+                .line("Status", status)
+                .optionalLine("Prov Status", providerStatus)
+                .line("Date", createdAt != null ? createdAt.format(dtf) : "N/A")
+                .optionalLine("Source", sourceWalletId)
+                .optionalLine("Destination", targetWalletId)
+                .moneyLine("Amount", amount, currency)
+                .moneyLine("Fee", fee, currency)
+                .divider()
+                .moneyLine("Total", totalAmount, currency)
+                .optionalLine("Note", description);
+        return builder.buildComponent();
+    }
+
+    /**
+     * Hook for specialized {@link Transaction} subclasses to contribute subtype-specific receipt fields.
+     */
+    protected void appendSubtypeReceiptLines(ReceiptBuilder builder) {
+        // Base Transaction has no subtype-specific fields
+    }
+
+    /**
+     * Generates a readable receipt string for the transaction using its Composite receipt tree.
      */
     public String getReceipt() {
-        DateTimeFormatter dtf = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
-        StringBuilder sb = new StringBuilder();
-        sb.append("========================================\n");
-        sb.append("            OTOG E-WALLET RECEIPT        \n");
-        sb.append("========================================\n");
-        sb.append("Txn ID:       ").append(transactionId).append("\n");
-        sb.append("Reference:    ").append(referenceNumber).append("\n");
-        if (providerReference != null && !providerReference.isEmpty()) {
-            sb.append("Provider Ref: ").append(providerReference).append("\n");
+        return buildReceiptComponent().renderToString(ReceiptBuilder.DEFAULT_LABEL_WIDTH);
+    }
+
+    @Override
+    public Transaction copyAsDraft(String newReferenceNumber) {
+        Transaction draft = new Transaction();
+        copyBaseDraftFieldsTo(draft, newReferenceNumber);
+        return draft;
+    }
+
+    protected final void copyBaseDraftFieldsTo(Transaction target, String newReferenceNumber) {
+        String effectiveRef = (newReferenceNumber != null && !newReferenceNumber.trim().isEmpty())
+                ? newReferenceNumber.trim()
+                : IdGenerator.nextReferenceNumber();
+        target.setTransactionId(IdGenerator.nextTransactionId());
+        target.setReferenceNumber(effectiveRef);
+        target.setSourceWalletId(this.sourceWalletId);
+        target.setTargetWalletId(this.targetWalletId);
+        if (this.amount != null && this.amount.compareTo(BigDecimal.ZERO) > 0) {
+            target.setAmount(this.amount);
         }
-        sb.append("Type:         ").append(type).append("\n");
-        sb.append("Status:       ").append(status).append("\n");
-        if (providerStatus != null && !providerStatus.isEmpty()) {
-            sb.append("Prov Status:  ").append(providerStatus).append("\n");
-        }
-        sb.append("Date:         ").append(createdAt != null ? createdAt.format(dtf) : "N/A").append("\n");
-        if (sourceWalletId != null) {
-            sb.append("Source:       ").append(sourceWalletId).append("\n");
-        }
-        if (targetWalletId != null) {
-            sb.append("Destination:  ").append(targetWalletId).append("\n");
-        }
-        sb.append("Amount:       ").append(MoneyUtil.format(amount, currency)).append("\n");
-        sb.append("Fee:          ").append(MoneyUtil.format(fee, currency)).append("\n");
-        sb.append("----------------------------------------\n");
-        sb.append("Total:        ").append(MoneyUtil.format(totalAmount, currency)).append("\n");
-        if (description != null && !description.isEmpty()) {
-            sb.append("Note:         ").append(description).append("\n");
-        }
-        sb.append("========================================\n");
-        return sb.toString();
+        target.setFee(this.fee);
+        target.setCurrency(this.currency);
+        target.setType(this.type);
+        target.setStatus(TransactionStatus.PENDING);
+        target.setDescription(this.description);
+        target.setCreatedAt(LocalDateTime.now());
+        target.setCompletedAt(null);
+        target.setProviderReference(null);
+        target.setProviderStatus(null);
     }
 
     private static final Comparator<Transaction> NEWEST_FIRST = Comparator

@@ -3,50 +3,58 @@ package com.otog.service;
 import com.otog.model.PaymentMethod;
 
 import java.math.BigDecimal;
+import java.util.Optional;
 
 /**
  * Bank API Client handling communication with banking rails and payment processors.
- * Employs an adapter interface to support both mock simulation and real-world endpoints.
+ * Employs the {@link BankAdapter} Adapter interface and unwraps {@link BankAdapterDecorator}
+ * chains transparently for deterministic mock configuration.
  */
 public class BankApiClient {
     private BankAdapter adapter;
 
     public BankApiClient() {
-        this(new MockBankAdapter(BankResponseStatus.SUCCESS));
+        this(new AuditingBankAdapterDecorator(
+                new ValidatingBankAdapterDecorator(new MockBankAdapter(BankResponseStatus.SUCCESS))));
     }
 
     public BankApiClient(BankAdapter adapter) {
-        this.adapter = adapter != null ? adapter : new MockBankAdapter(BankResponseStatus.SUCCESS);
+        this.adapter = adapter != null
+                ? adapter
+                : new AuditingBankAdapterDecorator(
+                new ValidatingBankAdapterDecorator(new MockBankAdapter(BankResponseStatus.SUCCESS)));
     }
 
     public BankApiClient(BankResponseStatus mode) {
-        this(new MockBankAdapter(mode));
+        this(new AuditingBankAdapterDecorator(
+                new ValidatingBankAdapterDecorator(new MockBankAdapter(mode))));
     }
 
     public BankAdapter getAdapter() {
         return adapter;
     }
 
+    public <T extends BankAdapter> Optional<T> findAdapter(Class<T> adapterType) {
+        return BankAdapterDecorator.findAdapter(adapter, adapterType);
+    }
+
     public void setAdapter(BankAdapter adapter) {
-        this.adapter = adapter != null ? adapter : new MockBankAdapter(BankResponseStatus.SUCCESS);
+        this.adapter = adapter != null
+                ? adapter
+                : new AuditingBankAdapterDecorator(
+                new ValidatingBankAdapterDecorator(new MockBankAdapter(BankResponseStatus.SUCCESS)));
     }
 
     public void setMode(BankResponseStatus mode) {
-        if (adapter instanceof MockBankAdapter mock) {
-            mock.setMode(mode);
-        }
+        findAdapter(MockBankAdapter.class).ifPresent(mock -> mock.setMode(mode));
     }
 
     public void setDefaultLookupStatus(BankResponseStatus status) {
-        if (adapter instanceof MockBankAdapter mock) {
-            mock.setDefaultLookupStatus(status);
-        }
+        findAdapter(MockBankAdapter.class).ifPresent(mock -> mock.setDefaultLookupStatus(status));
     }
 
     public void setReferenceLookupStatus(String referenceNumber, BankResponseStatus status) {
-        if (adapter instanceof MockBankAdapter mock) {
-            mock.setReferenceLookupStatus(referenceNumber, status);
-        }
+        findAdapter(MockBankAdapter.class).ifPresent(mock -> mock.setReferenceLookupStatus(referenceNumber, status));
     }
 
     public BankApiResponse cashIn(String referenceNumber, PaymentMethod paymentMethod, BigDecimal amount) {

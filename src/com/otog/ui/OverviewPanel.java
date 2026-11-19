@@ -3,6 +3,8 @@ package com.otog.ui;
 import com.intellij.uiDesigner.core.GridConstraints;
 import com.intellij.uiDesigner.core.GridLayoutManager;
 import com.intellij.uiDesigner.core.Spacer;
+import com.otog.util.OtogConfig;
+import com.otog.util.UiTheme;
 
 import javax.swing.*;
 import javax.swing.table.DefaultTableModel;
@@ -27,6 +29,14 @@ public class OverviewPanel extends JPanel {
 
     private CardLayout activityCardLayout;
     private JPanel activityCardPanel;
+    private JPanel pnlLoadingCard;
+    private JPanel pnlEmptyCard;
+    private JPanel pnlErrorCard;
+    private JPanel pnlErrorInner;
+    private JPanel pnlRetryWrapper;
+    private JPanel pnlReadyCard;
+    private JPanel pnlTableActions;
+    private JPanel pnlTableActionButtons;
     private JLabel lblLoadingState;
     private JLabel lblEmptyState;
     private JLabel lblErrorState;
@@ -128,8 +138,7 @@ public class OverviewPanel extends JPanel {
 
         pnlQuickActions = new JPanel();
         pnlQuickActions.setLayout(new GridLayoutManager(1, 7, new Insets(6, 8, 6, 8), 8, 4));
-        pnlQuickActions.setBorder(BorderFactory.createTitledBorder(
-                BorderFactory.createEtchedBorder(), "Quick Actions & Statement Files"));
+        pnlQuickActions.setBorder(UiTheme.titledBorder("Quick Actions & Statement Files"));
         pnlRoot.add(pnlQuickActions, new GridConstraints(0, 0, 1, 1,
                 GridConstraints.ANCHOR_CENTER, GridConstraints.FILL_BOTH,
                 GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_CAN_GROW,
@@ -187,8 +196,7 @@ public class OverviewPanel extends JPanel {
 
         pnlRecentActivity = new JPanel();
         pnlRecentActivity.setLayout(new GridLayoutManager(1, 1, new Insets(6, 8, 6, 8), 8, 8));
-        pnlRecentActivity.setBorder(BorderFactory.createTitledBorder(
-                BorderFactory.createEtchedBorder(), "Recent Activity"));
+        pnlRecentActivity.setBorder(UiTheme.titledBorder("Recent Activity"));
         pnlRoot.add(pnlRecentActivity, new GridConstraints(1, 0, 1, 1,
                 GridConstraints.ANCHOR_CENTER, GridConstraints.FILL_BOTH,
                 GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_WANT_GROW,
@@ -198,28 +206,28 @@ public class OverviewPanel extends JPanel {
         activityCardLayout = new CardLayout();
         activityCardPanel = new JPanel(activityCardLayout);
 
-        JPanel loadingCard = new JPanel(new GridBagLayout());
+        pnlLoadingCard = new JPanel(new GridBagLayout());
         lblLoadingState = new JLabel("Loading wallet balance and recent activity...");
-        lblLoadingState.setFont(new Font("SansSerif", Font.ITALIC, 13));
-        loadingCard.add(lblLoadingState);
+        lblLoadingState.setFont(UiTheme.font(UiTheme.FontRole.BODY_ITALIC));
+        pnlLoadingCard.add(lblLoadingState);
 
-        JPanel emptyCard = new JPanel(new GridBagLayout());
+        pnlEmptyCard = new JPanel(new GridBagLayout());
         lblEmptyState = new JLabel("No recent transactions yet. Use Cash In or Send Money to get started.");
-        lblEmptyState.setFont(new Font("SansSerif", Font.PLAIN, 13));
-        lblEmptyState.setForeground(new Color(95, 103, 114));
-        emptyCard.add(lblEmptyState);
+        lblEmptyState.setFont(UiTheme.font(UiTheme.FontRole.BODY));
+        lblEmptyState.setForeground(UiTheme.color(UiTheme.ColorRole.MUTED));
+        pnlEmptyCard.add(lblEmptyState);
 
-        JPanel errorCard = new JPanel(new GridBagLayout());
-        JPanel errorInner = new JPanel(new BorderLayout(8, 10));
+        pnlErrorCard = new JPanel(new GridBagLayout());
+        pnlErrorInner = new JPanel(new BorderLayout(8, 10));
         lblErrorState = new JLabel("Unable to load wallet activity.", SwingConstants.CENTER);
-        lblErrorState.setFont(new Font("SansSerif", Font.PLAIN, 13));
-        lblErrorState.setForeground(new Color(176, 38, 38));
+        lblErrorState.setFont(UiTheme.font(UiTheme.FontRole.BODY));
+        lblErrorState.setForeground(UiTheme.color(UiTheme.ColorRole.ERROR));
         btnRetryLoad = new JButton("Retry");
-        JPanel retryWrapper = new JPanel(new FlowLayout(FlowLayout.CENTER));
-        retryWrapper.add(btnRetryLoad);
-        errorInner.add(lblErrorState, BorderLayout.CENTER);
-        errorInner.add(retryWrapper, BorderLayout.SOUTH);
-        errorCard.add(errorInner);
+        pnlRetryWrapper = new JPanel(new FlowLayout(FlowLayout.CENTER));
+        pnlRetryWrapper.add(btnRetryLoad);
+        pnlErrorInner.add(lblErrorState, BorderLayout.CENTER);
+        pnlErrorInner.add(pnlRetryWrapper, BorderLayout.SOUTH);
+        pnlErrorCard.add(pnlErrorInner);
 
         String[] columns = {"Date", "Ref #", "Type", "Direction", "Amount", "Fee", "Status", "Provider Ref", "Description"};
         transactionsTableModel = new DefaultTableModel(columns, 0) {
@@ -230,31 +238,31 @@ public class OverviewPanel extends JPanel {
         };
         tblTransactions = new JTable(transactionsTableModel);
         tblTransactions.setSelectionMode(ListSelectionModel.SINGLE_SELECTION);
-        tblTransactions.setRowHeight(24);
+        tblTransactions.setRowHeight(OtogConfig.getInstance().getTableRowHeight());
         tblTransactions.getTableHeader().setReorderingAllowed(false);
 
-        JPanel readyCard = new JPanel(new BorderLayout(6, 6));
-        readyCard.add(new JScrollPane(tblTransactions), BorderLayout.CENTER);
+        pnlReadyCard = new JPanel(new BorderLayout(6, 6));
+        pnlReadyCard.add(new JScrollPane(tblTransactions), BorderLayout.CENTER);
 
-        JPanel tableActions = new JPanel(new BorderLayout(8, 0));
+        pnlTableActions = new JPanel(new BorderLayout(8, 0));
         lblActivityFeedback = new JLabel(" ");
-        lblActivityFeedback.setFont(new Font("SansSerif", Font.PLAIN, 12));
-        JPanel tableActionButtons = new JPanel(new FlowLayout(FlowLayout.RIGHT, 8, 0));
+        lblActivityFeedback.setFont(UiTheme.font(UiTheme.FontRole.LABEL));
+        pnlTableActionButtons = new JPanel(new FlowLayout(FlowLayout.RIGHT, 8, 0));
         btnCheckStatus = new JButton("Lookup Status");
         btnCheckStatus.setEnabled(false);
         btnViewReceipt = new JButton("View Receipt");
         btnExportReceipt = new JButton("Save Receipt File");
-        tableActionButtons.add(btnCheckStatus);
-        tableActionButtons.add(btnViewReceipt);
-        tableActionButtons.add(btnExportReceipt);
-        tableActions.add(lblActivityFeedback, BorderLayout.WEST);
-        tableActions.add(tableActionButtons, BorderLayout.EAST);
-        readyCard.add(tableActions, BorderLayout.SOUTH);
+        pnlTableActionButtons.add(btnCheckStatus);
+        pnlTableActionButtons.add(btnViewReceipt);
+        pnlTableActionButtons.add(btnExportReceipt);
+        pnlTableActions.add(lblActivityFeedback, BorderLayout.WEST);
+        pnlTableActions.add(pnlTableActionButtons, BorderLayout.EAST);
+        pnlReadyCard.add(pnlTableActions, BorderLayout.SOUTH);
 
-        activityCardPanel.add(loadingCard, Main.DashboardState.LOADING.name());
-        activityCardPanel.add(emptyCard, Main.DashboardState.EMPTY.name());
-        activityCardPanel.add(errorCard, Main.DashboardState.ERROR.name());
-        activityCardPanel.add(readyCard, Main.DashboardState.READY.name());
+        activityCardPanel.add(pnlLoadingCard, Main.DashboardState.LOADING.name());
+        activityCardPanel.add(pnlEmptyCard, Main.DashboardState.EMPTY.name());
+        activityCardPanel.add(pnlErrorCard, Main.DashboardState.ERROR.name());
+        activityCardPanel.add(pnlReadyCard, Main.DashboardState.READY.name());
 
         pnlRecentActivity.add(activityCardPanel, new GridConstraints(0, 0, 1, 1,
                 GridConstraints.ANCHOR_CENTER, GridConstraints.FILL_BOTH,

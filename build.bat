@@ -28,6 +28,9 @@ if %BUILD_EXIT% EQU 0 (
         )
         copy /Y "%%f" "out\production\OTOG\!relForm!" >nul
     )
+    if exist "config\otog.properties" (
+        copy /Y "config\otog.properties" "out\production\OTOG\otog.properties" >nul
+    )
     echo Build successful.
 ) else (
     echo Build failed with error %BUILD_EXIT%.

@@ -1,14 +1,22 @@
 package com.otog.service;
 
+import com.otog.model.CompositeFeePolicy;
+import com.otog.model.FeeComponent;
+
 /**
- * Factory / Abstract Factory for creating payment provider adapters and BankApiClient instances
- * configured for deterministic operational modes (SUCCESS, FAILURE/REJECTED, TIMEOUT, PENDING).
+ * Factory / Abstract Factory for creating payment provider adapters, configured
+ * {@link BankApiClient} instances, and {@link FeeComponent} fee policies across
+ * deterministic operational modes (SUCCESS, FAILURE/REJECTED, TIMEOUT, PENDING, UNKNOWN).
  */
 public interface PaymentProviderFactory {
 
     BankAdapter createBankAdapter();
 
     BankApiClient createBankApiClient();
+
+    default FeeComponent createFeePolicy() {
+        return CompositeFeePolicy.fromConfig();
+    }
 
     // Default alias methods
     default BankAdapter createAdapter() {
@@ -126,7 +134,7 @@ public interface PaymentProviderFactory {
             if (lookupMode != null) {
                 adapter.setDefaultLookupStatus(lookupMode);
             }
-            return adapter;
+            return new AuditingBankAdapterDecorator(new ValidatingBankAdapterDecorator(adapter));
         }
 
         @Override

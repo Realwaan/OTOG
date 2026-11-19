@@ -19,6 +19,7 @@ import com.otog.service.BankResponseStatus;
 import com.otog.service.InvestmentService;
 import com.otog.service.LoanService;
 import com.otog.service.PaymentProviderFactory;
+import com.otog.service.ProtectedWalletOperationsProxy;
 import com.otog.service.SendMoneyService;
 import com.otog.service.SessionManager;
 import com.otog.service.StatementFileService;
@@ -26,8 +27,11 @@ import com.otog.service.WalletOperations;
 import com.otog.service.WalletService;
 import com.otog.util.IdGenerator;
 import com.otog.util.MoneyUtil;
+import com.otog.util.OtogConfig;
+import com.otog.util.UiTheme;
 
 import javax.swing.*;
+import javax.swing.filechooser.FileNameExtensionFilter;
 import javax.swing.table.DefaultTableModel;
 import java.awt.*;
 import java.awt.event.MouseAdapter;
@@ -58,9 +62,7 @@ public class Main extends JFrame {
         ERROR
     }
 
-    private static final int RECENT_TRANSACTION_LIMIT = 50;
-    private static final int SESSION_POLL_INTERVAL_MS = 15_000;
-    private static final DateTimeFormatter DATE_FORMATTER = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm");
+    private final DateTimeFormatter dateFormatter = DateTimeFormatter.ofPattern(OtogConfig.getInstance().getUiDatePattern());
     private static final Map<TransactionType, String> FIXED_DIRECTION_BY_TYPE = createDirectionMap();
 
     private final WalletOperations walletService;
@@ -167,8 +169,9 @@ public class Main extends JFrame {
         AuthService effectiveAuth = authService != null
                 ? authService
                 : new AuthServiceImpl(initializedDatabaseManager);
-        return new Main(new WalletService(initializedDatabaseManager, effectiveAuth),
-                effectiveAuth, null, null, initializedDatabaseManager);
+        WalletOperations guardedWalletOps = ProtectedWalletOperationsProxy.wrap(
+                new WalletService(initializedDatabaseManager, effectiveAuth));
+        return new Main(guardedWalletOps, effectiveAuth, null, null, initializedDatabaseManager);
     }
 
     public Main(WalletOperations walletService) {
@@ -210,10 +213,11 @@ public class Main extends JFrame {
     }
 
     private void initUI() {
-        setTitle("OTOG E-Wallet — Dashboard");
+        OtogConfig config = OtogConfig.getInstance();
+        setTitle(config.getAppTitle() + " \u2014 Dashboard");
         setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
-        setSize(940, 640);
-        setMinimumSize(new Dimension(840, 560));
+        setSize(config.getUiDimension("ui.dashboard.width", "ui.dashboard.height", 940, 640));
+        setMinimumSize(config.getUiDimension("ui.dashboard.min.width", "ui.dashboard.min.height", 840, 560));
         setLocationRelativeTo(null);
 
         btnBack.setToolTipText("Return to the previously viewed tab");
@@ -224,7 +228,7 @@ public class Main extends JFrame {
 
         btnPinSettings.setEnabled(authService != null);
         btnPinSettings.setToolTipText(authService != null
-                ? "Set or change your 4-6 digit Transaction PIN"
+                ? "Set or change your " + config.getPinMinLength() + "-" + config.getPinMaxLength() + " digit Transaction PIN"
                 : "PIN management requires AuthService");
         btnPinSettings.addActionListener(e -> openPinSettingsDialog());
 
@@ -445,7 +449,7 @@ public class Main extends JFrame {
             lblBalance.setText(MoneyUtil.format(wallet.getBalance(), wallet.getCurrency()));
             lblWalletId.setText("Wallet: " + wallet.getWalletId() + " (" + wallet.getStatus() + ")");
         } else {
-            lblBalance.setText("PHP 0.00");
+            lblBalance.setText(MoneyUtil.format(MoneyUtil.ZERO, OtogConfig.getInstance().getDefaultCurrency()));
             lblWalletId.setText("Wallet: Not provisioned");
         }
 
@@ -459,25 +463,25 @@ public class Main extends JFrame {
         }
         if (authService == null) {
             lblPinStatus.setText("Transaction PIN: Session-gated");
-            lblPinStatus.setForeground(new Color(90, 98, 110));
+            lblPinStatus.setForeground(UiTheme.color(UiTheme.ColorRole.MUTED));
             return;
         }
         boolean pinVerified = SessionManager.getInstance().isPinVerified();
         if (!hasPin) {
             lblPinStatus.setText("Transaction PIN: Not Set (required for Cash Out & Send Money)");
-            lblPinStatus.setForeground(new Color(180, 95, 10));
+            lblPinStatus.setForeground(UiTheme.color(UiTheme.ColorRole.WARNING));
             if (btnPinSettings != null) {
                 btnPinSettings.setText("Set PIN");
             }
         } else if (pinVerified) {
             lblPinStatus.setText("Transaction PIN: Set & Verified for active session");
-            lblPinStatus.setForeground(new Color(17, 102, 68));
+            lblPinStatus.setForeground(UiTheme.color(UiTheme.ColorRole.SUCCESS));
             if (btnPinSettings != null) {
                 btnPinSettings.setText("Change PIN");
             }
         } else {
             lblPinStatus.setText("Transaction PIN: Set (enter PIN on outgoing payments)");
-            lblPinStatus.setForeground(new Color(45, 90, 140));
+            lblPinStatus.setForeground(UiTheme.color(UiTheme.ColorRole.PRIMARY));
             if (btnPinSettings != null) {
                 btnPinSettings.setText("Change PIN");
             }
@@ -507,7 +511,7 @@ public class Main extends JFrame {
                 User user = session.getCurrentUser();
                 Wallet wallet = session.refreshWallet(walletService);
                 List<Transaction> transactions = walletService.getRecentTransactions(
-                        wallet.getWalletId(), RECENT_TRANSACTION_LIMIT);
+                        wallet.getWalletId(), OtogConfig.getInstance().getRecentTransactionLimit());
                 List<PaymentMethod> paymentMethods = user != null
                         ? walletService.getPaymentMethodsByUserId(user.getUserId())
                         : Collections.emptyList();
@@ -604,7 +608,7 @@ public class Main extends JFrame {
 
         runOnEdt(() -> {
             btnSubmitCashOp.setEnabled(false);
-            lblCashFeedback.setForeground(new Color(70, 80, 95));
+            lblCashFeedback.setForeground(UiTheme.color(UiTheme.ColorRole.INFO));
             lblCashFeedback.setText("Processing " + opLabel + "...");
             lblStatus.setText("Processing " + opLabel + "...");
         });
@@ -661,19 +665,19 @@ public class Main extends JFrame {
                     String provRef = txn.getProviderReference() != null ? " | Bank Ref: " + txn.getProviderReference() : "";
                     String provStatus = txn.getProviderStatus() != null ? " [" + txn.getProviderStatus() + "]" : "";
                     if (txn.getStatus() == TransactionStatus.COMPLETED) {
-                        lblCashFeedback.setForeground(new Color(17, 102, 68));
+                        lblCashFeedback.setForeground(UiTheme.color(UiTheme.ColorRole.SUCCESS));
                         lblCashFeedback.setText(opLabel + " successful: "
                                 + MoneyUtil.format(txn.getAmount(), txn.getCurrency())
                                 + " (Ref: " + txn.getReferenceNumber() + ")" + provRef + provStatus);
                         lblStatus.setText(opLabel + " completed" + provStatus);
                     } else if (txn.getStatus() == TransactionStatus.FAILED) {
-                        lblCashFeedback.setForeground(new Color(176, 38, 38));
+                        lblCashFeedback.setForeground(UiTheme.color(UiTheme.ColorRole.ERROR));
                         lblCashFeedback.setText(opLabel + " failed/rejected: "
                                 + MoneyUtil.format(txn.getAmount(), txn.getCurrency())
                                 + " (Ref: " + txn.getReferenceNumber() + ")" + provRef + provStatus);
                         lblStatus.setText(opLabel + " failed" + provStatus);
                     } else {
-                        lblCashFeedback.setForeground(new Color(180, 95, 10));
+                        lblCashFeedback.setForeground(UiTheme.color(UiTheme.ColorRole.WARNING));
                         lblCashFeedback.setText(opLabel + " pending settlement: "
                                 + MoneyUtil.format(txn.getAmount(), txn.getCurrency())
                                 + " (Ref: " + txn.getReferenceNumber() + ")" + provRef + provStatus);
@@ -685,7 +689,7 @@ public class Main extends JFrame {
                     String message = (cause.getMessage() != null && !cause.getMessage().trim().isEmpty())
                             ? cause.getMessage()
                             : cause.getClass().getSimpleName();
-                    lblCashFeedback.setForeground(new Color(176, 38, 38));
+                    lblCashFeedback.setForeground(UiTheme.color(UiTheme.ColorRole.ERROR));
                     lblCashFeedback.setText("Failed: " + message);
                     lblStatus.setText(opLabel + " failed: " + message);
                     checkSessionTerminatedOnError(message);
@@ -742,7 +746,7 @@ public class Main extends JFrame {
             parsedAmount = MoneyUtil.validatePositiveAmount(MoneyUtil.parse(amountText));
         } catch (RuntimeException ex) {
             String msg = extractErrorMessage(ex);
-            lblCashFeedback.setForeground(new Color(176, 38, 38));
+            lblCashFeedback.setForeground(UiTheme.color(UiTheme.ColorRole.ERROR));
             lblCashFeedback.setText("Failed: " + msg);
             lblStatus.setText(opLabel + " validation failed: " + msg);
             showDialogMessage(this, "Invalid Amount", msg, JOptionPane.ERROR_MESSAGE);
@@ -750,6 +754,7 @@ public class Main extends JFrame {
             return;
         }
 
+        OtogConfig config = OtogConfig.getInstance();
         if ("CASH_OUT".equals(op)) {
             if (authService != null && !cachedHasPin) {
                 txtCashPin.setText("");
@@ -757,8 +762,9 @@ public class Main extends JFrame {
                 return;
             }
             if (pin.isEmpty()) {
-                String msg = "Please enter your 4-6 digit Transaction PIN to authorize Cash Out.";
-                lblCashFeedback.setForeground(new Color(176, 38, 38));
+                String msg = "Please enter your " + config.getPinMinLength() + "-" + config.getPinMaxLength()
+                        + " digit Transaction PIN to authorize Cash Out.";
+                lblCashFeedback.setForeground(UiTheme.color(UiTheme.ColorRole.ERROR));
                 lblCashFeedback.setText("Failed: " + msg);
                 showDialogMessage(this, "PIN Required", msg, JOptionPane.WARNING_MESSAGE);
                 txtCashPin.requestFocusInWindow();
@@ -770,7 +776,7 @@ public class Main extends JFrame {
         StringBuilder confirmMsg = new StringBuilder();
         confirmMsg.append("Operation: ").append(opLabel).append("\n");
         confirmMsg.append("Channel: ").append(channel != null ? channel : "OTOG Partner").append("\n");
-        confirmMsg.append("Amount: ").append(MoneyUtil.format(parsedAmount, "PHP"));
+        confirmMsg.append("Amount: ").append(MoneyUtil.format(parsedAmount, config.getDefaultCurrency()));
         if (!note.isEmpty()) {
             confirmMsg.append("\nNote: ").append(note);
         }
@@ -782,7 +788,7 @@ public class Main extends JFrame {
                 JOptionPane.QUESTION_MESSAGE
         );
         if (choice != JOptionPane.OK_OPTION) {
-            lblCashFeedback.setForeground(new Color(90, 98, 110));
+            lblCashFeedback.setForeground(UiTheme.color(UiTheme.ColorRole.MUTED));
             lblCashFeedback.setText(opLabel + " cancelled.");
             return;
         }
@@ -819,7 +825,7 @@ public class Main extends JFrame {
 
         if (recipient.isEmpty()) {
             String msg = "Please enter a recipient (mobile number, email, name, or wallet ID).";
-            lblSendFeedback.setForeground(new Color(176, 38, 38));
+            lblSendFeedback.setForeground(UiTheme.color(UiTheme.ColorRole.ERROR));
             lblSendFeedback.setText("Transfer failed: " + msg);
             showDialogMessage(this, "Validation Error", msg, JOptionPane.WARNING_MESSAGE);
             txtRecipient.requestFocusInWindow();
@@ -834,7 +840,7 @@ public class Main extends JFrame {
             parsedAmount = MoneyUtil.validatePositiveAmount(MoneyUtil.parse(amountText));
         } catch (RuntimeException ex) {
             String msg = extractErrorMessage(ex);
-            lblSendFeedback.setForeground(new Color(176, 38, 38));
+            lblSendFeedback.setForeground(UiTheme.color(UiTheme.ColorRole.ERROR));
             lblSendFeedback.setText("Transfer failed: " + msg);
             lblStatus.setText("Transfer validation failed: " + msg);
             showDialogMessage(this, "Invalid Amount", msg, JOptionPane.ERROR_MESSAGE);
@@ -848,9 +854,11 @@ public class Main extends JFrame {
             return;
         }
 
+        OtogConfig config = OtogConfig.getInstance();
         if (pin.isEmpty()) {
-            String msg = "Please enter your 4-6 digit Transaction PIN to authorize Send Money.";
-            lblSendFeedback.setForeground(new Color(176, 38, 38));
+            String msg = "Please enter your " + config.getPinMinLength() + "-" + config.getPinMaxLength()
+                    + " digit Transaction PIN to authorize Send Money.";
+            lblSendFeedback.setForeground(UiTheme.color(UiTheme.ColorRole.ERROR));
             lblSendFeedback.setText("Transfer failed: " + msg);
             showDialogMessage(this, "PIN Required", msg, JOptionPane.WARNING_MESSAGE);
             txtSendPin.requestFocusInWindow();
@@ -862,14 +870,14 @@ public class Main extends JFrame {
         SendMoneyService sendMoneyService = walletService.createSendMoneyService(authService);
         if (sendMoneyService != null && currentUser != null) {
             btnSubmitSendMoney.setEnabled(false);
-            lblSendFeedback.setForeground(new Color(70, 80, 95));
+            lblSendFeedback.setForeground(UiTheme.color(UiTheme.ColorRole.INFO));
             lblSendFeedback.setText("Preparing transfer confirmation...");
             lblStatus.setText("Validating recipient and balance...");
 
             new SwingWorker<SendMoneyService.SendMoneyPreview, Void>() {
                 @Override
                 protected SendMoneyService.SendMoneyPreview doInBackground() {
-                    return sendMoneyService.preview(currentUser.getUserId(), recipient, parsedAmount, MoneyUtil.ZERO, note);
+                    return sendMoneyService.preview(currentUser.getUserId(), recipient, parsedAmount, null, note);
                 }
 
                 @Override
@@ -879,7 +887,7 @@ public class Main extends JFrame {
                         SendMoneyService.SendMoneyPreview preview = get();
                         JTextArea previewArea = new JTextArea(preview.toConfirmationText());
                         previewArea.setEditable(false);
-                        previewArea.setFont(new Font("Monospaced", Font.PLAIN, 12));
+                        previewArea.setFont(UiTheme.font(UiTheme.FontRole.MONO));
                         previewArea.setMargin(new Insets(6, 8, 6, 8));
                         JScrollPane previewScroll = new JScrollPane(previewArea);
                         previewScroll.setPreferredSize(new Dimension(400, 220));
@@ -891,7 +899,7 @@ public class Main extends JFrame {
                                 JOptionPane.QUESTION_MESSAGE
                         );
                         if (choice != JOptionPane.OK_OPTION) {
-                            lblSendFeedback.setForeground(new Color(90, 98, 110));
+                            lblSendFeedback.setForeground(UiTheme.color(UiTheme.ColorRole.MUTED));
                             lblSendFeedback.setText("Transfer cancelled.");
                             lblStatus.setText("Transfer cancelled");
                             return;
@@ -900,7 +908,7 @@ public class Main extends JFrame {
                     } catch (Exception ex) {
                         Throwable cause = unwrapCause(ex);
                         String message = extractErrorMessage(cause);
-                        lblSendFeedback.setForeground(new Color(176, 38, 38));
+                        lblSendFeedback.setForeground(UiTheme.color(UiTheme.ColorRole.ERROR));
                         lblSendFeedback.setText("Transfer failed: " + message);
                         lblStatus.setText("Transfer failed: " + message);
                         showDialogMessage(Main.this, "Transfer Validation Failed", message, JOptionPane.ERROR_MESSAGE);
@@ -910,7 +918,7 @@ public class Main extends JFrame {
         } else {
             StringBuilder confirmMsg = new StringBuilder();
             confirmMsg.append("Recipient: ").append(recipient).append("\n");
-            confirmMsg.append("Amount: ").append(MoneyUtil.format(parsedAmount, "PHP"));
+            confirmMsg.append("Amount: ").append(MoneyUtil.format(parsedAmount, config.getDefaultCurrency()));
             if (!note.isEmpty()) {
                 confirmMsg.append("\nNote: ").append(note);
             }
@@ -922,7 +930,7 @@ public class Main extends JFrame {
                     JOptionPane.QUESTION_MESSAGE
             );
             if (choice != JOptionPane.OK_OPTION) {
-                lblSendFeedback.setForeground(new Color(90, 98, 110));
+                lblSendFeedback.setForeground(UiTheme.color(UiTheme.ColorRole.MUTED));
                 lblSendFeedback.setText("Transfer cancelled.");
                 lblStatus.setText("Transfer cancelled");
                 return;
@@ -993,15 +1001,15 @@ public class Main extends JFrame {
                     Color color;
                     String msg;
                     if (txn.getStatus() == TransactionStatus.COMPLETED) {
-                        color = new Color(17, 102, 68);
+                        color = UiTheme.color(UiTheme.ColorRole.SUCCESS);
                         msg = "Status lookup settled COMPLETED: "
                                 + txn.getReferenceNumber() + provRef + provStatus;
                     } else if (txn.getStatus() == TransactionStatus.FAILED) {
-                        color = new Color(176, 38, 38);
+                        color = UiTheme.color(UiTheme.ColorRole.ERROR);
                         msg = "Status lookup confirmed FAILED: "
                                 + txn.getReferenceNumber() + provRef + provStatus;
                     } else {
-                        color = new Color(180, 95, 10);
+                        color = UiTheme.color(UiTheme.ColorRole.WARNING);
                         msg = "Status lookup remains PENDING: "
                                 + txn.getReferenceNumber() + provRef + provStatus;
                     }
@@ -1023,7 +1031,7 @@ public class Main extends JFrame {
                             ? cause.getMessage()
                             : cause.getClass().getSimpleName();
                     if (lblActivityFeedback != null) {
-                        lblActivityFeedback.setForeground(new Color(176, 38, 38));
+                        lblActivityFeedback.setForeground(UiTheme.color(UiTheme.ColorRole.ERROR));
                         lblActivityFeedback.setText("Status lookup failed: " + message);
                     }
                     lblStatus.setText("Status lookup failed: " + message);
@@ -1050,7 +1058,7 @@ public class Main extends JFrame {
 
         runOnEdt(() -> {
             btnSubmitSendMoney.setEnabled(false);
-            lblSendFeedback.setForeground(new Color(70, 80, 95));
+            lblSendFeedback.setForeground(UiTheme.color(UiTheme.ColorRole.INFO));
             lblSendFeedback.setText("Sending money...");
             lblStatus.setText("Processing transfer...");
         });
@@ -1095,7 +1103,7 @@ public class Main extends JFrame {
                     Transaction txn = get();
                     txtSendAmount.setText("");
                     txtSendNote.setText("");
-                    lblSendFeedback.setForeground(new Color(17, 102, 68));
+                    lblSendFeedback.setForeground(UiTheme.color(UiTheme.ColorRole.SUCCESS));
                     lblSendFeedback.setText("Transfer successful: "
                             + MoneyUtil.format(txn.getAmount(), txn.getCurrency())
                             + " (Ref: " + txn.getReferenceNumber() + ")");
@@ -1103,7 +1111,7 @@ public class Main extends JFrame {
                 } catch (Exception ex) {
                     Throwable cause = unwrapCause(ex);
                     String message = extractErrorMessage(cause);
-                    lblSendFeedback.setForeground(new Color(176, 38, 38));
+                    lblSendFeedback.setForeground(UiTheme.color(UiTheme.ColorRole.ERROR));
                     lblSendFeedback.setText("Transfer failed: " + message);
                     lblStatus.setText("Transfer failed: " + message);
                     checkSessionTerminatedOnError(message);
@@ -1165,9 +1173,19 @@ public class Main extends JFrame {
         }
         JFileChooser chooser = new JFileChooser();
         chooser.setDialogTitle("Export OTOG Wallet Statement");
-        chooser.setSelectedFile(new File("otog-statement.txt"));
+        FileNameExtensionFilter txtFilter = new FileNameExtensionFilter("OTOG Statement (*.txt)", "txt");
+        FileNameExtensionFilter csvFilter = new FileNameExtensionFilter("CSV Statement (*.csv)", "csv");
+        chooser.addChoosableFileFilter(txtFilter);
+        chooser.addChoosableFileFilter(csvFilter);
+        chooser.setFileFilter(txtFilter);
+        chooser.setSelectedFile(new File(OtogConfig.getInstance().getStatementDefaultFileName()));
         if (chooser.showSaveDialog(this) == JFileChooser.APPROVE_OPTION) {
-            exportStatementAsync(chooser.getSelectedFile().toPath());
+            Path selectedPath = chooser.getSelectedFile().toPath();
+            if (chooser.getFileFilter() == csvFilter
+                    && !selectedPath.getFileName().toString().toLowerCase(Locale.ROOT).endsWith(".csv")) {
+                selectedPath = selectedPath.resolveSibling(selectedPath.getFileName() + ".csv");
+            }
+            exportStatementAsync(selectedPath);
         }
     }
 
@@ -1177,15 +1195,16 @@ public class Main extends JFrame {
         }
         JFileChooser chooser = new JFileChooser();
         chooser.setDialogTitle("Load Saved OTOG Wallet Statement");
+        chooser.addChoosableFileFilter(new FileNameExtensionFilter("OTOG Statement Files (*.txt, *.csv)", "txt", "csv"));
         if (chooser.showOpenDialog(this) == JFileChooser.APPROVE_OPTION) {
             importStatementAsync(chooser.getSelectedFile().toPath()).thenAccept(stmt -> {
                 if (stmt != null) {
                     runOnEdt(() -> {
                         JTextArea area = new JTextArea(stmt.toDisplaySummary(), 18, 68);
                         area.setEditable(false);
-                        area.setFont(new Font("Monospaced", Font.PLAIN, 12));
+                        area.setFont(UiTheme.font(UiTheme.FontRole.MONO));
                         JOptionPane.showMessageDialog(this, new JScrollPane(area),
-                                "Loaded Wallet Statement — " + stmt.getMaskedWalletId(),
+                                "Loaded Wallet Statement \u2014 " + stmt.getMaskedWalletId(),
                                 JOptionPane.INFORMATION_MESSAGE);
                     });
                 }
@@ -1204,9 +1223,20 @@ public class Main extends JFrame {
         }
         JFileChooser chooser = new JFileChooser();
         chooser.setDialogTitle("Save Transaction Receipt");
-        chooser.setSelectedFile(new File("receipt-" + selected.getReferenceNumber() + ".txt"));
+        FileNameExtensionFilter txtFilter = new FileNameExtensionFilter("OTOG Receipt (*.txt)", "txt");
+        FileNameExtensionFilter csvFilter = new FileNameExtensionFilter("CSV Receipt (*.csv)", "csv");
+        chooser.addChoosableFileFilter(txtFilter);
+        chooser.addChoosableFileFilter(csvFilter);
+        chooser.setFileFilter(txtFilter);
+        chooser.setSelectedFile(new File(
+                OtogConfig.getInstance().getReceiptFilePrefix() + selected.getReferenceNumber() + ".txt"));
         if (chooser.showSaveDialog(this) == JFileChooser.APPROVE_OPTION) {
-            exportSelectedReceiptAsync(chooser.getSelectedFile().toPath());
+            Path selectedPath = chooser.getSelectedFile().toPath();
+            if (chooser.getFileFilter() == csvFilter
+                    && !selectedPath.getFileName().toString().toLowerCase(Locale.ROOT).endsWith(".csv")) {
+                selectedPath = selectedPath.resolveSibling(selectedPath.getFileName() + ".csv");
+            }
+            exportSelectedReceiptAsync(selectedPath);
         }
     }
 
@@ -1231,7 +1261,7 @@ public class Main extends JFrame {
                     Path saved = get();
                     lblStatus.setText("Statement exported to " + saved.getFileName());
                     if (lblActivityFeedback != null) {
-                        lblActivityFeedback.setForeground(new Color(17, 102, 68));
+                        lblActivityFeedback.setForeground(UiTheme.color(UiTheme.ColorRole.SUCCESS));
                         lblActivityFeedback.setText("Exported statement: " + saved.getFileName());
                     }
                     future.complete(saved);
@@ -1260,7 +1290,7 @@ public class Main extends JFrame {
                     StatementFileService.LoadedStatement loaded = get();
                     lblStatus.setText("Loaded statement (" + loaded.getEntries().size() + " transactions).");
                     if (lblActivityFeedback != null) {
-                        lblActivityFeedback.setForeground(new Color(17, 102, 68));
+                        lblActivityFeedback.setForeground(UiTheme.color(UiTheme.ColorRole.SUCCESS));
                         lblActivityFeedback.setText("Loaded statement for wallet " + loaded.getMaskedWalletId());
                     }
                     future.complete(loaded);
@@ -1301,7 +1331,7 @@ public class Main extends JFrame {
     }
 
     private void startSessionMonitor() {
-        sessionMonitorTimer = new Timer(SESSION_POLL_INTERVAL_MS, e -> {
+        sessionMonitorTimer = new Timer(OtogConfig.getInstance().getSessionPollIntervalMs(), e -> {
             SessionManager session = SessionManager.getInstance();
             if (!session.isLoggedIn() && (session.isExpiredDueToInactivity() || session.isLockedOutByPin())) {
                 String reason = session.isLockedOutByPin()
@@ -1397,7 +1427,7 @@ public class Main extends JFrame {
         }
         transactionsTableModel.setRowCount(0);
         for (Transaction txn : this.loadedTransactions) {
-            String date = txn.getCreatedAt() != null ? txn.getCreatedAt().format(DATE_FORMATTER) : "-";
+            String date = txn.getCreatedAt() != null ? txn.getCreatedAt().format(dateFormatter) : "-";
             String direction = resolveDirection(walletId, txn);
             String statusText = txn.getStatus() != null ? txn.getStatus().name() : "-";
             if (txn.getProviderStatus() != null && !txn.getProviderStatus().isEmpty()) {
@@ -1484,7 +1514,7 @@ public class Main extends JFrame {
         if (txn.getType() != TransactionType.CASH_IN && txn.getType() != TransactionType.CASH_OUT) {
             String msg = "Status lookup is only available for Cash In / Cash Out transactions.";
             if (lblActivityFeedback != null) {
-                lblActivityFeedback.setForeground(new Color(180, 95, 10));
+                lblActivityFeedback.setForeground(UiTheme.color(UiTheme.ColorRole.WARNING));
                 lblActivityFeedback.setText(msg);
             }
             lblStatus.setText(msg);
@@ -1504,7 +1534,7 @@ public class Main extends JFrame {
         }
         JTextArea area = new JTextArea(txn.getReceipt());
         area.setEditable(false);
-        area.setFont(new Font("Monospaced", Font.PLAIN, 12));
+        area.setFont(UiTheme.font(UiTheme.FontRole.MONO));
         JOptionPane.showMessageDialog(this, new JScrollPane(area),
                 "Transaction Receipt — " + txn.getReferenceNumber(),
                 JOptionPane.INFORMATION_MESSAGE);
@@ -1828,17 +1858,22 @@ public class Main extends JFrame {
         return btnLoadStatement;
     }
 
+    public WalletOperations getWalletService() {
+        return walletService;
+    }
+
     public JButton getExportReceiptButton() {
         return btnExportReceipt;
     }
 
     private void $$$setupUI$$$() {
+        OtogConfig config = OtogConfig.getInstance();
         pnlRoot = new JPanel();
         pnlRoot.setLayout(new GridLayoutManager(3, 1, new Insets(14, 16, 14, 16), 12, 12));
 
         pnlHeader = new JPanel();
         pnlHeader.setLayout(new GridLayoutManager(1, 3, new Insets(0, 0, 10, 0), 12, 6));
-        pnlHeader.setBorder(BorderFactory.createMatteBorder(0, 0, 1, 0, new Color(215, 220, 226)));
+        pnlHeader.setBorder(UiTheme.bottomDividerBorder());
         pnlRoot.add(pnlHeader, new GridConstraints(0, 0, 1, 1,
                 GridConstraints.ANCHOR_CENTER, GridConstraints.FILL_BOTH,
                 GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_CAN_GROW,
@@ -1854,23 +1889,23 @@ public class Main extends JFrame {
                 null, null, null, 0, false));
 
         lblWelcome = new JLabel("Welcome");
-        lblWelcome.setFont(new Font("SansSerif", Font.BOLD, 16));
+        lblWelcome.setFont(UiTheme.font(UiTheme.FontRole.BANNER));
         pnlIdentity.add(lblWelcome, new GridConstraints(0, 0, 1, 1,
                 GridConstraints.ANCHOR_WEST, GridConstraints.FILL_NONE,
                 GridConstraints.SIZEPOLICY_FIXED, GridConstraints.SIZEPOLICY_FIXED,
                 null, null, null, 0, false));
 
         lblWalletId = new JLabel("Wallet: --");
-        lblWalletId.setFont(new Font("SansSerif", Font.PLAIN, 12));
-        lblWalletId.setForeground(new Color(90, 98, 110));
+        lblWalletId.setFont(UiTheme.font(UiTheme.FontRole.LABEL));
+        lblWalletId.setForeground(UiTheme.color(UiTheme.ColorRole.MUTED));
         pnlIdentity.add(lblWalletId, new GridConstraints(1, 0, 1, 1,
                 GridConstraints.ANCHOR_WEST, GridConstraints.FILL_NONE,
                 GridConstraints.SIZEPOLICY_FIXED, GridConstraints.SIZEPOLICY_FIXED,
                 null, null, null, 0, false));
 
         lblPinStatus = new JLabel("Transaction PIN: Checking...");
-        lblPinStatus.setFont(new Font("SansSerif", Font.PLAIN, 11));
-        lblPinStatus.setForeground(new Color(90, 98, 110));
+        lblPinStatus.setFont(UiTheme.font(UiTheme.FontRole.SMALL));
+        lblPinStatus.setForeground(UiTheme.color(UiTheme.ColorRole.MUTED));
         pnlIdentity.add(lblPinStatus, new GridConstraints(2, 0, 1, 1,
                 GridConstraints.ANCHOR_WEST, GridConstraints.FILL_NONE,
                 GridConstraints.SIZEPOLICY_FIXED, GridConstraints.SIZEPOLICY_FIXED,
@@ -1898,16 +1933,16 @@ public class Main extends JFrame {
                 null, null, null, 0, false));
 
         JLabel balanceCaption = new JLabel("Available Balance", SwingConstants.RIGHT);
-        balanceCaption.setFont(new Font("SansSerif", Font.PLAIN, 11));
-        balanceCaption.setForeground(new Color(90, 98, 110));
+        balanceCaption.setFont(UiTheme.font(UiTheme.FontRole.SMALL));
+        balanceCaption.setForeground(UiTheme.color(UiTheme.ColorRole.MUTED));
         pnlBalanceBox.add(balanceCaption, new GridConstraints(0, 0, 1, 1,
                 GridConstraints.ANCHOR_EAST, GridConstraints.FILL_NONE,
                 GridConstraints.SIZEPOLICY_FIXED, GridConstraints.SIZEPOLICY_FIXED,
                 null, null, null, 0, false));
 
-        lblBalance = new JLabel("PHP 0.00", SwingConstants.RIGHT);
-        lblBalance.setFont(new Font("SansSerif", Font.BOLD, 18));
-        lblBalance.setForeground(new Color(17, 102, 68));
+        lblBalance = new JLabel(MoneyUtil.format(MoneyUtil.ZERO, config.getDefaultCurrency()), SwingConstants.RIGHT);
+        lblBalance.setFont(UiTheme.font(UiTheme.FontRole.BALANCE));
+        lblBalance.setForeground(UiTheme.color(UiTheme.ColorRole.SUCCESS));
         pnlBalanceBox.add(lblBalance, new GridConstraints(1, 0, 1, 1,
                 GridConstraints.ANCHOR_EAST, GridConstraints.FILL_NONE,
                 GridConstraints.SIZEPOLICY_FIXED, GridConstraints.SIZEPOLICY_FIXED,
@@ -1958,8 +1993,8 @@ public class Main extends JFrame {
                 null, null, null, 0, false));
 
         lblStatus = new JLabel("Initializing dashboard...");
-        lblStatus.setFont(new Font("SansSerif", Font.PLAIN, 11));
-        lblStatus.setForeground(new Color(90, 98, 110));
+        lblStatus.setFont(UiTheme.font(UiTheme.FontRole.SMALL));
+        lblStatus.setForeground(UiTheme.color(UiTheme.ColorRole.MUTED));
         pnlFooter.add(lblStatus, new GridConstraints(0, 0, 1, 1,
                 GridConstraints.ANCHOR_WEST, GridConstraints.FILL_NONE,
                 GridConstraints.SIZEPOLICY_FIXED, GridConstraints.SIZEPOLICY_FIXED,

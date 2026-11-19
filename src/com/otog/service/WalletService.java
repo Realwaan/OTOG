@@ -6,6 +6,7 @@ import com.otog.model.*;
 import com.otog.repository.*;
 import com.otog.util.IdGenerator;
 import com.otog.util.MoneyUtil;
+import com.otog.util.OtogConfig;
 
 import java.math.BigDecimal;
 import java.sql.Connection;
@@ -138,8 +139,11 @@ public class WalletService implements WalletOperations {
 
     @Override
     public BankResponseStatus getCurrentProviderMode() {
-        if (bankApiClient != null && bankApiClient.getAdapter() instanceof MockBankAdapter mock) {
-            return mock.getMode();
+        if (bankApiClient != null) {
+            Optional<MockBankAdapter> mock = bankApiClient.findAdapter(MockBankAdapter.class);
+            if (mock.isPresent()) {
+                return mock.get().getMode();
+            }
         }
         return BankResponseStatus.SUCCESS;
     }
@@ -175,9 +179,16 @@ public class WalletService implements WalletOperations {
             return existing;
         }
         List<PaymentMethod> list = new ArrayList<>();
-        list.add(linkPaymentMethod(userId, PaymentMethodType.BANK_ACCOUNT, "BDO Unibank", "Demo BDO Account", "•••• 1234"));
-        list.add(linkPaymentMethod(userId, PaymentMethodType.BANK_ACCOUNT, "Bank of the Philippine Islands (BPI)", "Demo BPI Account", "•••• 5678"));
-        list.add(linkPaymentMethod(userId, PaymentMethodType.BANK_ACCOUNT, "Metrobank", "Demo Metrobank Account", "•••• 9012"));
+        for (OtogConfig.DemoBankAccount demo : OtogConfig.getInstance().getDemoPaymentMethods()) {
+            PaymentMethod pm = linkPaymentMethod(
+                    userId,
+                    PaymentMethodType.BANK_ACCOUNT,
+                    demo.providerName(),
+                    "Demo " + demo.providerName() + " Account",
+                    demo.maskedNumber()
+            );
+            list.add(pm);
+        }
         return list;
     }
 
@@ -543,17 +554,15 @@ public class WalletService implements WalletOperations {
 
                 BankApiResponse response = bankApiClient.cashIn(referenceNumber, bankPm, validAmount);
 
-                CashInOutTransaction txn = new CashInOutTransaction(
+                CashInOutTransaction txn = TransactionFactory.createCashIn(
                         txnId,
                         referenceNumber,
                         targetWalletId,
                         validAmount,
-                        MoneyUtil.ZERO,
-                        "CASH_IN",
                         channel,
-                        response != null ? response.getProviderReference() : null
+                        response != null ? response.getProviderReference() : null,
+                        desc
                 );
-                txn.setDescription(desc);
                 if (response != null && response.getStatus() != null) {
                     txn.setProviderStatus(response.getStatus().name());
                 }
@@ -674,17 +683,16 @@ public class WalletService implements WalletOperations {
                 String txnId = IdGenerator.nextTransactionId();
                 String desc = description != null ? description : "Cash Out to " + channel;
 
-                CashInOutTransaction txn = new CashInOutTransaction(
+                CashInOutTransaction txn = TransactionFactory.createCashOut(
                         txnId,
                         referenceNumber,
                         sourceWalletId,
                         validAmount,
                         validFee,
-                        "CASH_OUT",
                         channel,
-                        null
+                        null,
+                        desc
                 );
-                txn.setDescription(desc);
                 txn.setStatus(TransactionStatus.PENDING);
                 transactionRepository.save(txn, conn);
 
@@ -1084,9 +1092,8 @@ public class WalletService implements WalletOperations {
                                                              BigDecimal amount, BigDecimal fee, String opType,
                                                              PaymentMethod pm, String desc) {
         String channel = pm != null ? pm.getProviderName() : "Direct";
-        CashInOutTransaction txn = new CashInOutTransaction(
-                txnId, referenceNumber, walletId, amount, fee, opType, channel);
-        txn.setDescription(desc);
+        CashInOutTransaction txn = TransactionFactory.createCashInOut(
+                txnId, referenceNumber, walletId, amount, fee, opType, channel, desc);
         txn.execute();
         return txn;
     }
