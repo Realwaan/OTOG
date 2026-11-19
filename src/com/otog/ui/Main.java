@@ -5,9 +5,12 @@ import com.intellij.uiDesigner.core.GridLayoutManager;
 import com.intellij.uiDesigner.core.Spacer;
 import com.otog.database.DatabaseManager;
 import com.otog.exception.WalletException;
+import com.otog.model.CashInOutTransaction;
 import com.otog.model.PaymentMethod;
 import com.otog.model.PaymentMethodStatus;
+import com.otog.model.SendMoneyTransaction;
 import com.otog.model.Transaction;
+import com.otog.model.TransactionFilter;
 import com.otog.model.TransactionStatus;
 import com.otog.model.TransactionType;
 import com.otog.model.User;
@@ -39,7 +42,9 @@ import java.awt.event.MouseEvent;
 import java.io.File;
 import java.math.BigDecimal;
 import java.nio.file.Path;
+import java.time.LocalDate;
 import java.time.format.DateTimeFormatter;
+import java.time.format.DateTimeParseException;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -93,6 +98,7 @@ public class Main extends JFrame {
     private JLabel lblStatus;
     private JButton btnBack;
     private JButton btnRefresh;
+    private JButton btnNotifications;
     private JButton btnPinSettings;
     private JButton btnLogout;
 
@@ -110,6 +116,13 @@ public class Main extends JFrame {
     private JButton btnExportStatement;
     private JButton btnLoadStatement;
 
+    private JComboBox<String> cmbFilterType;
+    private JComboBox<String> cmbFilterStatus;
+    private JTextField txtFilterFromDate;
+    private JTextField txtFilterToDate;
+    private JButton btnApplyFilters;
+    private JButton btnClearFilters;
+
     private CardLayout activityCardLayout;
     private JPanel activityCardPanel;
     private JLabel lblLoadingState;
@@ -121,6 +134,7 @@ public class Main extends JFrame {
     private JButton btnViewReceipt;
     private JButton btnExportReceipt;
     private JButton btnCheckStatus;
+    private JButton btnRepeatDraft;
     private JLabel lblActivityFeedback;
 
     private JComboBox<String> cmbCashOperation;
@@ -151,6 +165,8 @@ public class Main extends JFrame {
     private volatile boolean cachedHasPin;
     private CompletableFuture<Void> initialLoadFuture;
     private List<Transaction> loadedTransactions = Collections.emptyList();
+    private volatile TransactionFilter activeHistoryFilter = TransactionFilter.empty();
+    private volatile int cachedUnreadNotifications;
     private Runnable onLogoutCallback;
 
     /**
@@ -226,6 +242,9 @@ public class Main extends JFrame {
 
         btnRefresh.addActionListener(e -> handleInteractiveRefresh());
 
+        btnNotifications.setToolTipText("View persistent payment notifications and unread alerts");
+        btnNotifications.addActionListener(e -> openNotificationInboxDialog());
+
         btnPinSettings.setEnabled(authService != null);
         btnPinSettings.setToolTipText(authService != null
                 ? "Set or change your " + config.getPinMinLength() + "-" + config.getPinMaxLength() + " digit Transaction PIN"
@@ -290,6 +309,13 @@ public class Main extends JFrame {
         btnExportStatement = overviewPanel.getExportStatementButton();
         btnLoadStatement = overviewPanel.getLoadStatementButton();
 
+        cmbFilterType = overviewPanel.getFilterTypeComboBox();
+        cmbFilterStatus = overviewPanel.getFilterStatusComboBox();
+        txtFilterFromDate = overviewPanel.getFilterFromDateField();
+        txtFilterToDate = overviewPanel.getFilterToDateField();
+        btnApplyFilters = overviewPanel.getApplyFiltersButton();
+        btnClearFilters = overviewPanel.getClearFiltersButton();
+
         activityCardLayout = overviewPanel.getActivityCardLayout();
         activityCardPanel = overviewPanel.getActivityCardPanel();
         lblLoadingState = overviewPanel.getLoadingStateLabel();
@@ -299,6 +325,7 @@ public class Main extends JFrame {
         transactionsTableModel = overviewPanel.getTransactionsTableModel();
         tblTransactions = overviewPanel.getTransactionsTable();
         btnCheckStatus = overviewPanel.getCheckStatusButton();
+        btnRepeatDraft = overviewPanel.getRepeatDraftButton();
         btnViewReceipt = overviewPanel.getViewReceiptButton();
         btnExportReceipt = overviewPanel.getExportReceiptButton();
         lblActivityFeedback = overviewPanel.getActivityFeedbackLabel();
@@ -341,8 +368,13 @@ public class Main extends JFrame {
             }
         });
         btnCheckStatus.addActionListener(e -> lookupSelectedTransactionStatus());
+        btnRepeatDraft.addActionListener(e -> handleRepeatSelectedTransactionDraft());
         btnViewReceipt.addActionListener(e -> showSelectedReceipt());
         btnExportReceipt.addActionListener(e -> handleInteractiveExportReceipt());
+        btnApplyFilters.addActionListener(e -> handleApplyHistoryFilters());
+        btnClearFilters.addActionListener(e -> clearHistoryFiltersAsync());
+        txtFilterFromDate.addActionListener(e -> handleApplyHistoryFilters());
+        txtFilterToDate.addActionListener(e -> handleApplyHistoryFilters());
     }
 
     private void wireCashInOutPanel() {
@@ -510,13 +542,19 @@ public class Main extends JFrame {
                 session.requireAuthentication();
                 User user = session.getCurrentUser();
                 Wallet wallet = session.refreshWallet(walletService);
-                List<Transaction> transactions = walletService.getRecentTransactions(
-                        wallet.getWalletId(), OtogConfig.getInstance().getRecentTransactionLimit());
+                TransactionFilter currentFilter = activeHistoryFilter;
+                List<Transaction> transactions = (currentFilter != null && !currentFilter.isEmpty())
+                        ? walletService.getTransactionHistory(wallet.getWalletId(), currentFilter)
+                        : walletService.getRecentTransactions(
+                                wallet.getWalletId(), OtogConfig.getInstance().getRecentTransactionLimit());
                 List<PaymentMethod> paymentMethods = user != null
                         ? walletService.getPaymentMethodsByUserId(user.getUserId())
                         : Collections.emptyList();
                 boolean hasPin = authService != null && user != null && authService.hasPin(user.getUserId());
-                return new DashboardSnapshot(user, wallet, transactions, paymentMethods, hasPin);
+                int unreadNotifications = user != null
+                        ? walletService.getUnreadNotificationCount(user.getUserId())
+                        : 0;
+                return new DashboardSnapshot(user, wallet, transactions, paymentMethods, hasPin, unreadNotifications);
             }
 
             @Override
@@ -529,16 +567,25 @@ public class Main extends JFrame {
                 try {
                     DashboardSnapshot snapshot = get();
                     updateHeaderFromSession(snapshot.user, snapshot.wallet, snapshot.hasPin);
+                    updateNotificationsBadge(snapshot.unreadNotifications);
                     populatePaymentMethodsCombo(snapshot.paymentMethods);
                     populateTransactionsTable(snapshot.wallet.getWalletId(), snapshot.transactions);
+                    boolean filtered = activeHistoryFilter != null && !activeHistoryFilter.isEmpty();
                     if (snapshot.transactions.isEmpty()) {
                         currentState = DashboardState.EMPTY;
+                        lblEmptyState.setText(filtered
+                                ? "No transactions match the selected filters."
+                                : "No recent transactions yet. Use Cash In or Send Money to get started.");
                         activityCardLayout.show(activityCardPanel, DashboardState.EMPTY.name());
-                        lblStatus.setText("Ready — no transactions yet");
+                        lblStatus.setText(filtered
+                                ? "Ready — no matching transactions for active filter"
+                                : "Ready — no transactions yet");
                     } else {
                         currentState = DashboardState.READY;
                         activityCardLayout.show(activityCardPanel, DashboardState.READY.name());
-                        lblStatus.setText("Ready — showing " + snapshot.transactions.size() + " recent transaction(s)");
+                        lblStatus.setText(filtered
+                                ? "Ready — showing " + snapshot.transactions.size() + " filtered transaction(s)"
+                                : "Ready — showing " + snapshot.transactions.size() + " recent transaction(s)");
                     }
                 } catch (Exception ex) {
                     Throwable cause = unwrapCause(ex);
@@ -1451,13 +1498,19 @@ public class Main extends JFrame {
     }
 
     private void updateTableActionButtonsState() {
-        if (btnCheckStatus == null) {
-            return;
-        }
         Transaction selected = getSelectedTransactionForReceipt();
-        boolean isCashTxn = selected != null
-                && (selected.getType() == TransactionType.CASH_IN || selected.getType() == TransactionType.CASH_OUT);
-        btnCheckStatus.setEnabled(isCashTxn);
+        if (btnCheckStatus != null) {
+            boolean isCashTxn = selected != null
+                    && (selected.getType() == TransactionType.CASH_IN || selected.getType() == TransactionType.CASH_OUT);
+            btnCheckStatus.setEnabled(isCashTxn);
+        }
+        if (btnRepeatDraft != null) {
+            boolean canRepeat = selected != null
+                    && (selected.getType() == TransactionType.SEND_MONEY
+                    || selected.getType() == TransactionType.CASH_IN
+                    || selected.getType() == TransactionType.CASH_OUT);
+            btnRepeatDraft.setEnabled(canRepeat);
+        }
     }
 
     private static Map<TransactionType, String> createDirectionMap() {
@@ -1532,12 +1585,220 @@ public class Main extends JFrame {
                     JOptionPane.INFORMATION_MESSAGE);
             return;
         }
-        JTextArea area = new JTextArea(txn.getReceipt());
-        area.setEditable(false);
-        area.setFont(UiTheme.font(UiTheme.FontRole.MONO));
-        JOptionPane.showMessageDialog(this, new JScrollPane(area),
-                "Transaction Receipt — " + txn.getReferenceNumber(),
-                JOptionPane.INFORMATION_MESSAGE);
+        Wallet wallet = SessionManager.getInstance().getCurrentWallet();
+        String walletId = wallet != null ? wallet.getWalletId() : null;
+        String refKey = txn.getReferenceNumber() != null ? txn.getReferenceNumber() : txn.getTransactionId();
+
+        new SwingWorker<String, Void>() {
+            @Override
+            protected String doInBackground() {
+                if (walletId != null && refKey != null) {
+                    return walletService.getTransactionReceipt(walletId, refKey);
+                }
+                return txn.getReceipt();
+            }
+
+            @Override
+            protected void done() {
+                try {
+                    String formattedReceipt = get();
+                    JTextArea area = new JTextArea(formattedReceipt);
+                    area.setEditable(false);
+                    area.setFont(UiTheme.font(UiTheme.FontRole.MONO));
+                    area.setMargin(new Insets(8, 10, 8, 10));
+                    JScrollPane scroll = new JScrollPane(area);
+                    scroll.setPreferredSize(OtogConfig.getInstance().getUiDimension(
+                            "ui.receipt.width", "ui.receipt.height", 460, 360));
+                    JOptionPane.showMessageDialog(Main.this, scroll,
+                            "Transaction Receipt — " + txn.getReferenceNumber(),
+                            JOptionPane.INFORMATION_MESSAGE);
+                } catch (Exception ex) {
+                    Throwable cause = unwrapCause(ex);
+                    showDialogMessage(Main.this, "Receipt Error", extractErrorMessage(cause),
+                            JOptionPane.ERROR_MESSAGE);
+                }
+            }
+        }.execute();
+    }
+
+    private void handleApplyHistoryFilters() {
+        if (!ensureActiveSessionForInteraction()) {
+            return;
+        }
+        try {
+            TransactionFilter.Builder builder = TransactionFilter.builder();
+            String selectedType = cmbFilterType != null ? (String) cmbFilterType.getSelectedItem() : null;
+            if (selectedType != null && !OverviewPanel.ALL_TYPES_OPTION.equals(selectedType)) {
+                builder.type(TransactionType.valueOf(selectedType));
+            }
+            String selectedStatus = cmbFilterStatus != null ? (String) cmbFilterStatus.getSelectedItem() : null;
+            if (selectedStatus != null && !OverviewPanel.ALL_STATUSES_OPTION.equals(selectedStatus)) {
+                builder.status(TransactionStatus.valueOf(selectedStatus));
+            }
+            String fromRaw = txtFilterFromDate != null && txtFilterFromDate.getText() != null
+                    ? txtFilterFromDate.getText().trim() : "";
+            String toRaw = txtFilterToDate != null && txtFilterToDate.getText() != null
+                    ? txtFilterToDate.getText().trim() : "";
+            if (!fromRaw.isEmpty()) {
+                builder.fromDate(LocalDate.parse(fromRaw));
+            }
+            if (!toRaw.isEmpty()) {
+                builder.toDate(LocalDate.parse(toRaw));
+            }
+            applyHistoryFiltersAsync(builder.build());
+        } catch (DateTimeParseException ex) {
+            String msg = "Invalid date format. Please use YYYY-MM-DD (e.g., 2026-11-19).";
+            lblStatus.setText("Filter validation failed: " + msg);
+            showDialogMessage(this, "Invalid Date Filter", msg, JOptionPane.WARNING_MESSAGE);
+        } catch (IllegalArgumentException ex) {
+            String msg = extractErrorMessage(ex);
+            lblStatus.setText("Filter validation failed: " + msg);
+            showDialogMessage(this, "Invalid History Filter", msg, JOptionPane.WARNING_MESSAGE);
+        }
+    }
+
+    public CompletableFuture<Void> applyHistoryFiltersAsync(TransactionFilter filter) {
+        this.activeHistoryFilter = filter != null ? filter : TransactionFilter.empty();
+        return refreshDashboardAsync();
+    }
+
+    public CompletableFuture<Void> clearHistoryFiltersAsync() {
+        this.activeHistoryFilter = TransactionFilter.empty();
+        runOnEdt(() -> {
+            if (cmbFilterType != null) {
+                cmbFilterType.setSelectedIndex(0);
+            }
+            if (cmbFilterStatus != null) {
+                cmbFilterStatus.setSelectedIndex(0);
+            }
+            if (txtFilterFromDate != null) {
+                txtFilterFromDate.setText("");
+            }
+            if (txtFilterToDate != null) {
+                txtFilterToDate.setText("");
+            }
+        });
+        return refreshDashboardAsync();
+    }
+
+    private void handleRepeatSelectedTransactionDraft() {
+        if (!ensureActiveSessionForInteraction()) {
+            return;
+        }
+        createRepeatDraftForSelectedAsync().whenComplete((draft, err) -> runOnEdt(() -> {
+            if (err != null) {
+                Throwable cause = unwrapCause(err);
+                showDialogMessage(this, "Repeat Draft Failed", extractErrorMessage(cause),
+                        JOptionPane.ERROR_MESSAGE);
+            }
+        }));
+    }
+
+    /**
+     * Clones the currently selected transaction via Prototype ({@code createRepeatTransactionDraft})
+     * with a fresh reference number and pre-fills the matching payment form without auto-submitting.
+     */
+    public CompletableFuture<Transaction> createRepeatDraftForSelectedAsync() {
+        CompletableFuture<Transaction> future = new CompletableFuture<>();
+        Transaction selected = getSelectedTransactionForReceipt();
+        if (selected == null) {
+            future.completeExceptionally(new IllegalStateException("Please select a transaction to repeat."));
+            return future;
+        }
+        Wallet wallet = SessionManager.getInstance().getCurrentWallet();
+        if (wallet == null) {
+            future.completeExceptionally(new IllegalStateException("Active wallet is required."));
+            return future;
+        }
+        String key = selected.getReferenceNumber() != null ? selected.getReferenceNumber() : selected.getTransactionId();
+
+        new SwingWorker<Transaction, Void>() {
+            @Override
+            protected Transaction doInBackground() {
+                SessionManager.getInstance().touchActivity();
+                return walletService.createRepeatTransactionDraft(wallet.getWalletId(), key, null);
+            }
+
+            @Override
+            protected void done() {
+                try {
+                    Transaction draft = get();
+                    applyRepeatDraftToUi(draft);
+                    future.complete(draft);
+                } catch (Exception ex) {
+                    future.completeExceptionally(unwrapCause(ex));
+                }
+            }
+        }.execute();
+        return future;
+    }
+
+    private void applyRepeatDraftToUi(Transaction draft) {
+        if (draft == null) {
+            return;
+        }
+        String amountStr = draft.getAmount() != null ? draft.getAmount().toPlainString() : "";
+        String noteStr = draft.getDescription() != null ? draft.getDescription() : "";
+        if (draft.getType() == TransactionType.SEND_MONEY || draft instanceof SendMoneyTransaction) {
+            String recipientTarget = (draft instanceof SendMoneyTransaction smt && smt.getRecipientNumber() != null)
+                    ? smt.getRecipientNumber()
+                    : (draft.getTargetWalletId() != null ? draft.getTargetWalletId() : "");
+            txtRecipient.setText(recipientTarget);
+            txtSendAmount.setText(amountStr);
+            txtSendNote.setText(noteStr);
+            txtSendPin.setText("");
+            lblSendFeedback.setForeground(UiTheme.color(UiTheme.ColorRole.INFO));
+            lblSendFeedback.setText("Loaded repeat draft (New Ref: " + draft.getReferenceNumber()
+                    + "). Review details and enter PIN to send.");
+            lblStatus.setText("Repeat Send Money draft prepared: " + draft.getReferenceNumber());
+            navigateToTab("Send Money");
+        } else if (draft instanceof CashInOutTransaction
+                || draft.getType() == TransactionType.CASH_IN
+                || draft.getType() == TransactionType.CASH_OUT) {
+            String op = draft.getType() == TransactionType.CASH_OUT ? "CASH_OUT" : "CASH_IN";
+            cmbCashOperation.setSelectedItem(op);
+            if (draft instanceof CashInOutTransaction cio && cio.getChannel() != null) {
+                cmbCashChannel.setSelectedItem(cio.getChannel());
+            }
+            txtCashAmount.setText(amountStr);
+            txtCashNote.setText(noteStr);
+            txtCashPin.setText("");
+            lblCashFeedback.setForeground(UiTheme.color(UiTheme.ColorRole.INFO));
+            lblCashFeedback.setText("Loaded repeat draft (New Ref: " + draft.getReferenceNumber()
+                    + "). Review details and submit when ready.");
+            lblStatus.setText("Repeat " + op + " draft prepared: " + draft.getReferenceNumber());
+            navigateToTab("Cash In / Out");
+        }
+    }
+
+    private void updateNotificationsBadge(int unreadCount) {
+        this.cachedUnreadNotifications = Math.max(0, unreadCount);
+        if (btnNotifications != null) {
+            btnNotifications.setText("Notifications (" + this.cachedUnreadNotifications + ")");
+            btnNotifications.setForeground(this.cachedUnreadNotifications > 0
+                    ? UiTheme.color(UiTheme.ColorRole.PRIMARY)
+                    : UIManager.getColor("Button.foreground"));
+        }
+    }
+
+    private void openNotificationInboxDialog() {
+        if (!ensureActiveSessionForInteraction()) {
+            return;
+        }
+        User user = SessionManager.getInstance().getCurrentUser();
+        Wallet wallet = SessionManager.getInstance().getCurrentWallet();
+        if (user == null) {
+            handleSessionTermination("Session expired. Please log in again.");
+            return;
+        }
+        NotificationInboxDialog dialog = new NotificationInboxDialog(
+                this,
+                walletService,
+                user.getUserId(),
+                wallet != null ? wallet.getWalletId() : null,
+                this::updateNotificationsBadge
+        );
+        dialog.setVisible(true);
     }
 
     public boolean navigateToTab(String title) {
@@ -1778,6 +2039,46 @@ public class Main extends JFrame {
         return btnRefresh;
     }
 
+    public JButton getNotificationsButton() {
+        return btnNotifications;
+    }
+
+    public int getCachedUnreadNotifications() {
+        return cachedUnreadNotifications;
+    }
+
+    public TransactionFilter getActiveHistoryFilter() {
+        return activeHistoryFilter;
+    }
+
+    public JComboBox<String> getFilterTypeComboBox() {
+        return cmbFilterType;
+    }
+
+    public JComboBox<String> getFilterStatusComboBox() {
+        return cmbFilterStatus;
+    }
+
+    public JTextField getFilterFromDateField() {
+        return txtFilterFromDate;
+    }
+
+    public JTextField getFilterToDateField() {
+        return txtFilterToDate;
+    }
+
+    public JButton getApplyFiltersButton() {
+        return btnApplyFilters;
+    }
+
+    public JButton getClearFiltersButton() {
+        return btnClearFilters;
+    }
+
+    public JButton getRepeatDraftButton() {
+        return btnRepeatDraft;
+    }
+
     public JComboBox<String> getCashOperationComboBox() {
         return cmbCashOperation;
     }
@@ -1917,7 +2218,7 @@ public class Main extends JFrame {
                 null, null, null, 0, false));
 
         pnlBalanceAndActions = new JPanel();
-        pnlBalanceAndActions.setLayout(new GridLayoutManager(1, 5, new Insets(0, 0, 0, 0), 8, 0));
+        pnlBalanceAndActions.setLayout(new GridLayoutManager(1, 6, new Insets(0, 0, 0, 0), 8, 0));
         pnlHeader.add(pnlBalanceAndActions, new GridConstraints(0, 2, 1, 1,
                 GridConstraints.ANCHOR_EAST, GridConstraints.FILL_VERTICAL,
                 GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_CAN_GROW,
@@ -1963,15 +2264,22 @@ public class Main extends JFrame {
                 GridConstraints.SIZEPOLICY_FIXED,
                 null, null, null, 0, false));
 
+        btnNotifications = new JButton("Notifications (0)");
+        pnlBalanceAndActions.add(btnNotifications, new GridConstraints(0, 3, 1, 1,
+                GridConstraints.ANCHOR_CENTER, GridConstraints.FILL_HORIZONTAL,
+                GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_CAN_GROW,
+                GridConstraints.SIZEPOLICY_FIXED,
+                null, null, null, 0, false));
+
         btnPinSettings = new JButton("Transaction PIN");
-        pnlBalanceAndActions.add(btnPinSettings, new GridConstraints(0, 3, 1, 1,
+        pnlBalanceAndActions.add(btnPinSettings, new GridConstraints(0, 4, 1, 1,
                 GridConstraints.ANCHOR_CENTER, GridConstraints.FILL_HORIZONTAL,
                 GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_CAN_GROW,
                 GridConstraints.SIZEPOLICY_FIXED,
                 null, null, null, 0, false));
 
         btnLogout = new JButton("Logout");
-        pnlBalanceAndActions.add(btnLogout, new GridConstraints(0, 4, 1, 1,
+        pnlBalanceAndActions.add(btnLogout, new GridConstraints(0, 5, 1, 1,
                 GridConstraints.ANCHOR_CENTER, GridConstraints.FILL_HORIZONTAL,
                 GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_CAN_GROW,
                 GridConstraints.SIZEPOLICY_FIXED,
@@ -2011,14 +2319,17 @@ public class Main extends JFrame {
         private final List<Transaction> transactions;
         private final List<PaymentMethod> paymentMethods;
         private final boolean hasPin;
+        private final int unreadNotifications;
 
         private DashboardSnapshot(User user, Wallet wallet, List<Transaction> transactions,
-                                  List<PaymentMethod> paymentMethods, boolean hasPin) {
+                                  List<PaymentMethod> paymentMethods, boolean hasPin,
+                                  int unreadNotifications) {
             this.user = user;
             this.wallet = wallet;
             this.transactions = transactions;
             this.paymentMethods = paymentMethods;
             this.hasPin = hasPin;
+            this.unreadNotifications = unreadNotifications;
         }
     }
 }

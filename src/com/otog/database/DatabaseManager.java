@@ -181,7 +181,25 @@ public class DatabaseManager implements AutoCloseable {
                         "created_at TEXT NOT NULL, " +
                         "FOREIGN KEY (admin_user_id) REFERENCES users(user_id) ON DELETE RESTRICT);",
                 "CREATE INDEX IF NOT EXISTS idx_admin_act_admin ON admin_actions(admin_user_id);",
-                "CREATE INDEX IF NOT EXISTS idx_admin_act_target ON admin_actions(target_user_id);"
+                "CREATE INDEX IF NOT EXISTS idx_admin_act_target ON admin_actions(target_user_id);",
+
+                "CREATE TABLE IF NOT EXISTS notifications (" +
+                        "notification_id TEXT PRIMARY KEY, " +
+                        "user_id TEXT NOT NULL, " +
+                        "transaction_id TEXT, " +
+                        "reference_number TEXT, " +
+                        "type TEXT NOT NULL, " +
+                        "title TEXT NOT NULL, " +
+                        "message TEXT NOT NULL, " +
+                        "is_read INTEGER NOT NULL DEFAULT 0, " +
+                        "dedup_key TEXT UNIQUE, " +
+                        "created_at TEXT NOT NULL, " +
+                        "read_at TEXT, " +
+                        "FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE CASCADE, " +
+                        "FOREIGN KEY (transaction_id) REFERENCES transactions(transaction_id) ON DELETE SET NULL);",
+                "CREATE INDEX IF NOT EXISTS idx_notif_user ON notifications(user_id);",
+                "CREATE INDEX IF NOT EXISTS idx_notif_user_read ON notifications(user_id, is_read);",
+                "CREATE INDEX IF NOT EXISTS idx_notif_txn ON notifications(transaction_id);"
         };
 
         try (Connection conn = getConnection();
