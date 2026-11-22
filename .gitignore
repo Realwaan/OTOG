@@ -24,3 +24,18 @@ Thumbs.db
 sources.txt
 __pycache__/
 *.pyc
+tmp/
+temp/
+*.tmp
+*.temp
+*.bak
+*.swp
+*~
+receipt-*.txt
+otog-statement*.txt
+
+# Test sources & test execution artifacts
+test/
+test-output/
+test-results/
+*.test

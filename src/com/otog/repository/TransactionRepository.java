@@ -2,6 +2,7 @@ package com.otog.repository;
 
 import com.otog.database.DatabaseManager;
 import com.otog.exception.OtogException;
+import com.otog.model.BillPaymentTransaction;
 import com.otog.model.CashInOutTransaction;
 import com.otog.model.SendMoneyTransaction;
 import com.otog.model.Transaction;
@@ -39,6 +40,8 @@ public class TransactionRepository {
         String channel = null;
         if (txn instanceof CashInOutTransaction cio) {
             channel = cio.getChannel();
+        } else if (txn instanceof BillPaymentTransaction bpt) {
+            channel = bpt.getBillerName();
         }
         String sql = "INSERT INTO transactions (transaction_id, reference_number, source_wallet_id, " +
                 "target_wallet_id, amount, fee, total_amount, currency, type, status, description, " +
@@ -241,6 +244,10 @@ public class TransactionRepository {
         } else if (t instanceof SendMoneyTransaction smt) {
             smt.setRecipientNumber(rs.getString("target_wallet_id"));
             smt.setNote(rs.getString("description"));
+        } else if (t instanceof BillPaymentTransaction bpt) {
+            bpt.setBillerName(rs.getString("channel"));
+            String desc = rs.getString("description");
+            bpt.setBillerReference(extractBillerReference(desc));
         }
         t.setTransactionId(rs.getString("transaction_id"));
         t.setReferenceNumber(rs.getString("reference_number"));
@@ -261,5 +268,17 @@ public class TransactionRepository {
         t.setProviderReference(rs.getString("provider_reference"));
         t.setProviderStatus(rs.getString("provider_status"));
         return t;
+    }
+
+    private String extractBillerReference(String description) {
+        if (description == null) {
+            return null;
+        }
+        int start = description.lastIndexOf('[');
+        int end = description.lastIndexOf(']');
+        if (start >= 0 && end > start) {
+            return description.substring(start + 1, end).trim();
+        }
+        return description;
     }
 }

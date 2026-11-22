@@ -32,6 +32,8 @@ public class TransactionBuilder {
     private LocalDate dueDate;
     private String product;
     private BigDecimal units;
+    private String billerName;
+    private String billerReference;
     private TransactionType type = TransactionType.SEND_MONEY;
     private TransactionStatus status = TransactionStatus.PENDING;
 
@@ -145,6 +147,21 @@ public class TransactionBuilder {
 
     public TransactionBuilder units(BigDecimal units) {
         this.units = units;
+        return this;
+    }
+
+    public TransactionBuilder biller(String billerName) {
+        this.billerName = billerName;
+        return this;
+    }
+
+    public TransactionBuilder billerName(String billerName) {
+        this.billerName = billerName;
+        return this;
+    }
+
+    public TransactionBuilder billerReference(String billerReference) {
+        this.billerReference = billerReference;
         return this;
     }
 
@@ -298,6 +315,37 @@ public class TransactionBuilder {
                 ? TransactionType.INVESTMENT_REDEEM
                 : TransactionType.INVESTMENT_BUY;
         applyCommonOptionalFields(txn, invType);
+        return txn;
+    }
+
+    public BillPaymentTransaction buildBillPayment() {
+        if (referenceNumber == null || referenceNumber.trim().isEmpty()) {
+            throw new IllegalStateException("Reference number is required for bill payment construction");
+        }
+        if (sourceWalletId == null || sourceWalletId.trim().isEmpty()) {
+            throw new IllegalStateException("Source wallet ID is required for bill payment construction");
+        }
+        if (amount == null) {
+            throw new IllegalStateException("Amount is required for bill payment construction");
+        }
+
+        String effectiveBiller = (billerName != null && !billerName.trim().isEmpty()) ? billerName.trim() : "Biller";
+        BigDecimal effectiveFee = (fee != null) ? fee : MoneyUtil.ZERO;
+        String effectiveDesc = (note != null && !note.trim().isEmpty())
+                ? note.trim()
+                : "Bill Payment to " + effectiveBiller + (billerReference != null ? " [" + billerReference + "]" : "");
+
+        BillPaymentTransaction txn = new BillPaymentTransaction(
+                resolveTransactionId(),
+                referenceNumber.trim(),
+                sourceWalletId.trim(),
+                amount,
+                effectiveFee,
+                effectiveBiller,
+                billerReference,
+                effectiveDesc
+        );
+        applyCommonOptionalFields(txn, TransactionType.BILL_PAYMENT);
         return txn;
     }
 

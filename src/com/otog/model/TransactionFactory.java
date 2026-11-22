@@ -147,6 +147,24 @@ public final class TransactionFactory {
                 .buildInvestment();
     }
 
+    public static BillPaymentTransaction createBillPayment(String referenceNumber,
+                                                           String sourceWalletId,
+                                                           BigDecimal amount,
+                                                           BigDecimal fee,
+                                                           String billerName,
+                                                           String billerReference,
+                                                           String description) {
+        return new TransactionBuilder()
+                .referenceNumber(referenceNumber)
+                .from(sourceWalletId)
+                .amount(amount)
+                .fee(fee)
+                .biller(billerName)
+                .billerReference(billerReference)
+                .description(description)
+                .buildBillPayment();
+    }
+
     /**
      * Factory Method creating the appropriate specialized subclass shell for repository hydration.
      */
@@ -162,6 +180,7 @@ public final class TransactionFactory {
                 yield cio;
             }
             case SEND_MONEY -> new SendMoneyTransaction();
+            case BILL_PAYMENT -> new BillPaymentTransaction();
             case LOAN_DISBURSEMENT, LOAN_REPAYMENT -> {
                 LoanTransaction loan = new LoanTransaction();
                 loan.setType(type);
