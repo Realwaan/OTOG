@@ -4,11 +4,9 @@ import com.intellij.uiDesigner.core.GridConstraints;
 import com.intellij.uiDesigner.core.GridLayoutManager;
 import com.intellij.uiDesigner.core.Spacer;
 import com.otog.database.DatabaseManager;
-import com.otog.exception.WalletException;
 import com.otog.model.BillPaymentTransaction;
 import com.otog.model.CashInOutTransaction;
 import com.otog.model.PaymentMethod;
-import com.otog.model.PaymentMethodStatus;
 import com.otog.model.SendMoneyTransaction;
 import com.otog.model.Transaction;
 import com.otog.model.TransactionFilter;
@@ -19,46 +17,35 @@ import com.otog.model.Wallet;
 import com.otog.service.AdminService;
 import com.otog.service.AuthService;
 import com.otog.service.AuthServiceImpl;
-import com.otog.service.BankResponseStatus;
 import com.otog.service.InvestmentService;
 import com.otog.service.LoanService;
-import com.otog.service.PaymentProviderFactory;
 import com.otog.service.ProtectedWalletOperationsProxy;
-import com.otog.service.SendMoneyService;
 import com.otog.service.SessionManager;
 import com.otog.service.StatementFileService;
 import com.otog.service.WalletOperations;
 import com.otog.service.WalletService;
-import com.otog.util.IdGenerator;
 import com.otog.util.MoneyUtil;
 import com.otog.util.OtogConfig;
 import com.otog.util.UiTheme;
 
 import javax.swing.*;
-import javax.swing.filechooser.FileNameExtensionFilter;
-import javax.swing.table.DefaultTableModel;
 import java.awt.*;
-import java.awt.event.MouseAdapter;
-import java.awt.event.MouseEvent;
-import java.io.File;
-import java.math.BigDecimal;
 import java.nio.file.Path;
-import java.time.LocalDate;
-import java.time.format.DateTimeFormatter;
-import java.time.format.DateTimeParseException;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Deque;
-import java.util.EnumMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.CompletionException;
-import java.util.concurrent.ExecutionException;
 
+/**
+ * Top-level authenticated E-Wallet dashboard shell bound to {@code Main.form}.
+ * Hosts header identity/balance controls, tabbed navigation across modular
+ * {@code .form}-backed panels, session monitoring, and the status footer.
+ */
 public class Main extends JFrame {
 
     public enum DashboardState {
@@ -67,9 +54,6 @@ public class Main extends JFrame {
         READY,
         ERROR
     }
-
-    private final DateTimeFormatter dateFormatter = DateTimeFormatter.ofPattern(OtogConfig.getInstance().getUiDatePattern());
-    private static final Map<TransactionType, String> FIXED_DIRECTION_BY_TYPE = createDirectionMap();
 
     private final WalletOperations walletService;
     private final AuthService authService;
@@ -107,59 +91,8 @@ public class Main extends JFrame {
     private OverviewPanel overviewPanel;
     private CashInOutPanel cashInOutPanel;
     private SendMoneyPanel sendMoneyPanel;
-    private AdminControlsPanel adminControlsPanel;
-    private final StatementFileService statementFileService = new StatementFileService();
-
-    private JButton btnNavCashIn;
-    private JButton btnNavCashOut;
-    private JButton btnNavSendMoney;
-    private JButton btnNavPayBills;
-    private JButton btnNavPinSettings;
-    private JButton btnExportStatement;
-    private JButton btnLoadStatement;
-
-    private JComboBox<String> cmbFilterType;
-    private JComboBox<String> cmbFilterStatus;
-    private JTextField txtFilterFromDate;
-    private JTextField txtFilterToDate;
-    private JButton btnApplyFilters;
-    private JButton btnClearFilters;
-
-    private CardLayout activityCardLayout;
-    private JPanel activityCardPanel;
-    private JLabel lblLoadingState;
-    private JLabel lblEmptyState;
-    private JLabel lblErrorState;
-    private JButton btnRetryLoad;
-    private DefaultTableModel transactionsTableModel;
-    private JTable tblTransactions;
-    private JButton btnViewReceipt;
-    private JButton btnExportReceipt;
-    private JButton btnCheckStatus;
-    private JButton btnRepeatDraft;
-    private JLabel lblActivityFeedback;
-
     private PayBillsPanel payBillsPanel;
-
-    private JComboBox<String> cmbCashOperation;
-    private JComboBox<String> cmbPaymentMethod;
-    private JComboBox<String> cmbCashChannel;
-    private JComboBox<String> cmbProviderMode;
-    private JTextField txtCashAmount;
-    private JTextField txtCashNote;
-    private JPasswordField txtCashPin;
-    private JButton btnSubmitCashOp;
-    private JButton btnCashBackToOverview;
-    private JLabel lblCashFeedback;
-    private List<PaymentMethod> loadedPaymentMethods = Collections.emptyList();
-
-    private JTextField txtRecipient;
-    private JTextField txtSendAmount;
-    private JTextField txtSendNote;
-    private JPasswordField txtSendPin;
-    private JButton btnSubmitSendMoney;
-    private JButton btnSendBackToOverview;
-    private JLabel lblSendFeedback;
+    private AdminControlsPanel adminControlsPanel;
 
     private Timer sessionMonitorTimer;
     private volatile DashboardState currentState = DashboardState.LOADING;
@@ -169,8 +102,6 @@ public class Main extends JFrame {
     private volatile boolean cachedHasPin;
     private CompletableFuture<Void> initialLoadFuture;
     private volatile CompletableFuture<Void> lastPayBillsRefreshFuture = CompletableFuture.completedFuture(null);
-    private List<Transaction> loadedTransactions = Collections.emptyList();
-    private volatile TransactionFilter activeHistoryFilter = TransactionFilter.empty();
     private volatile int cachedUnreadNotifications;
     private Runnable onLogoutCallback;
 
@@ -267,9 +198,9 @@ public class Main extends JFrame {
         tabs.removeAll();
         tabIndexByTitle.clear();
 
-        overviewPanel = new OverviewPanel();
-        cashInOutPanel = new CashInOutPanel(walletService.getCurrentProviderMode());
-        sendMoneyPanel = new SendMoneyPanel();
+        overviewPanel = new OverviewPanel(walletService, new StatementFileService());
+        cashInOutPanel = new CashInOutPanel(walletService, authService, walletService.getCurrentProviderMode());
+        sendMoneyPanel = new SendMoneyPanel(walletService, authService);
         payBillsPanel = new PayBillsPanel(walletService, authService);
 
         wireOverviewPanel();
@@ -310,144 +241,63 @@ public class Main extends JFrame {
     }
 
     private void wireOverviewPanel() {
-        btnNavCashIn = overviewPanel.getNavCashInButton();
-        btnNavCashOut = overviewPanel.getNavCashOutButton();
-        btnNavSendMoney = overviewPanel.getNavSendMoneyButton();
-        btnNavPayBills = overviewPanel.getNavPayBillsButton();
-        btnNavPinSettings = overviewPanel.getNavPinSettingsButton();
-        btnExportStatement = overviewPanel.getExportStatementButton();
-        btnLoadStatement = overviewPanel.getLoadStatementButton();
-
-        cmbFilterType = overviewPanel.getFilterTypeComboBox();
-        cmbFilterStatus = overviewPanel.getFilterStatusComboBox();
-        txtFilterFromDate = overviewPanel.getFilterFromDateField();
-        txtFilterToDate = overviewPanel.getFilterToDateField();
-        btnApplyFilters = overviewPanel.getApplyFiltersButton();
-        btnClearFilters = overviewPanel.getClearFiltersButton();
-
-        activityCardLayout = overviewPanel.getActivityCardLayout();
-        activityCardPanel = overviewPanel.getActivityCardPanel();
-        lblLoadingState = overviewPanel.getLoadingStateLabel();
-        lblEmptyState = overviewPanel.getEmptyStateLabel();
-        lblErrorState = overviewPanel.getErrorStateLabel();
-        btnRetryLoad = overviewPanel.getRetryLoadButton();
-        transactionsTableModel = overviewPanel.getTransactionsTableModel();
-        tblTransactions = overviewPanel.getTransactionsTable();
-        btnCheckStatus = overviewPanel.getCheckStatusButton();
-        btnRepeatDraft = overviewPanel.getRepeatDraftButton();
-        btnViewReceipt = overviewPanel.getViewReceiptButton();
-        btnExportReceipt = overviewPanel.getExportReceiptButton();
-        lblActivityFeedback = overviewPanel.getActivityFeedbackLabel();
-
-        btnNavCashIn.addActionListener(e -> {
-            cmbCashOperation.setSelectedItem("CASH_IN");
+        overviewPanel.setPinSettingsEnabled(authService != null);
+        overviewPanel.setOnQuickNavCashIn(() -> {
             navigateToTab("Cash In / Out");
-            txtCashAmount.requestFocusInWindow();
+            cashInOutPanel.prepareForOperation("CASH_IN");
         });
-
-        btnNavCashOut.addActionListener(e -> {
-            cmbCashOperation.setSelectedItem("CASH_OUT");
+        overviewPanel.setOnQuickNavCashOut(() -> {
             navigateToTab("Cash In / Out");
-            txtCashAmount.requestFocusInWindow();
+            cashInOutPanel.prepareForOperation("CASH_OUT");
         });
-
-        btnNavSendMoney.addActionListener(e -> {
+        overviewPanel.setOnQuickNavSendMoney(() -> {
             navigateToTab("Send Money");
-            txtRecipient.requestFocusInWindow();
+            sendMoneyPanel.focusRecipient();
         });
-
-        if (btnNavPayBills != null) {
-            btnNavPayBills.addActionListener(e -> {
-                navigateToTab("Pay Bills");
-                if (payBillsPanel != null) {
-                    payBillsPanel.getBillReferenceField().requestFocusInWindow();
-                }
-            });
-        }
-
-        btnNavPinSettings.setEnabled(authService != null);
-        btnNavPinSettings.addActionListener(e -> openPinSettingsDialog());
-
-        btnExportStatement.addActionListener(e -> handleInteractiveExportStatement());
-        btnLoadStatement.addActionListener(e -> handleInteractiveLoadStatement());
-
-        btnRetryLoad.addActionListener(e -> handleInteractiveRefresh());
-        tblTransactions.addMouseListener(new MouseAdapter() {
-            @Override
-            public void mouseClicked(MouseEvent e) {
-                if (e.getClickCount() == 2 && tblTransactions.getSelectedRow() >= 0) {
-                    showSelectedReceipt();
-                }
+        overviewPanel.setOnQuickNavPayBills(() -> {
+            navigateToTab("Pay Bills");
+            if (payBillsPanel != null) {
+                payBillsPanel.getBillReferenceField().requestFocusInWindow();
             }
         });
-        tblTransactions.getSelectionModel().addListSelectionListener(e -> {
-            if (!e.getValueIsAdjusting()) {
-                updateTableActionButtonsState();
-            }
-        });
-        btnCheckStatus.addActionListener(e -> lookupSelectedTransactionStatus());
-        btnRepeatDraft.addActionListener(e -> handleRepeatSelectedTransactionDraft());
-        btnViewReceipt.addActionListener(e -> showSelectedReceipt());
-        btnExportReceipt.addActionListener(e -> handleInteractiveExportReceipt());
-        btnApplyFilters.addActionListener(e -> handleApplyHistoryFilters());
-        btnClearFilters.addActionListener(e -> clearHistoryFiltersAsync());
-        txtFilterFromDate.addActionListener(e -> handleApplyHistoryFilters());
-        txtFilterToDate.addActionListener(e -> handleApplyHistoryFilters());
+        overviewPanel.setOnQuickNavPinSettings(this::openPinSettingsDialog);
+        overviewPanel.setBeforeInteractiveAction(this::ensureActiveSessionForInteraction);
+        overviewPanel.setOnRetryLoad(this::handleInteractiveRefresh);
+        overviewPanel.setOnRefreshRequested(this::refreshDashboardAsync);
+        overviewPanel.setOnStatusMessage(lblStatus::setText);
+        overviewPanel.setOnStatusLookupFeedback((msg, color) -> cashInOutPanel.showFeedback(msg, color));
+        overviewPanel.setOnRepeatDraftReady(this::applyRepeatDraftToUi);
+        overviewPanel.setDialogMessageCallback(this::showDialogMessage);
     }
 
     private void wireCashInOutPanel() {
-        cmbCashOperation = cashInOutPanel.getCashOperationComboBox();
-        cmbPaymentMethod = cashInOutPanel.getPaymentMethodComboBox();
-        cmbCashChannel = cashInOutPanel.getCashChannelComboBox();
-        cmbProviderMode = cashInOutPanel.getProviderModeComboBox();
-        txtCashAmount = cashInOutPanel.getCashAmountField();
-        txtCashNote = cashInOutPanel.getCashNoteField();
-        txtCashPin = cashInOutPanel.getCashPinField();
-        btnSubmitCashOp = cashInOutPanel.getSubmitCashOpButton();
-        btnCashBackToOverview = cashInOutPanel.getCashBackToOverviewButton();
-        lblCashFeedback = cashInOutPanel.getCashFeedbackLabel();
-
-        cmbPaymentMethod.addActionListener(e ->
-                cmbCashChannel.setEnabled(cmbPaymentMethod.getSelectedIndex() <= 0));
-
-        cmbProviderMode.addActionListener(e -> {
-            String modeName = (String) cmbProviderMode.getSelectedItem();
-            if (modeName != null) {
-                walletService.setPaymentProviderFactory(
-                        PaymentProviderFactory.forMode(BankResponseStatus.valueOf(modeName)));
-            }
-        });
-
-        cmbCashOperation.addActionListener(e -> {
-            boolean isCashOut = "CASH_OUT".equals(cmbCashOperation.getSelectedItem());
-            txtCashPin.setEnabled(isCashOut);
-            if (!isCashOut) {
-                txtCashPin.setText("");
-            }
-        });
-
-        btnCashBackToOverview.addActionListener(e -> navigateToTab("Overview"));
-        btnSubmitCashOp.addActionListener(e -> handleInteractiveCashSubmit());
-        txtCashAmount.addActionListener(e -> handleInteractiveCashSubmit());
-        txtCashNote.addActionListener(e -> handleInteractiveCashSubmit());
-        txtCashPin.addActionListener(e -> handleInteractiveCashSubmit());
+        cashInOutPanel.setOnBackToOverview(() -> navigateToTab("Overview"));
+        cashInOutPanel.setBeforeInteractiveSubmit(this::ensureActiveSessionForInteraction);
+        cashInOutPanel.setPinConfiguredSupplier(() -> cachedHasPin);
+        cashInOutPanel.setOnPinNotSet(() ->
+                promptPinSetupIfMissing("A Transaction PIN is required before making a Cash Out."));
+        cashInOutPanel.setIsLogoutHandledSupplier(() -> logoutHandled);
+        cashInOutPanel.setDialogMessageCallback(this::showDialogMessage);
+        cashInOutPanel.setConfirmDialogCallback(this::showConfirmDialog);
+        cashInOutPanel.setOnStatusMessage(lblStatus::setText);
+        cashInOutPanel.setOffEdtObserver(offEdt -> lastPaymentExecutedOffEdt = offEdt);
+        cashInOutPanel.setOnRefreshRequested(this::refreshDashboardAsync);
+        cashInOutPanel.setOnOperationError(this::checkSessionTerminatedOnError);
     }
 
     private void wireSendMoneyPanel() {
-        txtRecipient = sendMoneyPanel.getRecipientField();
-        txtSendAmount = sendMoneyPanel.getSendAmountField();
-        txtSendNote = sendMoneyPanel.getSendNoteField();
-        txtSendPin = sendMoneyPanel.getSendPinField();
-        btnSubmitSendMoney = sendMoneyPanel.getSubmitSendMoneyButton();
-        btnSendBackToOverview = sendMoneyPanel.getSendBackToOverviewButton();
-        lblSendFeedback = sendMoneyPanel.getSendFeedbackLabel();
-
-        btnSendBackToOverview.addActionListener(e -> navigateToTab("Overview"));
-        btnSubmitSendMoney.addActionListener(e -> handleInteractiveSendMoneySubmit());
-        txtRecipient.addActionListener(e -> handleInteractiveSendMoneySubmit());
-        txtSendAmount.addActionListener(e -> handleInteractiveSendMoneySubmit());
-        txtSendNote.addActionListener(e -> handleInteractiveSendMoneySubmit());
-        txtSendPin.addActionListener(e -> handleInteractiveSendMoneySubmit());
+        sendMoneyPanel.setOnBackToOverview(() -> navigateToTab("Overview"));
+        sendMoneyPanel.setBeforeInteractiveSubmit(this::ensureActiveSessionForInteraction);
+        sendMoneyPanel.setPinConfiguredSupplier(() -> cachedHasPin);
+        sendMoneyPanel.setOnPinNotSet(() ->
+                promptPinSetupIfMissing("A Transaction PIN is required before sending money."));
+        sendMoneyPanel.setIsLogoutHandledSupplier(() -> logoutHandled);
+        sendMoneyPanel.setDialogMessageCallback(this::showDialogMessage);
+        sendMoneyPanel.setConfirmDialogCallback(this::showConfirmDialog);
+        sendMoneyPanel.setOnStatusMessage(lblStatus::setText);
+        sendMoneyPanel.setOffEdtObserver(offEdt -> lastPaymentExecutedOffEdt = offEdt);
+        sendMoneyPanel.setOnRefreshRequested(this::refreshDashboardAsync);
+        sendMoneyPanel.setOnOperationError(this::checkSessionTerminatedOnError);
     }
 
     private void wirePayBillsPanel() {
@@ -473,7 +323,7 @@ public class Main extends JFrame {
                 lblStatus.setText(billStatusText);
                 lastPayBillsRefreshFuture = refreshDashboardAsync().whenComplete((v, err) -> {
                     if (currentState != DashboardState.ERROR) {
-                        runOnEdt(() -> lblStatus.setText(billStatusText));
+                        UiSupport.runOnEdt(() -> lblStatus.setText(billStatusText));
                     }
                 });
             } else {
@@ -481,7 +331,7 @@ public class Main extends JFrame {
             }
         });
         payBillsPanel.setOnPaymentError(err -> {
-            String msg = extractErrorMessage(err);
+            String msg = UiSupport.extractErrorMessage(err);
             lblStatus.setText("Bill payment failed: " + msg);
             checkSessionTerminatedOnError(msg);
         });
@@ -597,8 +447,10 @@ public class Main extends JFrame {
         }
         this.currentState = DashboardState.LOADING;
 
-        runOnEdt(() -> {
-            setLoadingState("Loading wallet balance and recent activity...");
+        UiSupport.runOnEdt(() -> {
+            String loadingMessage = "Loading wallet balance and recent activity...";
+            overviewPanel.showLoadingState(loadingMessage);
+            lblStatus.setText(loadingMessage);
             setRefreshControlsEnabled(false);
         });
 
@@ -610,7 +462,7 @@ public class Main extends JFrame {
                 session.requireAuthentication();
                 User user = session.getCurrentUser();
                 Wallet wallet = session.refreshWallet(walletService);
-                TransactionFilter currentFilter = activeHistoryFilter;
+                TransactionFilter currentFilter = overviewPanel.getActiveHistoryFilter();
                 List<Transaction> transactions = (currentFilter != null && !currentFilter.isEmpty())
                         ? walletService.getTransactionHistory(wallet.getWalletId(), currentFilter)
                         : walletService.getRecentTransactions(
@@ -629,40 +481,34 @@ public class Main extends JFrame {
             protected void done() {
                 if (!isLatestRefresh(generation)) {
                     // A newer refresh superseded this one: never let stale data overwrite the UI.
-                    // The newest worker will complete this future when it lands.
                     return;
                 }
                 try {
                     DashboardSnapshot snapshot = get();
                     updateHeaderFromSession(snapshot.user, snapshot.wallet, snapshot.hasPin);
                     updateNotificationsBadge(snapshot.unreadNotifications);
-                    populatePaymentMethodsCombo(snapshot.paymentMethods);
-                    populateTransactionsTable(snapshot.wallet.getWalletId(), snapshot.transactions);
-                    boolean filtered = activeHistoryFilter != null && !activeHistoryFilter.isEmpty();
+                    cashInOutPanel.populatePaymentMethods(snapshot.paymentMethods);
+                    overviewPanel.populateTransactions(snapshot.wallet.getWalletId(), snapshot.transactions);
+                    TransactionFilter activeFilter = overviewPanel.getActiveHistoryFilter();
+                    boolean filtered = activeFilter != null && !activeFilter.isEmpty();
                     if (snapshot.transactions.isEmpty()) {
                         currentState = DashboardState.EMPTY;
-                        lblEmptyState.setText(filtered
-                                ? "No transactions match the selected filters."
-                                : "No recent transactions yet. Use Cash In or Send Money to get started.");
-                        activityCardLayout.show(activityCardPanel, DashboardState.EMPTY.name());
+                        overviewPanel.showEmptyState(filtered);
                         lblStatus.setText(filtered
-                                ? "Ready — no matching transactions for active filter"
-                                : "Ready — no transactions yet");
+                                ? "Ready \u2014 no matching transactions for active filter"
+                                : "Ready \u2014 no transactions yet");
                     } else {
                         currentState = DashboardState.READY;
-                        activityCardLayout.show(activityCardPanel, DashboardState.READY.name());
+                        overviewPanel.showReadyState();
                         lblStatus.setText(filtered
-                                ? "Ready — showing " + snapshot.transactions.size() + " filtered transaction(s)"
-                                : "Ready — showing " + snapshot.transactions.size() + " recent transaction(s)");
+                                ? "Ready \u2014 showing " + snapshot.transactions.size() + " filtered transaction(s)"
+                                : "Ready \u2014 showing " + snapshot.transactions.size() + " recent transaction(s)");
                     }
                 } catch (Exception ex) {
-                    Throwable cause = unwrapCause(ex);
-                    String message = (cause.getMessage() != null && !cause.getMessage().trim().isEmpty())
-                            ? cause.getMessage()
-                            : cause.getClass().getSimpleName();
+                    Throwable cause = UiSupport.unwrapCause(ex);
+                    String message = UiSupport.extractErrorMessage(cause);
                     currentState = DashboardState.ERROR;
-                    lblErrorState.setText("Unable to load wallet data: " + message);
-                    activityCardLayout.show(activityCardPanel, DashboardState.ERROR.name());
+                    overviewPanel.showErrorState(message);
                     lblStatus.setText("Error loading dashboard: " + message);
                     checkSessionTerminatedOnError(message);
                 }
@@ -699,8 +545,8 @@ public class Main extends JFrame {
         if (btnRefresh != null) {
             btnRefresh.setEnabled(enabled);
         }
-        if (btnRetryLoad != null) {
-            btnRetryLoad.setEnabled(enabled);
+        if (overviewPanel != null) {
+            overviewPanel.setRetryEnabled(enabled);
         }
     }
 
@@ -717,103 +563,53 @@ public class Main extends JFrame {
     public CompletableFuture<Transaction> submitCashOperationAsync(String operationType, String channel,
                                                                     String paymentMethodId, String amountText,
                                                                     String note, String rawPin) {
-        CompletableFuture<Transaction> future = new CompletableFuture<>();
-        String op = operationType != null ? operationType.trim().toUpperCase() : "CASH_IN";
-        String opLabel = "CASH_OUT".equals(op) ? "Cash Out" : "Cash In";
+        return cashInOutPanel.submitCashOperationAsync(
+                operationType, channel, paymentMethodId, amountText, note, rawPin);
+    }
 
-        runOnEdt(() -> {
-            btnSubmitCashOp.setEnabled(false);
-            lblCashFeedback.setForeground(UiTheme.color(UiTheme.ColorRole.INFO));
-            lblCashFeedback.setText("Processing " + opLabel + "...");
-            lblStatus.setText("Processing " + opLabel + "...");
-        });
+    public CompletableFuture<Transaction> submitSendMoneyAsync(String recipient, String amountText, String note) {
+        return submitSendMoneyAsync(recipient, amountText, note, null);
+    }
 
-        SwingWorker<Transaction, Void> worker = new SwingWorker<>() {
-            @Override
-            protected Transaction doInBackground() {
-                lastPaymentExecutedOffEdt = !SwingUtilities.isEventDispatchThread();
-                SessionManager session = SessionManager.getInstance();
-                session.requireAuthentication();
-                User user = session.getCurrentUser();
-                Wallet wallet = session.getCurrentWallet();
-                if (wallet == null) {
-                    wallet = session.refreshWallet(walletService);
-                }
+    public CompletableFuture<Transaction> submitSendMoneyAsync(String recipient, String amountText,
+                                                              String note, String rawPin) {
+        return sendMoneyPanel.submitSendMoneyAsync(recipient, amountText, note, rawPin);
+    }
 
-                BigDecimal amount = MoneyUtil.validatePositiveAmount(MoneyUtil.parse(amountText));
-                String ref = IdGenerator.nextReferenceNumber();
-                String cleanChannel = (channel != null && !channel.trim().isEmpty())
-                        ? channel.trim() : "OTOG Partner";
-                String cleanNote = (note != null && !note.trim().isEmpty()) ? note.trim() : null;
-                String pmId = (paymentMethodId != null && !paymentMethodId.trim().isEmpty()) ? paymentMethodId.trim() : null;
+    public CompletableFuture<Transaction> submitStatusLookupAsync(String referenceNumber) {
+        return overviewPanel.submitStatusLookupAsync(referenceNumber);
+    }
 
-                if ("CASH_IN".equals(op)) {
-                    String desc = pmId == null
-                            ? (cleanNote != null ? cleanChannel + " - " + cleanNote : "Cash In via " + cleanChannel)
-                            : cleanNote;
-                    return walletService.cashIn(ref, wallet.getWalletId(), pmId, amount, desc);
-                } else if ("CASH_OUT".equals(op)) {
-                    String desc = pmId == null
-                            ? (cleanNote != null ? cleanChannel + " - " + cleanNote : "Cash Out to " + cleanChannel)
-                            : cleanNote;
-                    String cleanPin = rawPin != null ? rawPin.trim() : "";
-                    if (!cleanPin.isEmpty()) {
-                        if (authService != null && user != null) {
-                            verifyPinOrThrow(user.getUserId(), cleanPin);
-                            return walletService.cashOut(ref, wallet.getWalletId(), pmId, amount, MoneyUtil.ZERO, desc);
-                        }
-                        return walletService.cashOutWithPin(
-                                ref, wallet.getWalletId(), pmId, amount, MoneyUtil.ZERO, desc, cleanPin);
-                    }
-                    return walletService.cashOut(ref, wallet.getWalletId(), pmId, amount, MoneyUtil.ZERO, desc);
-                }
-                throw new IllegalArgumentException("Unsupported cash operation: " + operationType);
-            }
+    public CompletableFuture<Path> exportStatementAsync(Path targetFile) {
+        return overviewPanel.exportStatementAsync(targetFile);
+    }
 
-            @Override
-            protected void done() {
-                btnSubmitCashOp.setEnabled(true);
-                try {
-                    Transaction txn = get();
-                    txtCashAmount.setText("");
-                    txtCashNote.setText("");
-                    String provRef = txn.getProviderReference() != null ? " | Bank Ref: " + txn.getProviderReference() : "";
-                    String provStatus = txn.getProviderStatus() != null ? " [" + txn.getProviderStatus() + "]" : "";
-                    if (txn.getStatus() == TransactionStatus.COMPLETED) {
-                        lblCashFeedback.setForeground(UiTheme.color(UiTheme.ColorRole.SUCCESS));
-                        lblCashFeedback.setText(opLabel + " successful: "
-                                + MoneyUtil.format(txn.getAmount(), txn.getCurrency())
-                                + " (Ref: " + txn.getReferenceNumber() + ")" + provRef + provStatus);
-                        lblStatus.setText(opLabel + " completed" + provStatus);
-                    } else if (txn.getStatus() == TransactionStatus.FAILED) {
-                        lblCashFeedback.setForeground(UiTheme.color(UiTheme.ColorRole.ERROR));
-                        lblCashFeedback.setText(opLabel + " failed/rejected: "
-                                + MoneyUtil.format(txn.getAmount(), txn.getCurrency())
-                                + " (Ref: " + txn.getReferenceNumber() + ")" + provRef + provStatus);
-                        lblStatus.setText(opLabel + " failed" + provStatus);
-                    } else {
-                        lblCashFeedback.setForeground(UiTheme.color(UiTheme.ColorRole.WARNING));
-                        lblCashFeedback.setText(opLabel + " pending settlement: "
-                                + MoneyUtil.format(txn.getAmount(), txn.getCurrency())
-                                + " (Ref: " + txn.getReferenceNumber() + ")" + provRef + provStatus);
-                        lblStatus.setText(opLabel + " pending settlement" + provStatus);
-                    }
-                    refreshDashboardAsync().whenComplete((v, err) -> future.complete(txn));
-                } catch (Exception ex) {
-                    Throwable cause = unwrapCause(ex);
-                    String message = (cause.getMessage() != null && !cause.getMessage().trim().isEmpty())
-                            ? cause.getMessage()
-                            : cause.getClass().getSimpleName();
-                    lblCashFeedback.setForeground(UiTheme.color(UiTheme.ColorRole.ERROR));
-                    lblCashFeedback.setText("Failed: " + message);
-                    lblStatus.setText(opLabel + " failed: " + message);
-                    checkSessionTerminatedOnError(message);
-                    future.completeExceptionally(cause);
-                }
-            }
-        };
-        worker.execute();
-        return future;
+    public CompletableFuture<StatementFileService.LoadedStatement> importStatementAsync(Path sourceFile) {
+        return overviewPanel.importStatementAsync(sourceFile);
+    }
+
+    public CompletableFuture<Path> exportSelectedReceiptAsync(Path targetFile) {
+        return overviewPanel.exportSelectedReceiptAsync(targetFile);
+    }
+
+    public CompletableFuture<Void> applyHistoryFiltersAsync(TransactionFilter filter) {
+        return overviewPanel.applyHistoryFiltersAsync(filter);
+    }
+
+    public CompletableFuture<Void> clearHistoryFiltersAsync() {
+        return overviewPanel.clearHistoryFiltersAsync();
+    }
+
+    public CompletableFuture<Transaction> createRepeatDraftForSelectedAsync() {
+        return overviewPanel.createRepeatDraftForSelectedAsync();
+    }
+
+    public String getSelectedPaymentMethodId() {
+        return cashInOutPanel != null ? cashInOutPanel.getSelectedPaymentMethodId() : null;
+    }
+
+    public Transaction getSelectedTransactionForReceipt() {
+        return overviewPanel != null ? overviewPanel.getSelectedTransaction() : null;
     }
 
     private boolean ensureActiveSessionForInteraction() {
@@ -833,248 +629,13 @@ public class Main extends JFrame {
         if (!ensureActiveSessionForInteraction()) {
             return;
         }
-        refreshDashboardAsync().whenComplete((v, err) -> runOnEdt(() -> {
+        refreshDashboardAsync().whenComplete((v, err) -> UiSupport.runOnEdt(() -> {
             if (!logoutHandled && currentState == DashboardState.ERROR) {
-                String msg = lblErrorState != null ? lblErrorState.getText() : "Unable to load wallet data.";
+                JLabel errorLabel = overviewPanel.getErrorStateLabel();
+                String msg = errorLabel != null ? errorLabel.getText() : "Unable to load wallet data.";
                 showDialogMessage(this, "Dashboard Refresh Error", msg, JOptionPane.ERROR_MESSAGE);
             }
         }));
-    }
-
-    private void handleInteractiveCashSubmit() {
-        if (!ensureActiveSessionForInteraction()) {
-            return;
-        }
-
-        String op = (String) cmbCashOperation.getSelectedItem();
-        String opLabel = "CASH_OUT".equals(op) ? "Cash Out" : "Cash In";
-        String channel = (String) cmbCashChannel.getSelectedItem();
-        String amountText = txtCashAmount.getText() != null ? txtCashAmount.getText().trim() : "";
-        String note = txtCashNote.getText() != null ? txtCashNote.getText().trim() : "";
-        String pin = new String(txtCashPin.getPassword()).trim();
-
-        BigDecimal parsedAmount;
-        try {
-            if (amountText.isEmpty()) {
-                throw new IllegalArgumentException("Please enter a transaction amount.");
-            }
-            parsedAmount = MoneyUtil.validatePositiveAmount(MoneyUtil.parse(amountText));
-        } catch (RuntimeException ex) {
-            String msg = extractErrorMessage(ex);
-            lblCashFeedback.setForeground(UiTheme.color(UiTheme.ColorRole.ERROR));
-            lblCashFeedback.setText("Failed: " + msg);
-            lblStatus.setText(opLabel + " validation failed: " + msg);
-            showDialogMessage(this, "Invalid Amount", msg, JOptionPane.ERROR_MESSAGE);
-            txtCashAmount.requestFocusInWindow();
-            return;
-        }
-
-        OtogConfig config = OtogConfig.getInstance();
-        if ("CASH_OUT".equals(op)) {
-            if (authService != null && !cachedHasPin) {
-                txtCashPin.setText("");
-                promptPinSetupIfMissing("A Transaction PIN is required before making a Cash Out.");
-                return;
-            }
-            if (pin.isEmpty()) {
-                String msg = "Please enter your " + config.getPinMinLength() + "-" + config.getPinMaxLength()
-                        + " digit Transaction PIN to authorize Cash Out.";
-                lblCashFeedback.setForeground(UiTheme.color(UiTheme.ColorRole.ERROR));
-                lblCashFeedback.setText("Failed: " + msg);
-                showDialogMessage(this, "PIN Required", msg, JOptionPane.WARNING_MESSAGE);
-                txtCashPin.requestFocusInWindow();
-                return;
-            }
-        }
-
-        txtCashPin.setText("");
-        StringBuilder confirmMsg = new StringBuilder();
-        confirmMsg.append("Operation: ").append(opLabel).append("\n");
-        confirmMsg.append("Channel: ").append(channel != null ? channel : "OTOG Partner").append("\n");
-        confirmMsg.append("Amount: ").append(MoneyUtil.format(parsedAmount, config.getDefaultCurrency()));
-        if (!note.isEmpty()) {
-            confirmMsg.append("\nNote: ").append(note);
-        }
-        int choice = showConfirmDialog(
-                this,
-                "Confirm " + opLabel,
-                confirmMsg.toString(),
-                JOptionPane.OK_CANCEL_OPTION,
-                JOptionPane.QUESTION_MESSAGE
-        );
-        if (choice != JOptionPane.OK_OPTION) {
-            lblCashFeedback.setForeground(UiTheme.color(UiTheme.ColorRole.MUTED));
-            lblCashFeedback.setText(opLabel + " cancelled.");
-            return;
-        }
-
-        submitCashOperationAsync(op, channel, amountText, note, pin).whenComplete((txn, err) -> runOnEdt(() -> {
-            if (err != null) {
-                if (!logoutHandled) {
-                    Throwable cause = unwrapCause(err);
-                    showDialogMessage(this, opLabel + " Failed", extractErrorMessage(cause), JOptionPane.ERROR_MESSAGE);
-                }
-            } else if (txn != null) {
-                showDialogMessage(
-                        this,
-                        opLabel + " Complete",
-                        opLabel + " successful!\nAmount: "
-                                + MoneyUtil.format(txn.getAmount(), txn.getCurrency())
-                                + "\nReference: " + txn.getReferenceNumber(),
-                        JOptionPane.INFORMATION_MESSAGE
-                );
-            }
-        }));
-    }
-
-    private void handleInteractiveSendMoneySubmit() {
-        if (!ensureActiveSessionForInteraction()) {
-            return;
-        }
-        SessionManager session = SessionManager.getInstance();
-
-        String recipient = txtRecipient.getText() != null ? txtRecipient.getText().trim() : "";
-        String amountText = txtSendAmount.getText() != null ? txtSendAmount.getText().trim() : "";
-        String note = txtSendNote.getText() != null ? txtSendNote.getText().trim() : "";
-        String pin = new String(txtSendPin.getPassword()).trim();
-
-        if (recipient.isEmpty()) {
-            String msg = "Please enter a recipient (mobile number, email, name, or wallet ID).";
-            lblSendFeedback.setForeground(UiTheme.color(UiTheme.ColorRole.ERROR));
-            lblSendFeedback.setText("Transfer failed: " + msg);
-            showDialogMessage(this, "Validation Error", msg, JOptionPane.WARNING_MESSAGE);
-            txtRecipient.requestFocusInWindow();
-            return;
-        }
-
-        BigDecimal parsedAmount;
-        try {
-            if (amountText.isEmpty()) {
-                throw new IllegalArgumentException("Please enter an amount to send.");
-            }
-            parsedAmount = MoneyUtil.validatePositiveAmount(MoneyUtil.parse(amountText));
-        } catch (RuntimeException ex) {
-            String msg = extractErrorMessage(ex);
-            lblSendFeedback.setForeground(UiTheme.color(UiTheme.ColorRole.ERROR));
-            lblSendFeedback.setText("Transfer failed: " + msg);
-            lblStatus.setText("Transfer validation failed: " + msg);
-            showDialogMessage(this, "Invalid Amount", msg, JOptionPane.ERROR_MESSAGE);
-            txtSendAmount.requestFocusInWindow();
-            return;
-        }
-
-        if (authService != null && !cachedHasPin) {
-            txtSendPin.setText("");
-            promptPinSetupIfMissing("A Transaction PIN is required before sending money.");
-            return;
-        }
-
-        OtogConfig config = OtogConfig.getInstance();
-        if (pin.isEmpty()) {
-            String msg = "Please enter your " + config.getPinMinLength() + "-" + config.getPinMaxLength()
-                    + " digit Transaction PIN to authorize Send Money.";
-            lblSendFeedback.setForeground(UiTheme.color(UiTheme.ColorRole.ERROR));
-            lblSendFeedback.setText("Transfer failed: " + msg);
-            showDialogMessage(this, "PIN Required", msg, JOptionPane.WARNING_MESSAGE);
-            txtSendPin.requestFocusInWindow();
-            return;
-        }
-
-        txtSendPin.setText("");
-        User currentUser = session.getCurrentUser();
-        SendMoneyService sendMoneyService = walletService.createSendMoneyService(authService);
-        if (sendMoneyService != null && currentUser != null) {
-            btnSubmitSendMoney.setEnabled(false);
-            lblSendFeedback.setForeground(UiTheme.color(UiTheme.ColorRole.INFO));
-            lblSendFeedback.setText("Preparing transfer confirmation...");
-            lblStatus.setText("Validating recipient and balance...");
-
-            new SwingWorker<SendMoneyService.SendMoneyPreview, Void>() {
-                @Override
-                protected SendMoneyService.SendMoneyPreview doInBackground() {
-                    return sendMoneyService.preview(currentUser.getUserId(), recipient, parsedAmount, null, note);
-                }
-
-                @Override
-                protected void done() {
-                    btnSubmitSendMoney.setEnabled(true);
-                    try {
-                        SendMoneyService.SendMoneyPreview preview = get();
-                        JTextArea previewArea = new JTextArea(preview.toConfirmationText());
-                        previewArea.setEditable(false);
-                        previewArea.setFont(UiTheme.font(UiTheme.FontRole.MONO));
-                        previewArea.setMargin(new Insets(6, 8, 6, 8));
-                        JScrollPane previewScroll = new JScrollPane(previewArea);
-                        previewScroll.setPreferredSize(new Dimension(400, 220));
-                        int choice = showConfirmDialog(
-                                Main.this,
-                                "Confirm Send Money",
-                                previewScroll,
-                                JOptionPane.OK_CANCEL_OPTION,
-                                JOptionPane.QUESTION_MESSAGE
-                        );
-                        if (choice != JOptionPane.OK_OPTION) {
-                            lblSendFeedback.setForeground(UiTheme.color(UiTheme.ColorRole.MUTED));
-                            lblSendFeedback.setText("Transfer cancelled.");
-                            lblStatus.setText("Transfer cancelled");
-                            return;
-                        }
-                        dispatchConfirmedSendMoney(preview.getReferenceNumber(), recipient, amountText, note, pin);
-                    } catch (Exception ex) {
-                        Throwable cause = unwrapCause(ex);
-                        String message = extractErrorMessage(cause);
-                        lblSendFeedback.setForeground(UiTheme.color(UiTheme.ColorRole.ERROR));
-                        lblSendFeedback.setText("Transfer failed: " + message);
-                        lblStatus.setText("Transfer failed: " + message);
-                        showDialogMessage(Main.this, "Transfer Validation Failed", message, JOptionPane.ERROR_MESSAGE);
-                    }
-                }
-            }.execute();
-        } else {
-            StringBuilder confirmMsg = new StringBuilder();
-            confirmMsg.append("Recipient: ").append(recipient).append("\n");
-            confirmMsg.append("Amount: ").append(MoneyUtil.format(parsedAmount, config.getDefaultCurrency()));
-            if (!note.isEmpty()) {
-                confirmMsg.append("\nNote: ").append(note);
-            }
-            int choice = showConfirmDialog(
-                    this,
-                    "Confirm Send Money",
-                    confirmMsg.toString(),
-                    JOptionPane.OK_CANCEL_OPTION,
-                    JOptionPane.QUESTION_MESSAGE
-            );
-            if (choice != JOptionPane.OK_OPTION) {
-                lblSendFeedback.setForeground(UiTheme.color(UiTheme.ColorRole.MUTED));
-                lblSendFeedback.setText("Transfer cancelled.");
-                lblStatus.setText("Transfer cancelled");
-                return;
-            }
-            dispatchConfirmedSendMoney(null, recipient, amountText, note, pin);
-        }
-    }
-
-    private void dispatchConfirmedSendMoney(String explicitReference, String recipient,
-                                            String amountText, String note, String pin) {
-        executeSendMoneyAsync(explicitReference, recipient, amountText, note, pin)
-                .whenComplete((txn, err) -> runOnEdt(() -> {
-                    if (err != null) {
-                        if (!logoutHandled) {
-                            Throwable cause = unwrapCause(err);
-                            showDialogMessage(this, "Transfer Failed", extractErrorMessage(cause),
-                                    JOptionPane.ERROR_MESSAGE);
-                        }
-                    } else if (txn != null) {
-                        showDialogMessage(
-                                this,
-                                "Transfer Complete",
-                                "Send Money successful!\nAmount: "
-                                        + MoneyUtil.format(txn.getAmount(), txn.getCurrency())
-                                        + "\nReference: " + txn.getReferenceNumber(),
-                                JOptionPane.INFORMATION_MESSAGE
-                        );
-                    }
-                }));
     }
 
     private void promptPinSetupIfMissing(String message) {
@@ -1087,168 +648,6 @@ public class Main extends JFrame {
         );
         if (choice == JOptionPane.YES_OPTION) {
             openPinSettingsDialog();
-        }
-    }
-
-    public CompletableFuture<Transaction> submitStatusLookupAsync(String referenceNumber) {
-        CompletableFuture<Transaction> future = new CompletableFuture<>();
-        runOnEdt(() -> {
-            if (btnCheckStatus != null) {
-                btnCheckStatus.setEnabled(false);
-            }
-            lblStatus.setText("Checking bank status for " + referenceNumber + "...");
-        });
-
-        SwingWorker<Transaction, Void> worker = new SwingWorker<>() {
-            @Override
-            protected Transaction doInBackground() {
-                SessionManager.getInstance().requireAuthentication();
-                return walletService.statusLookup(referenceNumber);
-            }
-
-            @Override
-            protected void done() {
-                updateTableActionButtonsState();
-                try {
-                    Transaction txn = get();
-                    String provRef = txn.getProviderReference() != null ? " | Bank Ref: " + txn.getProviderReference() : "";
-                    String provStatus = txn.getProviderStatus() != null ? " [" + txn.getProviderStatus() + "]" : "";
-                    Color color;
-                    String msg;
-                    if (txn.getStatus() == TransactionStatus.COMPLETED) {
-                        color = UiTheme.color(UiTheme.ColorRole.SUCCESS);
-                        msg = "Status lookup settled COMPLETED: "
-                                + txn.getReferenceNumber() + provRef + provStatus;
-                    } else if (txn.getStatus() == TransactionStatus.FAILED) {
-                        color = UiTheme.color(UiTheme.ColorRole.ERROR);
-                        msg = "Status lookup confirmed FAILED: "
-                                + txn.getReferenceNumber() + provRef + provStatus;
-                    } else {
-                        color = UiTheme.color(UiTheme.ColorRole.WARNING);
-                        msg = "Status lookup remains PENDING: "
-                                + txn.getReferenceNumber() + provRef + provStatus;
-                    }
-                    lblCashFeedback.setForeground(color);
-                    lblCashFeedback.setText(msg);
-                    if (lblActivityFeedback != null) {
-                        lblActivityFeedback.setForeground(color);
-                        lblActivityFeedback.setText(msg);
-                    }
-                    String syncStatusText = "Status sync: " + txn.getStatus() + provStatus;
-                    lblStatus.setText(syncStatusText);
-                    refreshDashboardAsync().whenComplete((v, err) -> {
-                        runOnEdt(() -> lblStatus.setText(syncStatusText));
-                        future.complete(txn);
-                    });
-                } catch (Exception ex) {
-                    Throwable cause = unwrapCause(ex);
-                    String message = (cause.getMessage() != null && !cause.getMessage().trim().isEmpty())
-                            ? cause.getMessage()
-                            : cause.getClass().getSimpleName();
-                    if (lblActivityFeedback != null) {
-                        lblActivityFeedback.setForeground(UiTheme.color(UiTheme.ColorRole.ERROR));
-                        lblActivityFeedback.setText("Status lookup failed: " + message);
-                    }
-                    lblStatus.setText("Status lookup failed: " + message);
-                    future.completeExceptionally(cause);
-                }
-            }
-        };
-        worker.execute();
-        return future;
-    }
-
-    public CompletableFuture<Transaction> submitSendMoneyAsync(String recipient, String amountText, String note) {
-        return submitSendMoneyAsync(recipient, amountText, note, null);
-    }
-
-    public CompletableFuture<Transaction> submitSendMoneyAsync(String recipient, String amountText,
-                                                              String note, String rawPin) {
-        return executeSendMoneyAsync(null, recipient, amountText, note, rawPin);
-    }
-
-    private CompletableFuture<Transaction> executeSendMoneyAsync(String explicitReference, String recipient,
-                                                               String amountText, String note, String rawPin) {
-        CompletableFuture<Transaction> future = new CompletableFuture<>();
-
-        runOnEdt(() -> {
-            btnSubmitSendMoney.setEnabled(false);
-            lblSendFeedback.setForeground(UiTheme.color(UiTheme.ColorRole.INFO));
-            lblSendFeedback.setText("Sending money...");
-            lblStatus.setText("Processing transfer...");
-        });
-
-        SwingWorker<Transaction, Void> worker = new SwingWorker<>() {
-            @Override
-            protected Transaction doInBackground() {
-                lastPaymentExecutedOffEdt = !SwingUtilities.isEventDispatchThread();
-                SessionManager session = SessionManager.getInstance();
-                session.requireAuthentication();
-                User user = session.getCurrentUser();
-                Wallet wallet = session.getCurrentWallet();
-                if (wallet == null) {
-                    wallet = session.refreshWallet(walletService);
-                }
-
-                if (recipient == null || recipient.trim().isEmpty()) {
-                    throw new IllegalArgumentException("Recipient identifier is required.");
-                }
-                BigDecimal amount = MoneyUtil.validatePositiveAmount(MoneyUtil.parse(amountText));
-                String ref = (explicitReference != null && !explicitReference.trim().isEmpty())
-                        ? explicitReference.trim()
-                        : IdGenerator.nextReferenceNumber();
-                String cleanPin = rawPin != null ? rawPin.trim() : "";
-                if (!cleanPin.isEmpty()) {
-                    if (authService != null && user != null) {
-                        verifyPinOrThrow(user.getUserId(), cleanPin);
-                        return walletService.sendMoneyToRecipient(
-                                ref, wallet.getWalletId(), recipient.trim(), amount, MoneyUtil.ZERO, note);
-                    }
-                    return walletService.sendMoneyToRecipientWithPin(
-                            ref, wallet.getWalletId(), recipient.trim(), amount, MoneyUtil.ZERO, note, cleanPin);
-                }
-                return walletService.sendMoneyToRecipient(
-                        ref, wallet.getWalletId(), recipient.trim(), amount, MoneyUtil.ZERO, note);
-            }
-
-            @Override
-            protected void done() {
-                btnSubmitSendMoney.setEnabled(true);
-                try {
-                    Transaction txn = get();
-                    txtSendAmount.setText("");
-                    txtSendNote.setText("");
-                    lblSendFeedback.setForeground(UiTheme.color(UiTheme.ColorRole.SUCCESS));
-                    lblSendFeedback.setText("Transfer successful: "
-                            + MoneyUtil.format(txn.getAmount(), txn.getCurrency())
-                            + " (Ref: " + txn.getReferenceNumber() + ")");
-                    refreshDashboardAsync().whenComplete((v, err) -> future.complete(txn));
-                } catch (Exception ex) {
-                    Throwable cause = unwrapCause(ex);
-                    String message = extractErrorMessage(cause);
-                    lblSendFeedback.setForeground(UiTheme.color(UiTheme.ColorRole.ERROR));
-                    lblSendFeedback.setText("Transfer failed: " + message);
-                    lblStatus.setText("Transfer failed: " + message);
-                    checkSessionTerminatedOnError(message);
-                    future.completeExceptionally(cause);
-                }
-            }
-        };
-        worker.execute();
-        return future;
-    }
-
-    private void verifyPinOrThrow(String userId, String rawPin) {
-        try {
-            if (!authService.verifyPin(userId, rawPin)) {
-                SessionManager session = SessionManager.getInstance();
-                if (session.isLockedOutByPin()) {
-                    throw new WalletException("Session terminated after maximum failed PIN attempts.");
-                }
-                throw new WalletException("Invalid transaction PIN. Outgoing payment blocked.");
-            }
-        } catch (SecurityException ex) {
-            throw new WalletException(ex.getMessage(), ex);
         }
     }
 
@@ -1282,167 +681,28 @@ public class Main extends JFrame {
         dialog.setVisible(true);
     }
 
-    private void handleInteractiveExportStatement() {
-        if (!ensureActiveSessionForInteraction()) {
+    private void applyRepeatDraftToUi(Transaction draft) {
+        if (draft == null) {
             return;
         }
-        JFileChooser chooser = new JFileChooser();
-        chooser.setDialogTitle("Export OTOG Wallet Statement");
-        FileNameExtensionFilter txtFilter = new FileNameExtensionFilter("OTOG Statement (*.txt)", "txt");
-        FileNameExtensionFilter csvFilter = new FileNameExtensionFilter("CSV Statement (*.csv)", "csv");
-        chooser.addChoosableFileFilter(txtFilter);
-        chooser.addChoosableFileFilter(csvFilter);
-        chooser.setFileFilter(txtFilter);
-        chooser.setSelectedFile(new File(OtogConfig.getInstance().getStatementDefaultFileName()));
-        if (chooser.showSaveDialog(this) == JFileChooser.APPROVE_OPTION) {
-            Path selectedPath = chooser.getSelectedFile().toPath();
-            if (chooser.getFileFilter() == csvFilter
-                    && !selectedPath.getFileName().toString().toLowerCase(Locale.ROOT).endsWith(".csv")) {
-                selectedPath = selectedPath.resolveSibling(selectedPath.getFileName() + ".csv");
+        if (draft.getType() == TransactionType.SEND_MONEY || draft instanceof SendMoneyTransaction) {
+            sendMoneyPanel.loadRepeatDraft(draft);
+            lblStatus.setText("Repeat Send Money draft prepared: " + draft.getReferenceNumber());
+            navigateToTab("Send Money");
+        } else if (draft instanceof CashInOutTransaction
+                || draft.getType() == TransactionType.CASH_IN
+                || draft.getType() == TransactionType.CASH_OUT) {
+            String op = draft.getType() == TransactionType.CASH_OUT ? "CASH_OUT" : "CASH_IN";
+            cashInOutPanel.loadRepeatDraft(draft);
+            lblStatus.setText("Repeat " + op + " draft prepared: " + draft.getReferenceNumber());
+            navigateToTab("Cash In / Out");
+        } else if (draft instanceof BillPaymentTransaction || draft.getType() == TransactionType.BILL_PAYMENT) {
+            if (payBillsPanel != null) {
+                payBillsPanel.loadRepeatDraft(draft);
             }
-            exportStatementAsync(selectedPath);
+            lblStatus.setText("Repeat Bill Payment draft prepared: " + draft.getReferenceNumber());
+            navigateToTab("Pay Bills");
         }
-    }
-
-    private void handleInteractiveLoadStatement() {
-        if (!ensureActiveSessionForInteraction()) {
-            return;
-        }
-        JFileChooser chooser = new JFileChooser();
-        chooser.setDialogTitle("Load Saved OTOG Wallet Statement");
-        chooser.addChoosableFileFilter(new FileNameExtensionFilter("OTOG Statement Files (*.txt, *.csv)", "txt", "csv"));
-        if (chooser.showOpenDialog(this) == JFileChooser.APPROVE_OPTION) {
-            importStatementAsync(chooser.getSelectedFile().toPath()).thenAccept(stmt -> {
-                if (stmt != null) {
-                    runOnEdt(() -> {
-                        JTextArea area = new JTextArea(stmt.toDisplaySummary(), 18, 68);
-                        area.setEditable(false);
-                        area.setFont(UiTheme.font(UiTheme.FontRole.MONO));
-                        JOptionPane.showMessageDialog(this, new JScrollPane(area),
-                                "Loaded Wallet Statement \u2014 " + stmt.getMaskedWalletId(),
-                                JOptionPane.INFORMATION_MESSAGE);
-                    });
-                }
-            });
-        }
-    }
-
-    private void handleInteractiveExportReceipt() {
-        Transaction selected = getSelectedTransactionForReceipt();
-        if (selected == null) {
-            showDialogMessage(this,
-                    "No Transaction Selected",
-                    "Please select a transaction row to save its receipt file.",
-                    JOptionPane.INFORMATION_MESSAGE);
-            return;
-        }
-        JFileChooser chooser = new JFileChooser();
-        chooser.setDialogTitle("Save Transaction Receipt");
-        FileNameExtensionFilter txtFilter = new FileNameExtensionFilter("OTOG Receipt (*.txt)", "txt");
-        FileNameExtensionFilter csvFilter = new FileNameExtensionFilter("CSV Receipt (*.csv)", "csv");
-        chooser.addChoosableFileFilter(txtFilter);
-        chooser.addChoosableFileFilter(csvFilter);
-        chooser.setFileFilter(txtFilter);
-        chooser.setSelectedFile(new File(
-                OtogConfig.getInstance().getReceiptFilePrefix() + selected.getReferenceNumber() + ".txt"));
-        if (chooser.showSaveDialog(this) == JFileChooser.APPROVE_OPTION) {
-            Path selectedPath = chooser.getSelectedFile().toPath();
-            if (chooser.getFileFilter() == csvFilter
-                    && !selectedPath.getFileName().toString().toLowerCase(Locale.ROOT).endsWith(".csv")) {
-                selectedPath = selectedPath.resolveSibling(selectedPath.getFileName() + ".csv");
-            }
-            exportSelectedReceiptAsync(selectedPath);
-        }
-    }
-
-    public CompletableFuture<Path> exportStatementAsync(Path targetFile) {
-        CompletableFuture<Path> future = new CompletableFuture<>();
-        User user = SessionManager.getInstance().getCurrentUser();
-        Wallet wallet = SessionManager.getInstance().getCurrentWallet();
-        List<Transaction> snapshotTxns = new ArrayList<>(loadedTransactions);
-
-        new SwingWorker<Path, Void>() {
-            @Override
-            protected Path doInBackground() {
-                Wallet latestWallet = (wallet != null && user != null)
-                        ? walletService.getWalletByUserId(user.getUserId())
-                        : wallet;
-                return statementFileService.exportWalletStatement(user, latestWallet, snapshotTxns, targetFile);
-            }
-
-            @Override
-            protected void done() {
-                try {
-                    Path saved = get();
-                    lblStatus.setText("Statement exported to " + saved.getFileName());
-                    if (lblActivityFeedback != null) {
-                        lblActivityFeedback.setForeground(UiTheme.color(UiTheme.ColorRole.SUCCESS));
-                        lblActivityFeedback.setText("Exported statement: " + saved.getFileName());
-                    }
-                    future.complete(saved);
-                } catch (Exception ex) {
-                    Throwable cause = unwrapCause(ex);
-                    String msg = extractErrorMessage(cause);
-                    lblStatus.setText("Statement export failed: " + msg);
-                    future.completeExceptionally(cause);
-                }
-            }
-        }.execute();
-        return future;
-    }
-
-    public CompletableFuture<StatementFileService.LoadedStatement> importStatementAsync(Path sourceFile) {
-        CompletableFuture<StatementFileService.LoadedStatement> future = new CompletableFuture<>();
-        new SwingWorker<StatementFileService.LoadedStatement, Void>() {
-            @Override
-            protected StatementFileService.LoadedStatement doInBackground() {
-                return statementFileService.importWalletStatement(sourceFile);
-            }
-
-            @Override
-            protected void done() {
-                try {
-                    StatementFileService.LoadedStatement loaded = get();
-                    lblStatus.setText("Loaded statement (" + loaded.getEntries().size() + " transactions).");
-                    if (lblActivityFeedback != null) {
-                        lblActivityFeedback.setForeground(UiTheme.color(UiTheme.ColorRole.SUCCESS));
-                        lblActivityFeedback.setText("Loaded statement for wallet " + loaded.getMaskedWalletId());
-                    }
-                    future.complete(loaded);
-                } catch (Exception ex) {
-                    Throwable cause = unwrapCause(ex);
-                    String msg = extractErrorMessage(cause);
-                    lblStatus.setText("Statement load failed: " + msg);
-                    future.completeExceptionally(cause);
-                }
-            }
-        }.execute();
-        return future;
-    }
-
-    public CompletableFuture<Path> exportSelectedReceiptAsync(Path targetFile) {
-        CompletableFuture<Path> future = new CompletableFuture<>();
-        Transaction selected = getSelectedTransactionForReceipt();
-        new SwingWorker<Path, Void>() {
-            @Override
-            protected Path doInBackground() {
-                return statementFileService.exportReceipt(selected, targetFile);
-            }
-
-            @Override
-            protected void done() {
-                try {
-                    Path saved = get();
-                    lblStatus.setText("Receipt saved to " + saved.getFileName());
-                    future.complete(saved);
-                } catch (Exception ex) {
-                    Throwable cause = unwrapCause(ex);
-                    lblStatus.setText("Receipt save failed: " + extractErrorMessage(cause));
-                    future.completeExceptionally(cause);
-                }
-            }
-        }.execute();
-        return future;
     }
 
     private void startSessionMonitor() {
@@ -1477,388 +737,6 @@ public class Main extends JFrame {
         dispose();
         if (onLogoutCallback != null) {
             SwingUtilities.invokeLater(onLogoutCallback);
-        }
-    }
-
-    private void setLoadingState(String message) {
-        lblLoadingState.setText(message);
-        activityCardLayout.show(activityCardPanel, DashboardState.LOADING.name());
-        lblStatus.setText(message);
-    }
-
-    private void populatePaymentMethodsCombo(List<PaymentMethod> paymentMethods) {
-        if (cmbPaymentMethod == null) {
-            return;
-        }
-        String prevSelectedId = getSelectedPaymentMethodId();
-        List<PaymentMethod> activeMethods = new ArrayList<>();
-        if (paymentMethods != null) {
-            for (PaymentMethod pm : paymentMethods) {
-                if (pm.getStatus() == PaymentMethodStatus.ACTIVE) {
-                    activeMethods.add(pm);
-                }
-            }
-        }
-        this.loadedPaymentMethods = Collections.unmodifiableList(activeMethods);
-        cmbPaymentMethod.removeAllItems();
-        cmbPaymentMethod.addItem("Use Selected Channel");
-        int defaultIndex = 0;
-        int prevIndex = -1;
-        for (int i = 0; i < activeMethods.size(); i++) {
-            PaymentMethod pm = activeMethods.get(i);
-            String label = pm.getProviderName() + " (" + pm.getAccountNumber() + ")"
-                    + (pm.isDefault() ? " [Default]" : "");
-            cmbPaymentMethod.addItem(label);
-            if (prevSelectedId != null && prevSelectedId.equals(pm.getPaymentMethodId())) {
-                prevIndex = i + 1;
-            } else if (pm.isDefault() && defaultIndex == 0) {
-                defaultIndex = i + 1;
-            }
-        }
-        cmbPaymentMethod.setSelectedIndex(prevIndex >= 0 ? prevIndex : defaultIndex);
-        if (cmbCashChannel != null) {
-            cmbCashChannel.setEnabled(cmbPaymentMethod.getSelectedIndex() <= 0);
-        }
-    }
-
-    public String getSelectedPaymentMethodId() {
-        if (cmbPaymentMethod == null) {
-            return null;
-        }
-        int idx = cmbPaymentMethod.getSelectedIndex();
-        if (idx <= 0 || idx - 1 >= loadedPaymentMethods.size()) {
-            return null;
-        }
-        return loadedPaymentMethods.get(idx - 1).getPaymentMethodId();
-    }
-
-    private void populateTransactionsTable(String walletId, List<Transaction> transactions) {
-        if (transactions == null || transactions.isEmpty()) {
-            this.loadedTransactions = Collections.emptyList();
-        } else {
-            List<Transaction> sorted = new ArrayList<>(transactions);
-            Collections.sort(sorted);
-            this.loadedTransactions = Collections.unmodifiableList(sorted);
-        }
-        transactionsTableModel.setRowCount(0);
-        for (Transaction txn : this.loadedTransactions) {
-            String date = txn.getCreatedAt() != null ? txn.getCreatedAt().format(dateFormatter) : "-";
-            String direction = resolveDirection(walletId, txn);
-            String statusText = txn.getStatus() != null ? txn.getStatus().name() : "-";
-            if (txn.getProviderStatus() != null && !txn.getProviderStatus().isEmpty()) {
-                statusText += " [" + txn.getProviderStatus() + "]";
-            }
-            String provRef = (txn.getProviderReference() != null && !txn.getProviderReference().isEmpty())
-                    ? txn.getProviderReference() : "-";
-            transactionsTableModel.addRow(new Object[]{
-                    date,
-                    txn.getReferenceNumber(),
-                    txn.getType() != null ? txn.getType().name() : "-",
-                    direction,
-                    MoneyUtil.format(txn.getAmount(), txn.getCurrency()),
-                    MoneyUtil.format(txn.getFee(), txn.getCurrency()),
-                    statusText,
-                    provRef,
-                    txn.getDescription() != null ? txn.getDescription() : ""
-            });
-        }
-        updateTableActionButtonsState();
-    }
-
-    private void updateTableActionButtonsState() {
-        Transaction selected = getSelectedTransactionForReceipt();
-        if (btnCheckStatus != null) {
-            boolean isCashTxn = selected != null
-                    && (selected.getType() == TransactionType.CASH_IN
-                    || selected.getType() == TransactionType.CASH_OUT
-                    || selected.getType() == TransactionType.BILL_PAYMENT);
-            btnCheckStatus.setEnabled(isCashTxn);
-        }
-        if (btnRepeatDraft != null) {
-            boolean canRepeat = selected != null
-                    && (selected.getType() == TransactionType.SEND_MONEY
-                    || selected.getType() == TransactionType.CASH_IN
-                    || selected.getType() == TransactionType.CASH_OUT
-                    || selected.getType() == TransactionType.BILL_PAYMENT);
-            btnRepeatDraft.setEnabled(canRepeat);
-        }
-    }
-
-    private static Map<TransactionType, String> createDirectionMap() {
-        EnumMap<TransactionType, String> map = new EnumMap<>(TransactionType.class);
-        map.put(TransactionType.CASH_IN, "IN (+)");
-        map.put(TransactionType.CASH_OUT, "OUT (-)");
-        map.put(TransactionType.BILL_PAYMENT, "OUT (-)");
-        map.put(TransactionType.LOAN_DISBURSEMENT, "IN (+)");
-        map.put(TransactionType.LOAN_REPAYMENT, "OUT (-)");
-        map.put(TransactionType.INVESTMENT_BUY, "OUT (-)");
-        map.put(TransactionType.INVESTMENT_REDEEM, "IN (+)");
-        return Collections.unmodifiableMap(map);
-    }
-
-    private String resolveDirection(String walletId, Transaction txn) {
-        if (txn.getType() != null) {
-            String fixedDirection = FIXED_DIRECTION_BY_TYPE.get(txn.getType());
-            if (fixedDirection != null) {
-                return fixedDirection;
-            }
-        }
-        if (walletId != null && walletId.equals(txn.getTargetWalletId())
-                && !walletId.equals(txn.getSourceWalletId())) {
-            return "IN (+)";
-        }
-        if (walletId != null && walletId.equals(txn.getSourceWalletId())) {
-            return "OUT (-)";
-        }
-        return "-";
-    }
-
-    /** Resolves the currently selected table row via view-to-model mapping, or {@code null} if none. */
-    public Transaction getSelectedTransactionForReceipt() {
-        if (tblTransactions == null) {
-            return null;
-        }
-        int viewRow = tblTransactions.getSelectedRow();
-        int row = viewRow >= 0 ? tblTransactions.convertRowIndexToModel(viewRow) : -1;
-        if (row < 0 || row >= loadedTransactions.size()) {
-            return null;
-        }
-        return loadedTransactions.get(row);
-    }
-
-    private void lookupSelectedTransactionStatus() {
-        Transaction txn = getSelectedTransactionForReceipt();
-        if (txn == null) {
-            JOptionPane.showMessageDialog(this,
-                    "Please select a transaction row to check its bank status.",
-                    "No Transaction Selected",
-                    JOptionPane.INFORMATION_MESSAGE);
-            return;
-        }
-        if (txn.getType() != TransactionType.CASH_IN
-                && txn.getType() != TransactionType.CASH_OUT
-                && txn.getType() != TransactionType.BILL_PAYMENT) {
-            String msg = "Status lookup is only available for Cash In / Cash Out and Bill Payment transactions.";
-            if (lblActivityFeedback != null) {
-                lblActivityFeedback.setForeground(UiTheme.color(UiTheme.ColorRole.WARNING));
-                lblActivityFeedback.setText(msg);
-            }
-            lblStatus.setText(msg);
-            return;
-        }
-        submitStatusLookupAsync(txn.getReferenceNumber());
-    }
-
-    private void showSelectedReceipt() {
-        Transaction txn = getSelectedTransactionForReceipt();
-        if (txn == null) {
-            showDialogMessage(this,
-                    "No Transaction Selected",
-                    "Please select a transaction row to view its receipt.",
-                    JOptionPane.INFORMATION_MESSAGE);
-            return;
-        }
-        Wallet wallet = SessionManager.getInstance().getCurrentWallet();
-        String walletId = wallet != null ? wallet.getWalletId() : null;
-        String refKey = txn.getReferenceNumber() != null ? txn.getReferenceNumber() : txn.getTransactionId();
-
-        new SwingWorker<String, Void>() {
-            @Override
-            protected String doInBackground() {
-                if (walletId != null && refKey != null) {
-                    return walletService.getTransactionReceipt(walletId, refKey);
-                }
-                return txn.getReceipt();
-            }
-
-            @Override
-            protected void done() {
-                try {
-                    String formattedReceipt = get();
-                    JTextArea area = new JTextArea(formattedReceipt);
-                    area.setEditable(false);
-                    area.setFont(UiTheme.font(UiTheme.FontRole.MONO));
-                    area.setMargin(new Insets(8, 10, 8, 10));
-                    JScrollPane scroll = new JScrollPane(area);
-                    scroll.setPreferredSize(OtogConfig.getInstance().getUiDimension(
-                            "ui.receipt.width", "ui.receipt.height", 460, 360));
-                    JOptionPane.showMessageDialog(Main.this, scroll,
-                            "Transaction Receipt — " + txn.getReferenceNumber(),
-                            JOptionPane.INFORMATION_MESSAGE);
-                } catch (Exception ex) {
-                    Throwable cause = unwrapCause(ex);
-                    showDialogMessage(Main.this, "Receipt Error", extractErrorMessage(cause),
-                            JOptionPane.ERROR_MESSAGE);
-                }
-            }
-        }.execute();
-    }
-
-    private void handleApplyHistoryFilters() {
-        if (!ensureActiveSessionForInteraction()) {
-            return;
-        }
-        try {
-            TransactionFilter.Builder builder = TransactionFilter.builder();
-            String selectedType = cmbFilterType != null ? (String) cmbFilterType.getSelectedItem() : null;
-            if (selectedType != null && !OverviewPanel.ALL_TYPES_OPTION.equals(selectedType)) {
-                builder.type(TransactionType.valueOf(selectedType));
-            }
-            String selectedStatus = cmbFilterStatus != null ? (String) cmbFilterStatus.getSelectedItem() : null;
-            if (selectedStatus != null && !OverviewPanel.ALL_STATUSES_OPTION.equals(selectedStatus)) {
-                builder.status(TransactionStatus.valueOf(selectedStatus));
-            }
-            String fromRaw = txtFilterFromDate != null && txtFilterFromDate.getText() != null
-                    ? txtFilterFromDate.getText().trim() : "";
-            String toRaw = txtFilterToDate != null && txtFilterToDate.getText() != null
-                    ? txtFilterToDate.getText().trim() : "";
-            if (!fromRaw.isEmpty()) {
-                builder.fromDate(LocalDate.parse(fromRaw));
-            }
-            if (!toRaw.isEmpty()) {
-                builder.toDate(LocalDate.parse(toRaw));
-            }
-            applyHistoryFiltersAsync(builder.build());
-        } catch (DateTimeParseException ex) {
-            String msg = "Invalid date format. Please use YYYY-MM-DD (e.g., 2026-11-19).";
-            lblStatus.setText("Filter validation failed: " + msg);
-            showDialogMessage(this, "Invalid Date Filter", msg, JOptionPane.WARNING_MESSAGE);
-        } catch (IllegalArgumentException ex) {
-            String msg = extractErrorMessage(ex);
-            lblStatus.setText("Filter validation failed: " + msg);
-            showDialogMessage(this, "Invalid History Filter", msg, JOptionPane.WARNING_MESSAGE);
-        }
-    }
-
-    public CompletableFuture<Void> applyHistoryFiltersAsync(TransactionFilter filter) {
-        this.activeHistoryFilter = filter != null ? filter : TransactionFilter.empty();
-        return refreshDashboardAsync();
-    }
-
-    public CompletableFuture<Void> clearHistoryFiltersAsync() {
-        this.activeHistoryFilter = TransactionFilter.empty();
-        runOnEdt(() -> {
-            if (cmbFilterType != null) {
-                cmbFilterType.setSelectedIndex(0);
-            }
-            if (cmbFilterStatus != null) {
-                cmbFilterStatus.setSelectedIndex(0);
-            }
-            if (txtFilterFromDate != null) {
-                txtFilterFromDate.setText("");
-            }
-            if (txtFilterToDate != null) {
-                txtFilterToDate.setText("");
-            }
-        });
-        return refreshDashboardAsync();
-    }
-
-    private void handleRepeatSelectedTransactionDraft() {
-        if (!ensureActiveSessionForInteraction()) {
-            return;
-        }
-        createRepeatDraftForSelectedAsync().whenComplete((draft, err) -> runOnEdt(() -> {
-            if (err != null) {
-                Throwable cause = unwrapCause(err);
-                showDialogMessage(this, "Repeat Draft Failed", extractErrorMessage(cause),
-                        JOptionPane.ERROR_MESSAGE);
-            }
-        }));
-    }
-
-    /**
-     * Clones the currently selected transaction via Prototype ({@code createRepeatTransactionDraft})
-     * with a fresh reference number and pre-fills the matching payment form without auto-submitting.
-     */
-    public CompletableFuture<Transaction> createRepeatDraftForSelectedAsync() {
-        CompletableFuture<Transaction> future = new CompletableFuture<>();
-        Transaction selected = getSelectedTransactionForReceipt();
-        if (selected == null) {
-            future.completeExceptionally(new IllegalStateException("Please select a transaction to repeat."));
-            return future;
-        }
-        Wallet wallet = SessionManager.getInstance().getCurrentWallet();
-        if (wallet == null) {
-            future.completeExceptionally(new IllegalStateException("Active wallet is required."));
-            return future;
-        }
-        String key = selected.getReferenceNumber() != null ? selected.getReferenceNumber() : selected.getTransactionId();
-
-        new SwingWorker<Transaction, Void>() {
-            @Override
-            protected Transaction doInBackground() {
-                SessionManager.getInstance().touchActivity();
-                return walletService.createRepeatTransactionDraft(wallet.getWalletId(), key, null);
-            }
-
-            @Override
-            protected void done() {
-                try {
-                    Transaction draft = get();
-                    applyRepeatDraftToUi(draft);
-                    future.complete(draft);
-                } catch (Exception ex) {
-                    future.completeExceptionally(unwrapCause(ex));
-                }
-            }
-        }.execute();
-        return future;
-    }
-
-    private void applyRepeatDraftToUi(Transaction draft) {
-        if (draft == null) {
-            return;
-        }
-        String amountStr = draft.getAmount() != null ? draft.getAmount().toPlainString() : "";
-        String noteStr = draft.getDescription() != null ? draft.getDescription() : "";
-        if (draft.getType() == TransactionType.SEND_MONEY || draft instanceof SendMoneyTransaction) {
-            String recipientTarget = (draft instanceof SendMoneyTransaction smt && smt.getRecipientNumber() != null)
-                    ? smt.getRecipientNumber()
-                    : (draft.getTargetWalletId() != null ? draft.getTargetWalletId() : "");
-            txtRecipient.setText(recipientTarget);
-            txtSendAmount.setText(amountStr);
-            txtSendNote.setText(noteStr);
-            txtSendPin.setText("");
-            lblSendFeedback.setForeground(UiTheme.color(UiTheme.ColorRole.INFO));
-            lblSendFeedback.setText("Loaded repeat draft (New Ref: " + draft.getReferenceNumber()
-                    + "). Review details and enter PIN to send.");
-            lblStatus.setText("Repeat Send Money draft prepared: " + draft.getReferenceNumber());
-            navigateToTab("Send Money");
-        } else if (draft instanceof CashInOutTransaction
-                || draft.getType() == TransactionType.CASH_IN
-                || draft.getType() == TransactionType.CASH_OUT) {
-            String op = draft.getType() == TransactionType.CASH_OUT ? "CASH_OUT" : "CASH_IN";
-            cmbCashOperation.setSelectedItem(op);
-            if (draft instanceof CashInOutTransaction cio && cio.getChannel() != null) {
-                cmbCashChannel.setSelectedItem(cio.getChannel());
-            }
-            txtCashAmount.setText(amountStr);
-            txtCashNote.setText(noteStr);
-            txtCashPin.setText("");
-            lblCashFeedback.setForeground(UiTheme.color(UiTheme.ColorRole.INFO));
-            lblCashFeedback.setText("Loaded repeat draft (New Ref: " + draft.getReferenceNumber()
-                    + "). Review details and submit when ready.");
-            lblStatus.setText("Repeat " + op + " draft prepared: " + draft.getReferenceNumber());
-            navigateToTab("Cash In / Out");
-        } else if (draft instanceof BillPaymentTransaction || draft.getType() == TransactionType.BILL_PAYMENT) {
-            BillPaymentTransaction bpt = (draft instanceof BillPaymentTransaction b) ? b : null;
-            if (payBillsPanel != null) {
-                if (bpt != null && bpt.getBillerName() != null) {
-                    payBillsPanel.getBillerComboBox().setSelectedItem(bpt.getBillerName());
-                }
-                String refVal = bpt != null ? bpt.getBillerReference() : null;
-                if (refVal != null) {
-                    payBillsPanel.getBillReferenceField().setText(refVal);
-                }
-                payBillsPanel.getBillAmountField().setText(amountStr);
-                payBillsPanel.getBillPinField().setText("");
-                payBillsPanel.getBillFeedbackLabel().setForeground(UiTheme.color(UiTheme.ColorRole.INFO));
-                payBillsPanel.getBillFeedbackLabel().setText("Loaded repeat draft (New Ref: " + draft.getReferenceNumber()
-                        + "). Review details and enter PIN to pay.");
-            }
-            lblStatus.setText("Repeat Bill Payment draft prepared: " + draft.getReferenceNumber());
-            navigateToTab("Pay Bills");
         }
     }
 
@@ -1976,7 +854,7 @@ public class Main extends JFrame {
             SessionManager.getInstance().logout();
             if (isShowing()) {
                 showDialogMessage(this, "Logout Warning",
-                        "Session cleared locally, though server logout reported: " + extractErrorMessage(ex),
+                        "Session cleared locally, though server logout reported: " + UiSupport.extractErrorMessage(ex),
                         JOptionPane.WARNING_MESSAGE);
             }
         }
@@ -1994,14 +872,6 @@ public class Main extends JFrame {
         return JOptionPane.showConfirmDialog(parent != null ? parent : this, message, title, optionType, messageType);
     }
 
-    private static String extractErrorMessage(Throwable ex) {
-        if (ex == null) {
-            return "An unexpected error occurred.";
-        }
-        String msg = ex.getMessage();
-        return (msg != null && !msg.trim().isEmpty()) ? msg : ex.getClass().getSimpleName();
-    }
-
     @Override
     public void dispose() {
         if (sessionMonitorTimer != null) {
@@ -2011,23 +881,6 @@ public class Main extends JFrame {
             ownedDatabaseManager.close();
         }
         super.dispose();
-    }
-
-    private static void runOnEdt(Runnable action) {
-        if (SwingUtilities.isEventDispatchThread()) {
-            action.run();
-        } else {
-            SwingUtilities.invokeLater(action);
-        }
-    }
-
-    private static Throwable unwrapCause(Throwable ex) {
-        Throwable current = ex;
-        while ((current instanceof ExecutionException || current instanceof CompletionException)
-                && current.getCause() != null) {
-            current = current.getCause();
-        }
-        return current;
     }
 
     public DashboardState getCurrentState() {
@@ -2059,31 +912,31 @@ public class Main extends JFrame {
     }
 
     public JLabel getLoadingStateLabel() {
-        return lblLoadingState;
+        return overviewPanel != null ? overviewPanel.getLoadingStateLabel() : null;
     }
 
     public JLabel getEmptyStateLabel() {
-        return lblEmptyState;
+        return overviewPanel != null ? overviewPanel.getEmptyStateLabel() : null;
     }
 
     public JLabel getErrorStateLabel() {
-        return lblErrorState;
+        return overviewPanel != null ? overviewPanel.getErrorStateLabel() : null;
     }
 
     public JLabel getCashFeedbackLabel() {
-        return lblCashFeedback;
+        return cashInOutPanel != null ? cashInOutPanel.getCashFeedbackLabel() : null;
     }
 
     public JLabel getActivityFeedbackLabel() {
-        return lblActivityFeedback;
+        return overviewPanel != null ? overviewPanel.getActivityFeedbackLabel() : null;
     }
 
     public JLabel getSendFeedbackLabel() {
-        return lblSendFeedback;
+        return sendMoneyPanel != null ? sendMoneyPanel.getSendFeedbackLabel() : null;
     }
 
     public JTable getRecentTransactionsTable() {
-        return tblTransactions;
+        return overviewPanel != null ? overviewPanel.getTransactionsTable() : null;
     }
 
     public JTabbedPane getTabs() {
@@ -2103,15 +956,15 @@ public class Main extends JFrame {
     }
 
     public JButton getCashInQuickNavButton() {
-        return btnNavCashIn;
+        return overviewPanel != null ? overviewPanel.getNavCashInButton() : null;
     }
 
     public JButton getCashOutQuickNavButton() {
-        return btnNavCashOut;
+        return overviewPanel != null ? overviewPanel.getNavCashOutButton() : null;
     }
 
     public JButton getSendMoneyQuickNavButton() {
-        return btnNavSendMoney;
+        return overviewPanel != null ? overviewPanel.getNavSendMoneyButton() : null;
     }
 
     public JButton getPinSettingsButton() {
@@ -2119,7 +972,7 @@ public class Main extends JFrame {
     }
 
     public JButton getRetryLoadButton() {
-        return btnRetryLoad;
+        return overviewPanel != null ? overviewPanel.getRetryLoadButton() : null;
     }
 
     public JButton getBackButton() {
@@ -2139,87 +992,87 @@ public class Main extends JFrame {
     }
 
     public TransactionFilter getActiveHistoryFilter() {
-        return activeHistoryFilter;
+        return overviewPanel != null ? overviewPanel.getActiveHistoryFilter() : TransactionFilter.empty();
     }
 
     public JComboBox<String> getFilterTypeComboBox() {
-        return cmbFilterType;
+        return overviewPanel != null ? overviewPanel.getFilterTypeComboBox() : null;
     }
 
     public JComboBox<String> getFilterStatusComboBox() {
-        return cmbFilterStatus;
+        return overviewPanel != null ? overviewPanel.getFilterStatusComboBox() : null;
     }
 
     public JTextField getFilterFromDateField() {
-        return txtFilterFromDate;
+        return overviewPanel != null ? overviewPanel.getFilterFromDateField() : null;
     }
 
     public JTextField getFilterToDateField() {
-        return txtFilterToDate;
+        return overviewPanel != null ? overviewPanel.getFilterToDateField() : null;
     }
 
     public JButton getApplyFiltersButton() {
-        return btnApplyFilters;
+        return overviewPanel != null ? overviewPanel.getApplyFiltersButton() : null;
     }
 
     public JButton getClearFiltersButton() {
-        return btnClearFilters;
+        return overviewPanel != null ? overviewPanel.getClearFiltersButton() : null;
     }
 
     public JButton getRepeatDraftButton() {
-        return btnRepeatDraft;
+        return overviewPanel != null ? overviewPanel.getRepeatDraftButton() : null;
     }
 
     public JComboBox<String> getCashOperationComboBox() {
-        return cmbCashOperation;
+        return cashInOutPanel != null ? cashInOutPanel.getCashOperationComboBox() : null;
     }
 
     public JComboBox<String> getPaymentMethodComboBox() {
-        return cmbPaymentMethod;
+        return cashInOutPanel != null ? cashInOutPanel.getPaymentMethodComboBox() : null;
     }
 
     public JComboBox<String> getProviderModeComboBox() {
-        return cmbProviderMode;
+        return cashInOutPanel != null ? cashInOutPanel.getProviderModeComboBox() : null;
     }
 
     public JButton getCheckStatusButton() {
-        return btnCheckStatus;
+        return overviewPanel != null ? overviewPanel.getCheckStatusButton() : null;
     }
 
     public JPasswordField getCashPinField() {
-        return txtCashPin;
+        return cashInOutPanel != null ? cashInOutPanel.getCashPinField() : null;
     }
 
     public JPasswordField getSendPinField() {
-        return txtSendPin;
+        return sendMoneyPanel != null ? sendMoneyPanel.getSendPinField() : null;
     }
 
     public JButton getSubmitCashButton() {
-        return btnSubmitCashOp;
+        return cashInOutPanel != null ? cashInOutPanel.getSubmitCashOpButton() : null;
     }
 
     public JButton getCashBackToOverviewButton() {
-        return btnCashBackToOverview;
+        return cashInOutPanel != null ? cashInOutPanel.getCashBackToOverviewButton() : null;
     }
 
     public JButton getSubmitSendMoneyButton() {
-        return btnSubmitSendMoney;
+        return sendMoneyPanel != null ? sendMoneyPanel.getSubmitSendMoneyButton() : null;
     }
 
     public JButton getSendBackToOverviewButton() {
-        return btnSendBackToOverview;
+        return sendMoneyPanel != null ? sendMoneyPanel.getSendBackToOverviewButton() : null;
     }
 
     public JTextField getCashAmountField() {
-        return txtCashAmount;
+        return cashInOutPanel != null ? cashInOutPanel.getCashAmountField() : null;
     }
 
     public JTextField getRecipientField() {
-        return txtRecipient;
+        return sendMoneyPanel != null ? sendMoneyPanel.getRecipientField() : null;
     }
 
     public JTextField getSendAmountField() {
-        return txtSendAmount;
+        return sendMoneyPanel != null ? sendMoneyPanel.getSendAmountField() : null;
     }
 
     public JPanel getRootPanel() {
@@ -2243,11 +1096,11 @@ public class Main extends JFrame {
     }
 
     public JButton getExportStatementButton() {
-        return btnExportStatement;
+        return overviewPanel != null ? overviewPanel.getExportStatementButton() : null;
     }
 
     public JButton getLoadStatementButton() {
-        return btnLoadStatement;
+        return overviewPanel != null ? overviewPanel.getLoadStatementButton() : null;
     }
 
     public WalletOperations getWalletService() {
@@ -2255,7 +1108,7 @@ public class Main extends JFrame {
     }
 
     public JButton getExportReceiptButton() {
-        return btnExportReceipt;
+        return overviewPanel != null ? overviewPanel.getExportReceiptButton() : null;
     }
 
     private void $$$setupUI$$$() {
@@ -2342,6 +1195,7 @@ public class Main extends JFrame {
 
         btnBack = new JButton("\u2190 Back");
         btnBack.setEnabled(false);
+        UiTheme.styleSecondaryButton(btnBack);
         pnlBalanceAndActions.add(btnBack, new GridConstraints(0, 1, 1, 1,
                 GridConstraints.ANCHOR_CENTER, GridConstraints.FILL_HORIZONTAL,
                 GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_CAN_GROW,
@@ -2349,6 +1203,7 @@ public class Main extends JFrame {
                 null, null, null, 0, false));
 
         btnRefresh = new JButton("Refresh");
+        UiTheme.styleSecondaryButton(btnRefresh);
         pnlBalanceAndActions.add(btnRefresh, new GridConstraints(0, 2, 1, 1,
                 GridConstraints.ANCHOR_CENTER, GridConstraints.FILL_HORIZONTAL,
                 GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_CAN_GROW,
@@ -2356,6 +1211,7 @@ public class Main extends JFrame {
                 null, null, null, 0, false));
 
         btnNotifications = new JButton("Notifications (0)");
+        UiTheme.styleSecondaryButton(btnNotifications);
         pnlBalanceAndActions.add(btnNotifications, new GridConstraints(0, 3, 1, 1,
                 GridConstraints.ANCHOR_CENTER, GridConstraints.FILL_HORIZONTAL,
                 GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_CAN_GROW,
@@ -2363,6 +1219,7 @@ public class Main extends JFrame {
                 null, null, null, 0, false));
 
         btnPinSettings = new JButton("Transaction PIN");
+        UiTheme.styleSecondaryButton(btnPinSettings);
         pnlBalanceAndActions.add(btnPinSettings, new GridConstraints(0, 4, 1, 1,
                 GridConstraints.ANCHOR_CENTER, GridConstraints.FILL_HORIZONTAL,
                 GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_CAN_GROW,
@@ -2370,6 +1227,7 @@ public class Main extends JFrame {
                 null, null, null, 0, false));
 
         btnLogout = new JButton("Logout");
+        UiTheme.styleSecondaryButton(btnLogout);
         pnlBalanceAndActions.add(btnLogout, new GridConstraints(0, 5, 1, 1,
                 GridConstraints.ANCHOR_CENTER, GridConstraints.FILL_HORIZONTAL,
                 GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_CAN_GROW,
@@ -2377,6 +1235,7 @@ public class Main extends JFrame {
                 null, null, null, 0, false));
 
         tabs = new JTabbedPane();
+        tabs.setFont(UiTheme.font(UiTheme.FontRole.LABEL_BOLD));
         pnlRoot.add(tabs, new GridConstraints(1, 0, 1, 1,
                 GridConstraints.ANCHOR_CENTER, GridConstraints.FILL_BOTH,
                 GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_WANT_GROW,
@@ -2384,7 +1243,8 @@ public class Main extends JFrame {
                 null, new Dimension(860, 480), null, 0, false));
 
         pnlFooter = new JPanel();
-        pnlFooter.setLayout(new GridLayoutManager(1, 1, new Insets(4, 2, 0, 2), 0, 0));
+        pnlFooter.setLayout(new GridLayoutManager(1, 1, new Insets(6, 2, 2, 2), 0, 0));
+        pnlFooter.setBorder(UiTheme.topDividerBorder());
         pnlRoot.add(pnlFooter, new GridConstraints(2, 0, 1, 1,
                 GridConstraints.ANCHOR_CENTER, GridConstraints.FILL_BOTH,
                 GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_CAN_GROW,

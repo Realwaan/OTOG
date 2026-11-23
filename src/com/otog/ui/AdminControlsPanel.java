@@ -21,8 +21,6 @@ import java.time.format.DateTimeFormatter;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.concurrent.CompletionException;
-import java.util.concurrent.ExecutionException;
 import java.util.function.Consumer;
 
 /**
@@ -344,6 +342,8 @@ public class AdminControlsPanel extends JPanel {
                     }
                     JTable table = new JTable(model);
                     table.setAutoCreateRowSorter(true);
+                    UiTheme.styleTable(table, 110, 120, 90, 105, 105, 90, 70, 90, 150);
+                    UiTheme.alignTableColumnsRight(table, 5, 6);
                     JScrollPane scroll = new JScrollPane(table);
                     scroll.setPreferredSize(new Dimension(760, 320));
                     JOptionPane.showMessageDialog(pnlRoot, scroll, dialogTitle, JOptionPane.INFORMATION_MESSAGE);
@@ -418,8 +418,9 @@ public class AdminControlsPanel extends JPanel {
             }
         };
         userTable = new JTable(userModel);
-        userTable.setSelectionMode(ListSelectionModel.SINGLE_SELECTION);
         userTable.setAutoCreateRowSorter(true);
+        UiTheme.styleTable(userTable, 115, 135, 105, 80, 85, 155, 105);
+        UiTheme.alignTableColumnsRight(userTable, 6);
 
         JScrollPane userScroll = new JScrollPane(userTable);
         userScroll.setBorder(UiTheme.titledBorder("Registered Accounts & Wallets"));
@@ -447,6 +448,12 @@ public class AdminControlsPanel extends JPanel {
         btnReactivate.setEnabled(false);
         btnChangeRole.setEnabled(false);
         btnViewUserTxns.setEnabled(false);
+        UiTheme.styleSecondaryButton(btnSuspend);
+        UiTheme.styleSecondaryButton(btnReactivate);
+        UiTheme.styleSecondaryButton(btnChangeRole);
+        UiTheme.styleSecondaryButton(btnViewUserTxns);
+        UiTheme.styleSecondaryButton(btnViewAllTxns);
+        UiTheme.styleSecondaryButton(btnRefreshAll);
 
         pnlButtons.add(btnSuspend, new GridConstraints(0, 0, 1, 1,
                 GridConstraints.ANCHOR_CENTER, GridConstraints.FILL_HORIZONTAL,
@@ -485,6 +492,7 @@ public class AdminControlsPanel extends JPanel {
         };
         auditTable = new JTable(auditModel);
         auditTable.setAutoCreateRowSorter(true);
+        UiTheme.styleTable(auditTable, 115, 130, 115, 290, 145);
 
         JScrollPane auditScroll = new JScrollPane(auditTable);
         auditScroll.setBorder(UiTheme.titledBorder("Admin Action Audit Log"));
@@ -492,6 +500,7 @@ public class AdminControlsPanel extends JPanel {
 
         statusLbl = new JLabel("Loading admin records...");
         statusLbl.setFont(UiTheme.font(UiTheme.FontRole.SMALL));
+        statusLbl.setForeground(UiTheme.color(UiTheme.ColorRole.MUTED));
         pnlRoot.add(statusLbl, new GridConstraints(2, 0, 1, 1,
                 GridConstraints.ANCHOR_WEST, GridConstraints.FILL_NONE,
                 GridConstraints.SIZEPOLICY_FIXED, GridConstraints.SIZEPOLICY_FIXED,
@@ -503,19 +512,10 @@ public class AdminControlsPanel extends JPanel {
     }
 
     private static Throwable unwrapCause(Throwable ex) {
-        Throwable current = ex;
-        while ((current instanceof ExecutionException || current instanceof CompletionException)
-                && current.getCause() != null) {
-            current = current.getCause();
-        }
-        return current;
+        return UiSupport.unwrapCause(ex);
     }
 
     private static String extractErrorMessage(Throwable ex) {
-        if (ex == null) {
-            return "Unknown error";
-        }
-        String msg = ex.getMessage();
-        return (msg != null && !msg.trim().isEmpty()) ? msg : ex.getClass().getSimpleName();
+        return UiSupport.extractErrorMessage(ex);
     }
 }

@@ -3,16 +3,36 @@ package com.otog.ui;
 import com.intellij.uiDesigner.core.GridConstraints;
 import com.intellij.uiDesigner.core.GridLayoutManager;
 import com.intellij.uiDesigner.core.Spacer;
+import com.otog.model.SendMoneyTransaction;
+import com.otog.model.Transaction;
+import com.otog.model.User;
+import com.otog.model.Wallet;
+import com.otog.service.AuthService;
+import com.otog.service.SendMoneyService;
+import com.otog.service.SessionManager;
+import com.otog.service.WalletOperations;
+import com.otog.util.IdGenerator;
+import com.otog.util.MoneyUtil;
 import com.otog.util.OtogConfig;
 import com.otog.util.UiTheme;
 
 import javax.swing.*;
 import java.awt.*;
+import java.math.BigDecimal;
+import java.util.concurrent.CompletableFuture;
+import java.util.function.BooleanSupplier;
+import java.util.function.Consumer;
+import java.util.function.Supplier;
 
 /**
  * Bound IntelliJ Swing form panel for the Send Money tab.
+ * Owns recipient/amount/PIN validation, transfer preview confirmation,
+ * and off-EDT {@link SwingWorker} execution.
  */
 public class SendMoneyPanel extends JPanel {
+
+    private final WalletOperations walletService;
+    private final AuthService authService;
 
     private JPanel pnlRoot;
     private JPanel pnlForm;
@@ -25,12 +45,382 @@ public class SendMoneyPanel extends JPanel {
     private JButton btnSendBackToOverview;
     private JLabel lblSendFeedback;
 
+    private volatile boolean lastOperationExecutedOffEdt;
+
+    private Runnable onBackToOverview;
+    private BooleanSupplier beforeInteractiveSubmit;
+    private BooleanSupplier pinConfiguredSupplier;
+    private Runnable onPinNotSet;
+    private BooleanSupplier isLogoutHandledSupplier;
+    private UiSupport.DialogMessageCallback dialogMessageCallback = UiSupport.defaultMessageCallback();
+    private UiSupport.ConfirmDialogCallback confirmDialogCallback = UiSupport.defaultConfirmCallback();
+    private Consumer<String> onStatusMessage;
+    private Consumer<Boolean> offEdtObserver;
+    private Supplier<CompletableFuture<Void>> onRefreshRequested;
+    private Consumer<String> onOperationError;
+
     public SendMoneyPanel() {
+        this(null, null);
+    }
+
+    public SendMoneyPanel(WalletOperations walletService, AuthService authService) {
         super(new BorderLayout());
+        this.walletService = walletService;
+        this.authService = authService;
         if (pnlRoot == null) {
             $$$setupUI$$$();
         }
         add(pnlRoot, BorderLayout.CENTER);
+        initInteractions();
+    }
+
+    public void setOnBackToOverview(Runnable onBackToOverview) {
+        this.onBackToOverview = onBackToOverview;
+    }
+
+    public void setBeforeInteractiveSubmit(BooleanSupplier beforeInteractiveSubmit) {
+        this.beforeInteractiveSubmit = beforeInteractiveSubmit;
+    }
+
+    public void setPinConfiguredSupplier(BooleanSupplier pinConfiguredSupplier) {
+        this.pinConfiguredSupplier = pinConfiguredSupplier;
+    }
+
+    public void setOnPinNotSet(Runnable onPinNotSet) {
+        this.onPinNotSet = onPinNotSet;
+    }
+
+    public void setIsLogoutHandledSupplier(BooleanSupplier isLogoutHandledSupplier) {
+        this.isLogoutHandledSupplier = isLogoutHandledSupplier;
+    }
+
+    public void setDialogMessageCallback(UiSupport.DialogMessageCallback dialogMessageCallback) {
+        this.dialogMessageCallback = dialogMessageCallback != null
+                ? dialogMessageCallback
+                : UiSupport.defaultMessageCallback();
+    }
+
+    public void setConfirmDialogCallback(UiSupport.ConfirmDialogCallback confirmDialogCallback) {
+        this.confirmDialogCallback = confirmDialogCallback != null
+                ? confirmDialogCallback
+                : UiSupport.defaultConfirmCallback();
+    }
+
+    public void setOnStatusMessage(Consumer<String> onStatusMessage) {
+        this.onStatusMessage = onStatusMessage;
+    }
+
+    public void setOffEdtObserver(Consumer<Boolean> offEdtObserver) {
+        this.offEdtObserver = offEdtObserver;
+    }
+
+    public void setOnRefreshRequested(Supplier<CompletableFuture<Void>> onRefreshRequested) {
+        this.onRefreshRequested = onRefreshRequested;
+    }
+
+    public void setOnOperationError(Consumer<String> onOperationError) {
+        this.onOperationError = onOperationError;
+    }
+
+    public boolean isLastOperationExecutedOffEdt() {
+        return lastOperationExecutedOffEdt;
+    }
+
+    private void initInteractions() {
+        btnSendBackToOverview.addActionListener(e -> {
+            if (onBackToOverview != null) {
+                onBackToOverview.run();
+            }
+        });
+        btnSubmitSendMoney.addActionListener(e -> handleInteractiveSubmit());
+        txtRecipient.addActionListener(e -> handleInteractiveSubmit());
+        txtSendAmount.addActionListener(e -> handleInteractiveSubmit());
+        txtSendNote.addActionListener(e -> handleInteractiveSubmit());
+        txtSendPin.addActionListener(e -> handleInteractiveSubmit());
+    }
+
+    public void focusRecipient() {
+        txtRecipient.requestFocusInWindow();
+    }
+
+    public void loadRepeatDraft(Transaction draft) {
+        if (draft == null) {
+            return;
+        }
+        String recipientTarget = (draft instanceof SendMoneyTransaction smt && smt.getRecipientNumber() != null)
+                ? smt.getRecipientNumber()
+                : (draft.getTargetWalletId() != null ? draft.getTargetWalletId() : "");
+        txtRecipient.setText(recipientTarget);
+        txtSendAmount.setText(draft.getAmount() != null ? draft.getAmount().toPlainString() : "");
+        txtSendNote.setText(draft.getDescription() != null ? draft.getDescription() : "");
+        txtSendPin.setText("");
+        lblSendFeedback.setForeground(UiTheme.color(UiTheme.ColorRole.INFO));
+        lblSendFeedback.setText("Loaded repeat draft (New Ref: " + draft.getReferenceNumber()
+                + "). Review details and enter PIN to send.");
+    }
+
+    public CompletableFuture<Transaction> submitSendMoneyAsync(String recipient,
+                                                              String amountText,
+                                                              String note,
+                                                              String rawPin) {
+        return executeSendMoneyAsync(null, recipient, amountText, note, rawPin);
+    }
+
+    private CompletableFuture<Transaction> executeSendMoneyAsync(String explicitReference,
+                                                               String recipient,
+                                                               String amountText,
+                                                               String note,
+                                                               String rawPin) {
+        CompletableFuture<Transaction> future = new CompletableFuture<>();
+        if (walletService == null) {
+            future.completeExceptionally(new IllegalStateException("WalletOperations service is unavailable."));
+            return future;
+        }
+
+        UiSupport.runOnEdt(() -> {
+            btnSubmitSendMoney.setEnabled(false);
+            lblSendFeedback.setForeground(UiTheme.color(UiTheme.ColorRole.INFO));
+            lblSendFeedback.setText("Sending money...");
+            notifyStatus("Processing transfer...");
+        });
+
+        SwingWorker<Transaction, Void> worker = new SwingWorker<>() {
+            @Override
+            protected Transaction doInBackground() {
+                boolean offEdt = !SwingUtilities.isEventDispatchThread();
+                lastOperationExecutedOffEdt = offEdt;
+                if (offEdtObserver != null) {
+                    offEdtObserver.accept(offEdt);
+                }
+                SessionManager session = SessionManager.getInstance();
+                session.requireAuthentication();
+                User user = session.getCurrentUser();
+                Wallet wallet = session.getCurrentWallet();
+                if (wallet == null) {
+                    wallet = session.refreshWallet(walletService);
+                }
+
+                if (recipient == null || recipient.trim().isEmpty()) {
+                    throw new IllegalArgumentException("Recipient identifier is required.");
+                }
+                BigDecimal amount = MoneyUtil.validatePositiveAmount(MoneyUtil.parse(amountText));
+                String ref = (explicitReference != null && !explicitReference.trim().isEmpty())
+                        ? explicitReference.trim()
+                        : IdGenerator.nextReferenceNumber();
+                String cleanPin = rawPin != null ? rawPin.trim() : "";
+                if (!cleanPin.isEmpty()) {
+                    if (authService != null && user != null) {
+                        UiSupport.verifyPinOrThrow(authService, user.getUserId(), cleanPin);
+                        return walletService.sendMoneyToRecipient(
+                                ref, wallet.getWalletId(), recipient.trim(), amount, MoneyUtil.ZERO, note);
+                    }
+                    return walletService.sendMoneyToRecipientWithPin(
+                            ref, wallet.getWalletId(), recipient.trim(), amount, MoneyUtil.ZERO, note, cleanPin);
+                }
+                return walletService.sendMoneyToRecipient(
+                        ref, wallet.getWalletId(), recipient.trim(), amount, MoneyUtil.ZERO, note);
+            }
+
+            @Override
+            protected void done() {
+                btnSubmitSendMoney.setEnabled(true);
+                try {
+                    Transaction txn = get();
+                    txtSendAmount.setText("");
+                    txtSendNote.setText("");
+                    lblSendFeedback.setForeground(UiTheme.color(UiTheme.ColorRole.SUCCESS));
+                    lblSendFeedback.setText("Transfer successful: "
+                            + MoneyUtil.format(txn.getAmount(), txn.getCurrency())
+                            + " (Ref: " + txn.getReferenceNumber() + ")");
+                    CompletableFuture<Void> refresh = onRefreshRequested != null ? onRefreshRequested.get() : null;
+                    if (refresh != null) {
+                        refresh.whenComplete((v, err) -> future.complete(txn));
+                    } else {
+                        future.complete(txn);
+                    }
+                } catch (Exception ex) {
+                    Throwable cause = UiSupport.unwrapCause(ex);
+                    String message = UiSupport.extractErrorMessage(cause);
+                    lblSendFeedback.setForeground(UiTheme.color(UiTheme.ColorRole.ERROR));
+                    lblSendFeedback.setText("Transfer failed: " + message);
+                    notifyStatus("Transfer failed: " + message);
+                    if (onOperationError != null) {
+                        onOperationError.accept(message);
+                    }
+                    future.completeExceptionally(cause);
+                }
+            }
+        };
+        worker.execute();
+        return future;
+    }
+
+    private void handleInteractiveSubmit() {
+        if (beforeInteractiveSubmit != null && !beforeInteractiveSubmit.getAsBoolean()) {
+            return;
+        }
+        SessionManager session = SessionManager.getInstance();
+
+        String recipient = txtRecipient.getText() != null ? txtRecipient.getText().trim() : "";
+        String amountText = txtSendAmount.getText() != null ? txtSendAmount.getText().trim() : "";
+        String note = txtSendNote.getText() != null ? txtSendNote.getText().trim() : "";
+        String pin = new String(txtSendPin.getPassword()).trim();
+
+        if (recipient.isEmpty()) {
+            String msg = "Please enter a recipient (mobile number, email, name, or wallet ID).";
+            lblSendFeedback.setForeground(UiTheme.color(UiTheme.ColorRole.ERROR));
+            lblSendFeedback.setText("Transfer failed: " + msg);
+            showMessage("Validation Error", msg, JOptionPane.WARNING_MESSAGE);
+            txtRecipient.requestFocusInWindow();
+            return;
+        }
+
+        BigDecimal parsedAmount;
+        try {
+            if (amountText.isEmpty()) {
+                throw new IllegalArgumentException("Please enter an amount to send.");
+            }
+            parsedAmount = MoneyUtil.validatePositiveAmount(MoneyUtil.parse(amountText));
+        } catch (RuntimeException ex) {
+            String msg = UiSupport.extractErrorMessage(ex);
+            lblSendFeedback.setForeground(UiTheme.color(UiTheme.ColorRole.ERROR));
+            lblSendFeedback.setText("Transfer failed: " + msg);
+            notifyStatus("Transfer validation failed: " + msg);
+            showMessage("Invalid Amount", msg, JOptionPane.ERROR_MESSAGE);
+            txtSendAmount.requestFocusInWindow();
+            return;
+        }
+
+        boolean pinSet = pinConfiguredSupplier == null || pinConfiguredSupplier.getAsBoolean();
+        if (authService != null && !pinSet) {
+            txtSendPin.setText("");
+            if (onPinNotSet != null) {
+                onPinNotSet.run();
+            }
+            return;
+        }
+
+        OtogConfig config = OtogConfig.getInstance();
+        if (pin.isEmpty()) {
+            String msg = "Please enter your " + config.getPinMinLength() + "-" + config.getPinMaxLength()
+                    + " digit Transaction PIN to authorize Send Money.";
+            lblSendFeedback.setForeground(UiTheme.color(UiTheme.ColorRole.ERROR));
+            lblSendFeedback.setText("Transfer failed: " + msg);
+            showMessage("PIN Required", msg, JOptionPane.WARNING_MESSAGE);
+            txtSendPin.requestFocusInWindow();
+            return;
+        }
+
+        txtSendPin.setText("");
+        User currentUser = session.getCurrentUser();
+        SendMoneyService sendMoneyService = walletService != null
+                ? walletService.createSendMoneyService(authService)
+                : null;
+        if (sendMoneyService != null && currentUser != null) {
+            btnSubmitSendMoney.setEnabled(false);
+            lblSendFeedback.setForeground(UiTheme.color(UiTheme.ColorRole.INFO));
+            lblSendFeedback.setText("Preparing transfer confirmation...");
+            notifyStatus("Validating recipient and balance...");
+
+            new SwingWorker<SendMoneyService.SendMoneyPreview, Void>() {
+                @Override
+                protected SendMoneyService.SendMoneyPreview doInBackground() {
+                    return sendMoneyService.preview(currentUser.getUserId(), recipient, parsedAmount, null, note);
+                }
+
+                @Override
+                protected void done() {
+                    btnSubmitSendMoney.setEnabled(true);
+                    try {
+                        SendMoneyService.SendMoneyPreview preview = get();
+                        JTextArea previewArea = new JTextArea(preview.toConfirmationText());
+                        previewArea.setEditable(false);
+                        previewArea.setFont(UiTheme.font(UiTheme.FontRole.MONO));
+                        previewArea.setMargin(new Insets(6, 8, 6, 8));
+                        JScrollPane previewScroll = new JScrollPane(previewArea);
+                        previewScroll.setPreferredSize(new Dimension(400, 220));
+                        int choice = confirmDialogCallback.show(
+                                SendMoneyPanel.this,
+                                "Confirm Send Money",
+                                previewScroll,
+                                JOptionPane.OK_CANCEL_OPTION,
+                                JOptionPane.QUESTION_MESSAGE
+                        );
+                        if (choice != JOptionPane.OK_OPTION) {
+                            lblSendFeedback.setForeground(UiTheme.color(UiTheme.ColorRole.MUTED));
+                            lblSendFeedback.setText("Transfer cancelled.");
+                            notifyStatus("Transfer cancelled");
+                            return;
+                        }
+                        dispatchConfirmedSendMoney(preview.getReferenceNumber(), recipient, amountText, note, pin);
+                    } catch (Exception ex) {
+                        Throwable cause = UiSupport.unwrapCause(ex);
+                        String message = UiSupport.extractErrorMessage(cause);
+                        lblSendFeedback.setForeground(UiTheme.color(UiTheme.ColorRole.ERROR));
+                        lblSendFeedback.setText("Transfer failed: " + message);
+                        notifyStatus("Transfer failed: " + message);
+                        showMessage("Transfer Validation Failed", message, JOptionPane.ERROR_MESSAGE);
+                    }
+                }
+            }.execute();
+        } else {
+            StringBuilder confirmMsg = new StringBuilder();
+            confirmMsg.append("Recipient: ").append(recipient).append("\n");
+            confirmMsg.append("Amount: ").append(MoneyUtil.format(parsedAmount, config.getDefaultCurrency()));
+            if (!note.isEmpty()) {
+                confirmMsg.append("\nNote: ").append(note);
+            }
+            int choice = confirmDialogCallback.show(
+                    this,
+                    "Confirm Send Money",
+                    confirmMsg.toString(),
+                    JOptionPane.OK_CANCEL_OPTION,
+                    JOptionPane.QUESTION_MESSAGE
+            );
+            if (choice != JOptionPane.OK_OPTION) {
+                lblSendFeedback.setForeground(UiTheme.color(UiTheme.ColorRole.MUTED));
+                lblSendFeedback.setText("Transfer cancelled.");
+                notifyStatus("Transfer cancelled");
+                return;
+            }
+            dispatchConfirmedSendMoney(null, recipient, amountText, note, pin);
+        }
+    }
+
+    private void dispatchConfirmedSendMoney(String explicitReference,
+                                            String recipient,
+                                            String amountText,
+                                            String note,
+                                            String pin) {
+        executeSendMoneyAsync(explicitReference, recipient, amountText, note, pin)
+                .whenComplete((txn, err) -> UiSupport.runOnEdt(() -> {
+                    boolean loggedOut = isLogoutHandledSupplier != null && isLogoutHandledSupplier.getAsBoolean();
+                    if (err != null) {
+                        if (!loggedOut) {
+                            Throwable cause = UiSupport.unwrapCause(err);
+                            showMessage("Transfer Failed", UiSupport.extractErrorMessage(cause),
+                                    JOptionPane.ERROR_MESSAGE);
+                        }
+                    } else if (txn != null) {
+                        showMessage(
+                                "Transfer Complete",
+                                "Send Money successful!\nAmount: "
+                                        + MoneyUtil.format(txn.getAmount(), txn.getCurrency())
+                                        + "\nReference: " + txn.getReferenceNumber(),
+                                JOptionPane.INFORMATION_MESSAGE
+                        );
+                    }
+                }));
+    }
+
+    private void showMessage(String title, String message, int messageType) {
+        dialogMessageCallback.show(this, title, message, messageType);
+    }
+
+    private void notifyStatus(String message) {
+        if (onStatusMessage != null) {
+            onStatusMessage.accept(message);
+        }
     }
 
     public JPanel getRootPanel() {
@@ -100,6 +490,7 @@ public class SendMoneyPanel extends JPanel {
                 null, null, null, 0, false));
 
         btnSubmitSendMoney = new JButton("Send Money");
+        UiTheme.stylePrimaryButton(btnSubmitSendMoney);
         pnlActions.add(btnSubmitSendMoney, new GridConstraints(0, 0, 1, 1,
                 GridConstraints.ANCHOR_CENTER, GridConstraints.FILL_HORIZONTAL,
                 GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_CAN_GROW,
@@ -107,6 +498,7 @@ public class SendMoneyPanel extends JPanel {
                 null, null, null, 0, false));
 
         btnSendBackToOverview = new JButton("\u2190 Back to Overview");
+        UiTheme.styleSecondaryButton(btnSendBackToOverview);
         pnlActions.add(btnSendBackToOverview, new GridConstraints(0, 1, 1, 1,
                 GridConstraints.ANCHOR_CENTER, GridConstraints.FILL_HORIZONTAL,
                 GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_CAN_GROW,
@@ -133,7 +525,10 @@ public class SendMoneyPanel extends JPanel {
     }
 
     private static void addRow(JPanel panel, int row, String labelText, JComponent field) {
-        panel.add(new JLabel(labelText), new GridConstraints(row, 0, 1, 1,
+        JLabel label = new JLabel(labelText);
+        UiTheme.styleFormLabel(label);
+        UiTheme.styleInputField(field);
+        panel.add(label, new GridConstraints(row, 0, 1, 1,
                 GridConstraints.ANCHOR_WEST, GridConstraints.FILL_NONE,
                 GridConstraints.SIZEPOLICY_FIXED, GridConstraints.SIZEPOLICY_FIXED,
                 null, null, null, 0, false));

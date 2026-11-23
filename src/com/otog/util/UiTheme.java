@@ -1,9 +1,22 @@
 package com.otog.util;
 
 import javax.swing.BorderFactory;
+import javax.swing.JButton;
+import javax.swing.JComponent;
+import javax.swing.JLabel;
+import javax.swing.JTable;
+import javax.swing.ListSelectionModel;
+import javax.swing.SwingConstants;
 import javax.swing.border.Border;
+import javax.swing.border.TitledBorder;
+import javax.swing.table.DefaultTableCellRenderer;
+import javax.swing.table.JTableHeader;
+import javax.swing.table.TableColumnModel;
+import javax.swing.text.JTextComponent;
 import java.awt.Color;
+import java.awt.Dimension;
 import java.awt.Font;
+import java.awt.Insets;
 import java.util.EnumMap;
 import java.util.concurrent.ConcurrentHashMap;
 
@@ -22,6 +35,7 @@ public final class UiTheme {
         BODY,
         BODY_ITALIC,
         LABEL,
+        LABEL_BOLD,
         SMALL,
         MONO
     }
@@ -62,6 +76,11 @@ public final class UiTheme {
     private static final EnumMap<ColorRole, Color> COLOR_POOL = new EnumMap<>(ColorRole.class);
     private static final ConcurrentHashMap<String, Border> TITLED_BORDER_POOL = new ConcurrentHashMap<>();
     private static volatile Border cachedBottomDivider;
+    private static volatile Border cachedTopDivider;
+
+    private static final Insets BUTTON_MARGIN = new Insets(5, 12, 5, 12);
+    private static final Insets COMPACT_BUTTON_MARGIN = new Insets(4, 9, 4, 9);
+    private static final Insets INPUT_MARGIN = new Insets(3, 6, 3, 6);
 
     private UiTheme() {
     }
@@ -81,6 +100,7 @@ public final class UiTheme {
             case BODY -> font(baseFamily, Font.PLAIN, 13);
             case BODY_ITALIC -> font(baseFamily, Font.ITALIC, 13);
             case LABEL -> font(baseFamily, Font.PLAIN, 12);
+            case LABEL_BOLD -> font(baseFamily, Font.BOLD, 12);
             case SMALL -> font(baseFamily, Font.PLAIN, 11);
             case MONO -> font(monoFamily, Font.PLAIN, 12);
         };
@@ -107,7 +127,14 @@ public final class UiTheme {
     public static Border titledBorder(String title) {
         String safeTitle = title != null ? title : "";
         return TITLED_BORDER_POOL.computeIfAbsent(safeTitle,
-                t -> BorderFactory.createTitledBorder(BorderFactory.createEtchedBorder(), t));
+                t -> BorderFactory.createTitledBorder(
+                        BorderFactory.createEtchedBorder(),
+                        t,
+                        TitledBorder.LEFT,
+                        TitledBorder.TOP,
+                        font(FontRole.SECTION_HEADER),
+                        color(ColorRole.PRIMARY)
+                ));
     }
 
     public static Border bottomDividerBorder() {
@@ -119,6 +146,93 @@ public final class UiTheme {
         return current;
     }
 
+    public static Border topDividerBorder() {
+        Border current = cachedTopDivider;
+        if (current == null) {
+            current = BorderFactory.createMatteBorder(1, 0, 0, 0, color(ColorRole.BORDER));
+            cachedTopDivider = current;
+        }
+        return current;
+    }
+
+    public static void stylePrimaryButton(JButton button) {
+        if (button == null) {
+            return;
+        }
+        button.setFont(font(FontRole.LABEL_BOLD));
+        button.setMargin(BUTTON_MARGIN);
+        button.setFocusPainted(false);
+    }
+
+    public static void styleSecondaryButton(JButton button) {
+        if (button == null) {
+            return;
+        }
+        button.setFont(font(FontRole.LABEL));
+        button.setMargin(COMPACT_BUTTON_MARGIN);
+        button.setFocusPainted(false);
+    }
+
+    public static void styleFormLabel(JLabel label) {
+        if (label == null) {
+            return;
+        }
+        label.setFont(font(FontRole.LABEL));
+    }
+
+    public static void styleInputField(JComponent field) {
+        if (field == null) {
+            return;
+        }
+        field.setFont(font(FontRole.BODY));
+        if (field instanceof JTextComponent textComponent) {
+            textComponent.setMargin(INPUT_MARGIN);
+        }
+    }
+
+    public static void styleTable(JTable table, int... preferredColumnWidths) {
+        if (table == null) {
+            return;
+        }
+        table.setRowHeight(OtogConfig.getInstance().getTableRowHeight());
+        table.setFont(font(FontRole.LABEL));
+        table.setSelectionMode(ListSelectionModel.SINGLE_SELECTION);
+        table.setFillsViewportHeight(true);
+        table.setGridColor(color(ColorRole.BORDER));
+        table.setIntercellSpacing(new Dimension(6, 2));
+        table.setShowHorizontalLines(true);
+        table.setShowVerticalLines(false);
+        JTableHeader header = table.getTableHeader();
+        if (header != null) {
+            header.setReorderingAllowed(false);
+            header.setFont(font(FontRole.LABEL_BOLD));
+        }
+        if (preferredColumnWidths != null && preferredColumnWidths.length > 0) {
+            TableColumnModel columnModel = table.getColumnModel();
+            int count = Math.min(preferredColumnWidths.length, columnModel.getColumnCount());
+            for (int i = 0; i < count; i++) {
+                if (preferredColumnWidths[i] > 0) {
+                    columnModel.getColumn(i).setPreferredWidth(preferredColumnWidths[i]);
+                }
+            }
+        }
+    }
+
+    public static void alignTableColumnsRight(JTable table, int... columnIndices) {
+        if (table == null || columnIndices == null || columnIndices.length == 0) {
+            return;
+        }
+        DefaultTableCellRenderer rightRenderer = new DefaultTableCellRenderer();
+        rightRenderer.setHorizontalAlignment(SwingConstants.RIGHT);
+        TableColumnModel columnModel = table.getColumnModel();
+        int columnCount = columnModel.getColumnCount();
+        for (int index : columnIndices) {
+            if (index >= 0 && index < columnCount) {
+                columnModel.getColumn(index).setCellRenderer(rightRenderer);
+            }
+        }
+    }
+
     public static void clearCache() {
         FONT_POOL.clear();
         synchronized (COLOR_POOL) {
@@ -126,6 +240,7 @@ public final class UiTheme {
         }
         TITLED_BORDER_POOL.clear();
         cachedBottomDivider = null;
+        cachedTopDivider = null;
     }
 
     public static int cachedFontCount() {

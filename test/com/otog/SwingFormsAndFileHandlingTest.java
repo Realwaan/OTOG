@@ -20,6 +20,7 @@ import com.otog.ui.OverviewPanel;
 import com.otog.ui.PinSettingsDialog;
 import com.otog.ui.RegisterDialog;
 import com.otog.ui.SendMoneyPanel;
+import com.otog.util.OtogConfig;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -266,5 +267,80 @@ public class SwingFormsAndFileHandlingTest {
         Path savedReceipt = activeDashboard.exportSelectedReceiptAsync(receiptFile).get(5, TimeUnit.SECONDS);
         assertEquals(receiptFile, savedReceipt);
         assertTrue(Files.isRegularFile(receiptFile));
+    }
+
+    @Test
+    void testDashboardModularPanelDelegationAndConsistentVisualStyling() throws Exception {
+        User admin = walletService.getUserRepository().findById("USR-ADMIN-01").orElseThrow();
+        Wallet adminWallet = walletService.getWalletByUserId(admin.getUserId());
+        SessionManager.getInstance().login(admin, adminWallet);
+
+        activeDashboard = new Main(walletService, authService);
+        activeDashboard.getInitialLoadFuture().get(5, TimeUnit.SECONDS);
+
+        OverviewPanel overview = activeDashboard.getOverviewPanel();
+        CashInOutPanel cash = activeDashboard.getCashInOutPanel();
+        SendMoneyPanel send = activeDashboard.getSendMoneyPanel();
+        AdminControlsPanel adminPanel = activeDashboard.getAdminControlsPanel();
+
+        assertNotNull(overview);
+        assertNotNull(cash);
+        assertNotNull(send);
+        assertNotNull(activeDashboard.getPayBillsPanel());
+        assertNotNull(adminPanel);
+
+        assertSame(overview.getTransactionsTable(), activeDashboard.getRecentTransactionsTable());
+        assertSame(overview.getFilterTypeComboBox(), activeDashboard.getFilterTypeComboBox());
+        assertSame(overview.getActivityFeedbackLabel(), activeDashboard.getActivityFeedbackLabel());
+        assertSame(cash.getCashOperationComboBox(), activeDashboard.getCashOperationComboBox());
+        assertSame(cash.getCashFeedbackLabel(), activeDashboard.getCashFeedbackLabel());
+        assertSame(send.getRecipientField(), activeDashboard.getRecipientField());
+        assertSame(send.getSubmitSendMoneyButton(), activeDashboard.getSubmitSendMoneyButton());
+        assertSame(send.getSendFeedbackLabel(), activeDashboard.getSendFeedbackLabel());
+
+        int expectedRowHeight = OtogConfig.getInstance().getTableRowHeight();
+        for (JTable table : List.of(
+                overview.getTransactionsTable(),
+                adminPanel.getUserTable(),
+                adminPanel.getAuditTable()
+        )) {
+            assertEquals(expectedRowHeight, table.getRowHeight());
+            assertFalse(table.getTableHeader().getReorderingAllowed());
+            assertEquals(ListSelectionModel.SINGLE_SELECTION, table.getSelectionModel().getSelectionMode());
+            assertTrue(table.getFillsViewportHeight());
+            assertTrue(table.getTableHeader().getFont().isBold());
+        }
+
+        List<String> mainLines = Files.readAllLines(Paths.get("src/com/otog/ui/Main.java"), StandardCharsets.UTF_8);
+        assertTrue(mainLines.size() < 1500,
+                "Main.java must stay modularized below 1500 lines (was " + mainLines.size() + ")");
+    }
+
+    @Test
+    void testModularCashAndSendPanelsExecuteOffEdtIndependently() throws Exception {
+        User sender = authService.registerUser("Panel Sender", "09172223344", "psender@otog.ph", "SecretPass123");
+        User recipient = authService.registerUser("Panel Receiver", "09172223355", "precv@otog.ph", "SecretPass123");
+        Wallet senderWallet = walletService.getWalletByUserId(sender.getUserId());
+        SessionManager.getInstance().login(sender, senderWallet);
+        authService.setPin(sender.getUserId(), "SecretPass123", "1234");
+
+        CashInOutPanel cashPanel = new CashInOutPanel(walletService, authService, BankResponseStatus.SUCCESS);
+        Transaction cashInTxn = cashPanel.submitCashOperationAsync(
+                "CASH_IN", "GCash", null, "400.00", "Modular top-up", null)
+                .get(5, TimeUnit.SECONDS);
+        assertNotNull(cashInTxn);
+        assertTrue(cashPanel.isLastOperationExecutedOffEdt(), "CashInOutPanel must execute off EDT");
+        assertEquals(new BigDecimal("400.00"), walletService.getBalance(senderWallet.getWalletId()));
+        assertTrue(cashPanel.getCashFeedbackLabel().getText().contains("successful"));
+
+        SendMoneyPanel sendPanel = new SendMoneyPanel(walletService, authService);
+        Transaction sendTxn = sendPanel.submitSendMoneyAsync(
+                recipient.getMobileNumber(), "125.00", "Modular send", "1234")
+                .get(5, TimeUnit.SECONDS);
+        assertNotNull(sendTxn);
+        assertTrue(sendPanel.isLastOperationExecutedOffEdt(), "SendMoneyPanel must execute off EDT");
+        assertEquals(new BigDecimal("275.00"), walletService.getBalance(senderWallet.getWalletId()));
+        assertEquals(new BigDecimal("125.00"), walletService.getWalletByUserId(recipient.getUserId()).getBalance());
+        assertTrue(sendPanel.getSendFeedbackLabel().getText().contains("Transfer successful"));
     }
 }

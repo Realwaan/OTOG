@@ -3,24 +3,58 @@ package com.otog.ui;
 import com.intellij.uiDesigner.core.GridConstraints;
 import com.intellij.uiDesigner.core.GridLayoutManager;
 import com.intellij.uiDesigner.core.Spacer;
+import com.otog.model.Transaction;
+import com.otog.model.TransactionFilter;
 import com.otog.model.TransactionStatus;
 import com.otog.model.TransactionType;
+import com.otog.model.User;
+import com.otog.model.Wallet;
+import com.otog.service.SessionManager;
+import com.otog.service.StatementFileService;
+import com.otog.service.WalletOperations;
+import com.otog.util.MoneyUtil;
 import com.otog.util.OtogConfig;
 import com.otog.util.UiTheme;
 
 import javax.swing.*;
+import javax.swing.filechooser.FileNameExtensionFilter;
 import javax.swing.table.DefaultTableModel;
 import java.awt.*;
+import java.awt.event.MouseAdapter;
+import java.awt.event.MouseEvent;
+import java.io.File;
+import java.nio.file.Path;
+import java.time.LocalDate;
+import java.time.format.DateTimeFormatter;
+import java.time.format.DateTimeParseException;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.EnumMap;
+import java.util.List;
+import java.util.Locale;
+import java.util.Map;
+import java.util.concurrent.CompletableFuture;
+import java.util.function.BiConsumer;
+import java.util.function.BooleanSupplier;
+import java.util.function.Consumer;
+import java.util.function.Supplier;
 
 /**
  * Bound IntelliJ Swing form panel for the Dashboard Overview tab:
  * Quick Actions, Statement File Export/Import buttons, Transaction History Filters,
- * and Recent Activity state cards.
+ * Recent Activity state cards, receipt inspection, repeat drafts, and status lookup.
  */
 public class OverviewPanel extends JPanel {
 
     public static final String ALL_TYPES_OPTION = "All Types";
     public static final String ALL_STATUSES_OPTION = "All Statuses";
+
+    private static final Map<TransactionType, String> FIXED_DIRECTION_BY_TYPE = createDirectionMap();
+
+    private final WalletOperations walletService;
+    private final StatementFileService statementFileService;
+    private final DateTimeFormatter dateFormatter =
+            DateTimeFormatter.ofPattern(OtogConfig.getInstance().getUiDatePattern());
 
     private JPanel pnlRoot;
     private JPanel pnlQuickActions;
@@ -64,12 +98,730 @@ public class OverviewPanel extends JPanel {
     private JButton btnExportReceipt;
     private JLabel lblActivityFeedback;
 
+    private List<Transaction> loadedTransactions = Collections.emptyList();
+    private volatile TransactionFilter activeHistoryFilter = TransactionFilter.empty();
+
+    private Runnable onQuickNavCashIn;
+    private Runnable onQuickNavCashOut;
+    private Runnable onQuickNavSendMoney;
+    private Runnable onQuickNavPayBills;
+    private Runnable onQuickNavPinSettings;
+    private BooleanSupplier beforeInteractiveAction;
+    private Runnable onRetryLoad;
+    private Supplier<CompletableFuture<Void>> onRefreshRequested;
+    private Consumer<String> onStatusMessage;
+    private BiConsumer<String, Color> onStatusLookupFeedback;
+    private Consumer<Transaction> onRepeatDraftReady;
+    private UiSupport.DialogMessageCallback dialogMessageCallback = UiSupport.defaultMessageCallback();
+
     public OverviewPanel() {
+        this(null, new StatementFileService());
+    }
+
+    public OverviewPanel(WalletOperations walletService, StatementFileService statementFileService) {
         super(new BorderLayout());
+        this.walletService = walletService;
+        this.statementFileService = statementFileService != null
+                ? statementFileService
+                : new StatementFileService();
         if (pnlRoot == null) {
             $$$setupUI$$$();
         }
         add(pnlRoot, BorderLayout.CENTER);
+        initInteractions();
+    }
+
+    public void setOnQuickNavCashIn(Runnable onQuickNavCashIn) {
+        this.onQuickNavCashIn = onQuickNavCashIn;
+    }
+
+    public void setOnQuickNavCashOut(Runnable onQuickNavCashOut) {
+        this.onQuickNavCashOut = onQuickNavCashOut;
+    }
+
+    public void setOnQuickNavSendMoney(Runnable onQuickNavSendMoney) {
+        this.onQuickNavSendMoney = onQuickNavSendMoney;
+    }
+
+    public void setOnQuickNavPayBills(Runnable onQuickNavPayBills) {
+        this.onQuickNavPayBills = onQuickNavPayBills;
+    }
+
+    public void setOnQuickNavPinSettings(Runnable onQuickNavPinSettings) {
+        this.onQuickNavPinSettings = onQuickNavPinSettings;
+    }
+
+    public void setPinSettingsEnabled(boolean enabled) {
+        if (btnNavPinSettings != null) {
+            btnNavPinSettings.setEnabled(enabled);
+        }
+    }
+
+    public void setBeforeInteractiveAction(BooleanSupplier beforeInteractiveAction) {
+        this.beforeInteractiveAction = beforeInteractiveAction;
+    }
+
+    public void setOnRetryLoad(Runnable onRetryLoad) {
+        this.onRetryLoad = onRetryLoad;
+    }
+
+    public void setOnRefreshRequested(Supplier<CompletableFuture<Void>> onRefreshRequested) {
+        this.onRefreshRequested = onRefreshRequested;
+    }
+
+    public void setOnStatusMessage(Consumer<String> onStatusMessage) {
+        this.onStatusMessage = onStatusMessage;
+    }
+
+    public void setOnStatusLookupFeedback(BiConsumer<String, Color> onStatusLookupFeedback) {
+        this.onStatusLookupFeedback = onStatusLookupFeedback;
+    }
+
+    public void setOnRepeatDraftReady(Consumer<Transaction> onRepeatDraftReady) {
+        this.onRepeatDraftReady = onRepeatDraftReady;
+    }
+
+    public void setDialogMessageCallback(UiSupport.DialogMessageCallback dialogMessageCallback) {
+        this.dialogMessageCallback = dialogMessageCallback != null
+                ? dialogMessageCallback
+                : UiSupport.defaultMessageCallback();
+    }
+
+    private void initInteractions() {
+        btnNavCashIn.addActionListener(e -> {
+            if (onQuickNavCashIn != null) {
+                onQuickNavCashIn.run();
+            }
+        });
+        btnNavCashOut.addActionListener(e -> {
+            if (onQuickNavCashOut != null) {
+                onQuickNavCashOut.run();
+            }
+        });
+        btnNavSendMoney.addActionListener(e -> {
+            if (onQuickNavSendMoney != null) {
+                onQuickNavSendMoney.run();
+            }
+        });
+        if (btnNavPayBills != null) {
+            btnNavPayBills.addActionListener(e -> {
+                if (onQuickNavPayBills != null) {
+                    onQuickNavPayBills.run();
+                }
+            });
+        }
+        btnNavPinSettings.addActionListener(e -> {
+            if (onQuickNavPinSettings != null) {
+                onQuickNavPinSettings.run();
+            }
+        });
+
+        btnExportStatement.addActionListener(e -> handleInteractiveExportStatement());
+        btnLoadStatement.addActionListener(e -> handleInteractiveLoadStatement());
+
+        btnRetryLoad.addActionListener(e -> {
+            if (onRetryLoad != null) {
+                onRetryLoad.run();
+            }
+        });
+        tblTransactions.addMouseListener(new MouseAdapter() {
+            @Override
+            public void mouseClicked(MouseEvent e) {
+                if (e.getClickCount() == 2 && tblTransactions.getSelectedRow() >= 0) {
+                    showSelectedReceipt();
+                }
+            }
+        });
+        tblTransactions.getSelectionModel().addListSelectionListener(e -> {
+            if (!e.getValueIsAdjusting()) {
+                updateTableActionButtonsState();
+            }
+        });
+        btnCheckStatus.addActionListener(e -> lookupSelectedTransactionStatus());
+        btnRepeatDraft.addActionListener(e -> handleRepeatSelectedTransactionDraft());
+        btnViewReceipt.addActionListener(e -> showSelectedReceipt());
+        btnExportReceipt.addActionListener(e -> handleInteractiveExportReceipt());
+        btnApplyFilters.addActionListener(e -> handleApplyHistoryFilters());
+        btnClearFilters.addActionListener(e -> clearHistoryFiltersAsync());
+        txtFilterFromDate.addActionListener(e -> handleApplyHistoryFilters());
+        txtFilterToDate.addActionListener(e -> handleApplyHistoryFilters());
+    }
+
+    public TransactionFilter getActiveHistoryFilter() {
+        return activeHistoryFilter;
+    }
+
+    public void setActiveHistoryFilter(TransactionFilter filter) {
+        this.activeHistoryFilter = filter != null ? filter : TransactionFilter.empty();
+    }
+
+    public void resetFilterControls() {
+        this.activeHistoryFilter = TransactionFilter.empty();
+        UiSupport.runOnEdt(() -> {
+            if (cmbFilterType != null) {
+                cmbFilterType.setSelectedIndex(0);
+            }
+            if (cmbFilterStatus != null) {
+                cmbFilterStatus.setSelectedIndex(0);
+            }
+            if (txtFilterFromDate != null) {
+                txtFilterFromDate.setText("");
+            }
+            if (txtFilterToDate != null) {
+                txtFilterToDate.setText("");
+            }
+        });
+    }
+
+    public void showLoadingState(String message) {
+        lblLoadingState.setText(message);
+        activityCardLayout.show(activityCardPanel, Main.DashboardState.LOADING.name());
+    }
+
+    public void showEmptyState(boolean filtered) {
+        lblEmptyState.setText(filtered
+                ? "No transactions match the selected filters."
+                : "No recent transactions yet. Use Cash In or Send Money to get started.");
+        activityCardLayout.show(activityCardPanel, Main.DashboardState.EMPTY.name());
+    }
+
+    public void showErrorState(String message) {
+        lblErrorState.setText("Unable to load wallet data: " + message);
+        activityCardLayout.show(activityCardPanel, Main.DashboardState.ERROR.name());
+    }
+
+    public void showReadyState() {
+        activityCardLayout.show(activityCardPanel, Main.DashboardState.READY.name());
+    }
+
+    public void setRetryEnabled(boolean enabled) {
+        if (btnRetryLoad != null) {
+            btnRetryLoad.setEnabled(enabled);
+        }
+    }
+
+    public void populateTransactions(String walletId, List<Transaction> transactions) {
+        if (transactions == null || transactions.isEmpty()) {
+            this.loadedTransactions = Collections.emptyList();
+        } else {
+            List<Transaction> sorted = new ArrayList<>(transactions);
+            Collections.sort(sorted);
+            this.loadedTransactions = Collections.unmodifiableList(sorted);
+        }
+        transactionsTableModel.setRowCount(0);
+        for (Transaction txn : this.loadedTransactions) {
+            String date = txn.getCreatedAt() != null ? txn.getCreatedAt().format(dateFormatter) : "-";
+            String direction = resolveDirection(walletId, txn);
+            String statusText = txn.getStatus() != null ? txn.getStatus().name() : "-";
+            if (txn.getProviderStatus() != null && !txn.getProviderStatus().isEmpty()) {
+                statusText += " [" + txn.getProviderStatus() + "]";
+            }
+            String provRef = (txn.getProviderReference() != null && !txn.getProviderReference().isEmpty())
+                    ? txn.getProviderReference() : "-";
+            transactionsTableModel.addRow(new Object[]{
+                    date,
+                    txn.getReferenceNumber(),
+                    txn.getType() != null ? txn.getType().name() : "-",
+                    direction,
+                    MoneyUtil.format(txn.getAmount(), txn.getCurrency()),
+                    MoneyUtil.format(txn.getFee(), txn.getCurrency()),
+                    statusText,
+                    provRef,
+                    txn.getDescription() != null ? txn.getDescription() : ""
+            });
+        }
+        updateTableActionButtonsState();
+    }
+
+    private static Map<TransactionType, String> createDirectionMap() {
+        EnumMap<TransactionType, String> map = new EnumMap<>(TransactionType.class);
+        map.put(TransactionType.CASH_IN, "IN (+)");
+        map.put(TransactionType.CASH_OUT, "OUT (-)");
+        map.put(TransactionType.BILL_PAYMENT, "OUT (-)");
+        map.put(TransactionType.LOAN_DISBURSEMENT, "IN (+)");
+        map.put(TransactionType.LOAN_REPAYMENT, "OUT (-)");
+        map.put(TransactionType.INVESTMENT_BUY, "OUT (-)");
+        map.put(TransactionType.INVESTMENT_REDEEM, "IN (+)");
+        return Collections.unmodifiableMap(map);
+    }
+
+    private static String resolveDirection(String walletId, Transaction txn) {
+        if (txn.getType() != null) {
+            String fixedDirection = FIXED_DIRECTION_BY_TYPE.get(txn.getType());
+            if (fixedDirection != null) {
+                return fixedDirection;
+            }
+        }
+        if (walletId != null && walletId.equals(txn.getTargetWalletId())
+                && !walletId.equals(txn.getSourceWalletId())) {
+            return "IN (+)";
+        }
+        if (walletId != null && walletId.equals(txn.getSourceWalletId())) {
+            return "OUT (-)";
+        }
+        return "-";
+    }
+
+    /** Resolves the currently selected table row via view-to-model mapping, or {@code null} if none. */
+    public Transaction getSelectedTransaction() {
+        if (tblTransactions == null) {
+            return null;
+        }
+        int viewRow = tblTransactions.getSelectedRow();
+        int row = viewRow >= 0 ? tblTransactions.convertRowIndexToModel(viewRow) : -1;
+        if (row < 0 || row >= loadedTransactions.size()) {
+            return null;
+        }
+        return loadedTransactions.get(row);
+    }
+
+    public void updateTableActionButtonsState() {
+        Transaction selected = getSelectedTransaction();
+        if (btnCheckStatus != null) {
+            boolean isCashTxn = selected != null
+                    && (selected.getType() == TransactionType.CASH_IN
+                    || selected.getType() == TransactionType.CASH_OUT
+                    || selected.getType() == TransactionType.BILL_PAYMENT);
+            btnCheckStatus.setEnabled(isCashTxn);
+        }
+        if (btnRepeatDraft != null) {
+            boolean canRepeat = selected != null
+                    && (selected.getType() == TransactionType.SEND_MONEY
+                    || selected.getType() == TransactionType.CASH_IN
+                    || selected.getType() == TransactionType.CASH_OUT
+                    || selected.getType() == TransactionType.BILL_PAYMENT);
+            btnRepeatDraft.setEnabled(canRepeat);
+        }
+    }
+
+    private void handleApplyHistoryFilters() {
+        if (!ensureInteractiveSession()) {
+            return;
+        }
+        try {
+            TransactionFilter.Builder builder = TransactionFilter.builder();
+            String selectedType = cmbFilterType != null ? (String) cmbFilterType.getSelectedItem() : null;
+            if (selectedType != null && !ALL_TYPES_OPTION.equals(selectedType)) {
+                builder.type(TransactionType.valueOf(selectedType));
+            }
+            String selectedStatus = cmbFilterStatus != null ? (String) cmbFilterStatus.getSelectedItem() : null;
+            if (selectedStatus != null && !ALL_STATUSES_OPTION.equals(selectedStatus)) {
+                builder.status(TransactionStatus.valueOf(selectedStatus));
+            }
+            String fromRaw = txtFilterFromDate != null && txtFilterFromDate.getText() != null
+                    ? txtFilterFromDate.getText().trim() : "";
+            String toRaw = txtFilterToDate != null && txtFilterToDate.getText() != null
+                    ? txtFilterToDate.getText().trim() : "";
+            if (!fromRaw.isEmpty()) {
+                builder.fromDate(LocalDate.parse(fromRaw));
+            }
+            if (!toRaw.isEmpty()) {
+                builder.toDate(LocalDate.parse(toRaw));
+            }
+            applyHistoryFiltersAsync(builder.build());
+        } catch (DateTimeParseException ex) {
+            String msg = "Invalid date format. Please use YYYY-MM-DD (e.g., 2026-11-19).";
+            notifyStatus("Filter validation failed: " + msg);
+            showMessage("Invalid Date Filter", msg, JOptionPane.WARNING_MESSAGE);
+        } catch (IllegalArgumentException ex) {
+            String msg = UiSupport.extractErrorMessage(ex);
+            notifyStatus("Filter validation failed: " + msg);
+            showMessage("Invalid History Filter", msg, JOptionPane.WARNING_MESSAGE);
+        }
+    }
+
+    public CompletableFuture<Void> applyHistoryFiltersAsync(TransactionFilter filter) {
+        setActiveHistoryFilter(filter);
+        return triggerRefresh();
+    }
+
+    public CompletableFuture<Void> clearHistoryFiltersAsync() {
+        resetFilterControls();
+        return triggerRefresh();
+    }
+
+    public CompletableFuture<Transaction> submitStatusLookupAsync(String referenceNumber) {
+        CompletableFuture<Transaction> future = new CompletableFuture<>();
+        if (walletService == null) {
+            future.completeExceptionally(new IllegalStateException("WalletOperations service is unavailable."));
+            return future;
+        }
+        UiSupport.runOnEdt(() -> {
+            if (btnCheckStatus != null) {
+                btnCheckStatus.setEnabled(false);
+            }
+            notifyStatus("Checking bank status for " + referenceNumber + "...");
+        });
+
+        SwingWorker<Transaction, Void> worker = new SwingWorker<>() {
+            @Override
+            protected Transaction doInBackground() {
+                SessionManager.getInstance().requireAuthentication();
+                return walletService.statusLookup(referenceNumber);
+            }
+
+            @Override
+            protected void done() {
+                updateTableActionButtonsState();
+                try {
+                    Transaction txn = get();
+                    String provRef = txn.getProviderReference() != null
+                            ? " | Bank Ref: " + txn.getProviderReference() : "";
+                    String provStatus = txn.getProviderStatus() != null
+                            ? " [" + txn.getProviderStatus() + "]" : "";
+                    Color color;
+                    String msg;
+                    if (txn.getStatus() == TransactionStatus.COMPLETED) {
+                        color = UiTheme.color(UiTheme.ColorRole.SUCCESS);
+                        msg = "Status lookup settled COMPLETED: "
+                                + txn.getReferenceNumber() + provRef + provStatus;
+                    } else if (txn.getStatus() == TransactionStatus.FAILED) {
+                        color = UiTheme.color(UiTheme.ColorRole.ERROR);
+                        msg = "Status lookup confirmed FAILED: "
+                                + txn.getReferenceNumber() + provRef + provStatus;
+                    } else {
+                        color = UiTheme.color(UiTheme.ColorRole.WARNING);
+                        msg = "Status lookup remains PENDING: "
+                                + txn.getReferenceNumber() + provRef + provStatus;
+                    }
+                    if (onStatusLookupFeedback != null) {
+                        onStatusLookupFeedback.accept(msg, color);
+                    }
+                    if (lblActivityFeedback != null) {
+                        lblActivityFeedback.setForeground(color);
+                        lblActivityFeedback.setText(msg);
+                    }
+                    String syncStatusText = "Status sync: " + txn.getStatus() + provStatus;
+                    notifyStatus(syncStatusText);
+                    triggerRefresh().whenComplete((v, err) -> {
+                        UiSupport.runOnEdt(() -> notifyStatus(syncStatusText));
+                        future.complete(txn);
+                    });
+                } catch (Exception ex) {
+                    Throwable cause = UiSupport.unwrapCause(ex);
+                    String message = UiSupport.extractErrorMessage(cause);
+                    if (lblActivityFeedback != null) {
+                        lblActivityFeedback.setForeground(UiTheme.color(UiTheme.ColorRole.ERROR));
+                        lblActivityFeedback.setText("Status lookup failed: " + message);
+                    }
+                    notifyStatus("Status lookup failed: " + message);
+                    future.completeExceptionally(cause);
+                }
+            }
+        };
+        worker.execute();
+        return future;
+    }
+
+    private void lookupSelectedTransactionStatus() {
+        Transaction txn = getSelectedTransaction();
+        if (txn == null) {
+            showMessage("No Transaction Selected",
+                    "Please select a transaction row to check its bank status.",
+                    JOptionPane.INFORMATION_MESSAGE);
+            return;
+        }
+        if (txn.getType() != TransactionType.CASH_IN
+                && txn.getType() != TransactionType.CASH_OUT
+                && txn.getType() != TransactionType.BILL_PAYMENT) {
+            String msg = "Status lookup is only available for Cash In / Cash Out and Bill Payment transactions.";
+            if (lblActivityFeedback != null) {
+                lblActivityFeedback.setForeground(UiTheme.color(UiTheme.ColorRole.WARNING));
+                lblActivityFeedback.setText(msg);
+            }
+            notifyStatus(msg);
+            return;
+        }
+        submitStatusLookupAsync(txn.getReferenceNumber());
+    }
+
+    private void showSelectedReceipt() {
+        Transaction txn = getSelectedTransaction();
+        if (txn == null) {
+            showMessage("No Transaction Selected",
+                    "Please select a transaction row to view its receipt.",
+                    JOptionPane.INFORMATION_MESSAGE);
+            return;
+        }
+        Wallet wallet = SessionManager.getInstance().getCurrentWallet();
+        String walletId = wallet != null ? wallet.getWalletId() : null;
+        String refKey = txn.getReferenceNumber() != null ? txn.getReferenceNumber() : txn.getTransactionId();
+
+        new SwingWorker<String, Void>() {
+            @Override
+            protected String doInBackground() {
+                if (walletService != null && walletId != null && refKey != null) {
+                    return walletService.getTransactionReceipt(walletId, refKey);
+                }
+                return txn.getReceipt();
+            }
+
+            @Override
+            protected void done() {
+                try {
+                    String formattedReceipt = get();
+                    JTextArea area = new JTextArea(formattedReceipt);
+                    area.setEditable(false);
+                    area.setFont(UiTheme.font(UiTheme.FontRole.MONO));
+                    area.setMargin(new Insets(8, 10, 8, 10));
+                    JScrollPane scroll = new JScrollPane(area);
+                    scroll.setPreferredSize(OtogConfig.getInstance().getUiDimension(
+                            "ui.receipt.width", "ui.receipt.height", 460, 360));
+                    JOptionPane.showMessageDialog(OverviewPanel.this, scroll,
+                            "Transaction Receipt \u2014 " + txn.getReferenceNumber(),
+                            JOptionPane.INFORMATION_MESSAGE);
+                } catch (Exception ex) {
+                    Throwable cause = UiSupport.unwrapCause(ex);
+                    showMessage("Receipt Error", UiSupport.extractErrorMessage(cause),
+                            JOptionPane.ERROR_MESSAGE);
+                }
+            }
+        }.execute();
+    }
+
+    private void handleRepeatSelectedTransactionDraft() {
+        if (!ensureInteractiveSession()) {
+            return;
+        }
+        createRepeatDraftForSelectedAsync().whenComplete((draft, err) -> UiSupport.runOnEdt(() -> {
+            if (err != null) {
+                Throwable cause = UiSupport.unwrapCause(err);
+                showMessage("Repeat Draft Failed", UiSupport.extractErrorMessage(cause),
+                        JOptionPane.ERROR_MESSAGE);
+            }
+        }));
+    }
+
+    /**
+     * Clones the currently selected transaction via Prototype ({@code createRepeatTransactionDraft})
+     * with a fresh reference number and pre-fills the matching payment form without auto-submitting.
+     */
+    public CompletableFuture<Transaction> createRepeatDraftForSelectedAsync() {
+        CompletableFuture<Transaction> future = new CompletableFuture<>();
+        if (walletService == null) {
+            future.completeExceptionally(new IllegalStateException("WalletOperations service is unavailable."));
+            return future;
+        }
+        Transaction selected = getSelectedTransaction();
+        if (selected == null) {
+            future.completeExceptionally(new IllegalStateException("Please select a transaction to repeat."));
+            return future;
+        }
+        Wallet wallet = SessionManager.getInstance().getCurrentWallet();
+        if (wallet == null) {
+            future.completeExceptionally(new IllegalStateException("Active wallet is required."));
+            return future;
+        }
+        String key = selected.getReferenceNumber() != null
+                ? selected.getReferenceNumber() : selected.getTransactionId();
+
+        new SwingWorker<Transaction, Void>() {
+            @Override
+            protected Transaction doInBackground() {
+                SessionManager.getInstance().touchActivity();
+                return walletService.createRepeatTransactionDraft(wallet.getWalletId(), key, null);
+            }
+
+            @Override
+            protected void done() {
+                try {
+                    Transaction draft = get();
+                    if (onRepeatDraftReady != null) {
+                        onRepeatDraftReady.accept(draft);
+                    }
+                    future.complete(draft);
+                } catch (Exception ex) {
+                    future.completeExceptionally(UiSupport.unwrapCause(ex));
+                }
+            }
+        }.execute();
+        return future;
+    }
+
+    private void handleInteractiveExportStatement() {
+        if (!ensureInteractiveSession()) {
+            return;
+        }
+        JFileChooser chooser = new JFileChooser();
+        chooser.setDialogTitle("Export OTOG Wallet Statement");
+        FileNameExtensionFilter txtFilter = new FileNameExtensionFilter("OTOG Statement (*.txt)", "txt");
+        FileNameExtensionFilter csvFilter = new FileNameExtensionFilter("CSV Statement (*.csv)", "csv");
+        chooser.addChoosableFileFilter(txtFilter);
+        chooser.addChoosableFileFilter(csvFilter);
+        chooser.setFileFilter(txtFilter);
+        chooser.setSelectedFile(new File(OtogConfig.getInstance().getStatementDefaultFileName()));
+        if (chooser.showSaveDialog(this) == JFileChooser.APPROVE_OPTION) {
+            Path selectedPath = chooser.getSelectedFile().toPath();
+            if (chooser.getFileFilter() == csvFilter
+                    && !selectedPath.getFileName().toString().toLowerCase(Locale.ROOT).endsWith(".csv")) {
+                selectedPath = selectedPath.resolveSibling(selectedPath.getFileName() + ".csv");
+            }
+            exportStatementAsync(selectedPath);
+        }
+    }
+
+    private void handleInteractiveLoadStatement() {
+        if (!ensureInteractiveSession()) {
+            return;
+        }
+        JFileChooser chooser = new JFileChooser();
+        chooser.setDialogTitle("Load Saved OTOG Wallet Statement");
+        chooser.addChoosableFileFilter(new FileNameExtensionFilter("OTOG Statement Files (*.txt, *.csv)", "txt", "csv"));
+        if (chooser.showOpenDialog(this) == JFileChooser.APPROVE_OPTION) {
+            importStatementAsync(chooser.getSelectedFile().toPath()).thenAccept(stmt -> {
+                if (stmt != null) {
+                    UiSupport.runOnEdt(() -> {
+                        JTextArea area = new JTextArea(stmt.toDisplaySummary(), 18, 68);
+                        area.setEditable(false);
+                        area.setFont(UiTheme.font(UiTheme.FontRole.MONO));
+                        JOptionPane.showMessageDialog(OverviewPanel.this, new JScrollPane(area),
+                                "Loaded Wallet Statement \u2014 " + stmt.getMaskedWalletId(),
+                                JOptionPane.INFORMATION_MESSAGE);
+                    });
+                }
+            });
+        }
+    }
+
+    private void handleInteractiveExportReceipt() {
+        Transaction selected = getSelectedTransaction();
+        if (selected == null) {
+            showMessage("No Transaction Selected",
+                    "Please select a transaction row to save its receipt file.",
+                    JOptionPane.INFORMATION_MESSAGE);
+            return;
+        }
+        JFileChooser chooser = new JFileChooser();
+        chooser.setDialogTitle("Save Transaction Receipt");
+        FileNameExtensionFilter txtFilter = new FileNameExtensionFilter("OTOG Receipt (*.txt)", "txt");
+        FileNameExtensionFilter csvFilter = new FileNameExtensionFilter("CSV Receipt (*.csv)", "csv");
+        chooser.addChoosableFileFilter(txtFilter);
+        chooser.addChoosableFileFilter(csvFilter);
+        chooser.setFileFilter(txtFilter);
+        chooser.setSelectedFile(new File(
+                OtogConfig.getInstance().getReceiptFilePrefix() + selected.getReferenceNumber() + ".txt"));
+        if (chooser.showSaveDialog(this) == JFileChooser.APPROVE_OPTION) {
+            Path selectedPath = chooser.getSelectedFile().toPath();
+            if (chooser.getFileFilter() == csvFilter
+                    && !selectedPath.getFileName().toString().toLowerCase(Locale.ROOT).endsWith(".csv")) {
+                selectedPath = selectedPath.resolveSibling(selectedPath.getFileName() + ".csv");
+            }
+            exportSelectedReceiptAsync(selectedPath);
+        }
+    }
+
+    public CompletableFuture<Path> exportStatementAsync(Path targetFile) {
+        CompletableFuture<Path> future = new CompletableFuture<>();
+        User user = SessionManager.getInstance().getCurrentUser();
+        Wallet wallet = SessionManager.getInstance().getCurrentWallet();
+        List<Transaction> snapshotTxns = new ArrayList<>(loadedTransactions);
+
+        new SwingWorker<Path, Void>() {
+            @Override
+            protected Path doInBackground() {
+                Wallet latestWallet = (walletService != null && wallet != null && user != null)
+                        ? walletService.getWalletByUserId(user.getUserId())
+                        : wallet;
+                return statementFileService.exportWalletStatement(user, latestWallet, snapshotTxns, targetFile);
+            }
+
+            @Override
+            protected void done() {
+                try {
+                    Path saved = get();
+                    notifyStatus("Statement exported to " + saved.getFileName());
+                    if (lblActivityFeedback != null) {
+                        lblActivityFeedback.setForeground(UiTheme.color(UiTheme.ColorRole.SUCCESS));
+                        lblActivityFeedback.setText("Exported statement: " + saved.getFileName());
+                    }
+                    future.complete(saved);
+                } catch (Exception ex) {
+                    Throwable cause = UiSupport.unwrapCause(ex);
+                    String msg = UiSupport.extractErrorMessage(cause);
+                    notifyStatus("Statement export failed: " + msg);
+                    future.completeExceptionally(cause);
+                }
+            }
+        }.execute();
+        return future;
+    }
+
+    public CompletableFuture<StatementFileService.LoadedStatement> importStatementAsync(Path sourceFile) {
+        CompletableFuture<StatementFileService.LoadedStatement> future = new CompletableFuture<>();
+        new SwingWorker<StatementFileService.LoadedStatement, Void>() {
+            @Override
+            protected StatementFileService.LoadedStatement doInBackground() {
+                return statementFileService.importWalletStatement(sourceFile);
+            }
+
+            @Override
+            protected void done() {
+                try {
+                    StatementFileService.LoadedStatement loaded = get();
+                    notifyStatus("Loaded statement (" + loaded.getEntries().size() + " transactions).");
+                    if (lblActivityFeedback != null) {
+                        lblActivityFeedback.setForeground(UiTheme.color(UiTheme.ColorRole.SUCCESS));
+                        lblActivityFeedback.setText("Loaded statement for wallet " + loaded.getMaskedWalletId());
+                    }
+                    future.complete(loaded);
+                } catch (Exception ex) {
+                    Throwable cause = UiSupport.unwrapCause(ex);
+                    String msg = UiSupport.extractErrorMessage(cause);
+                    notifyStatus("Statement load failed: " + msg);
+                    future.completeExceptionally(cause);
+                }
+            }
+        }.execute();
+        return future;
+    }
+
+    public CompletableFuture<Path> exportSelectedReceiptAsync(Path targetFile) {
+        CompletableFuture<Path> future = new CompletableFuture<>();
+        Transaction selected = getSelectedTransaction();
+        new SwingWorker<Path, Void>() {
+            @Override
+            protected Path doInBackground() {
+                return statementFileService.exportReceipt(selected, targetFile);
+            }
+
+            @Override
+            protected void done() {
+                try {
+                    Path saved = get();
+                    notifyStatus("Receipt saved to " + saved.getFileName());
+                    future.complete(saved);
+                } catch (Exception ex) {
+                    Throwable cause = UiSupport.unwrapCause(ex);
+                    notifyStatus("Receipt save failed: " + UiSupport.extractErrorMessage(cause));
+                    future.completeExceptionally(cause);
+                }
+            }
+        }.execute();
+        return future;
+    }
+
+    private boolean ensureInteractiveSession() {
+        return beforeInteractiveAction == null || beforeInteractiveAction.getAsBoolean();
+    }
+
+    private CompletableFuture<Void> triggerRefresh() {
+        if (onRefreshRequested != null) {
+            CompletableFuture<Void> refresh = onRefreshRequested.get();
+            if (refresh != null) {
+                return refresh;
+            }
+        }
+        return CompletableFuture.completedFuture(null);
+    }
+
+    private void showMessage(String title, String message, int messageType) {
+        dialogMessageCallback.show(this, title, message, messageType);
+    }
+
+    private void notifyStatus(String message) {
+        if (onStatusMessage != null) {
+            onStatusMessage.accept(message);
+        }
     }
 
     public JPanel getRootPanel() {
@@ -194,6 +946,7 @@ public class OverviewPanel extends JPanel {
                 null, null, null, 0, false));
 
         btnNavCashIn = new JButton("Cash In");
+        UiTheme.styleSecondaryButton(btnNavCashIn);
         pnlQuickActions.add(btnNavCashIn, new GridConstraints(0, 0, 1, 1,
                 GridConstraints.ANCHOR_CENTER, GridConstraints.FILL_HORIZONTAL,
                 GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_CAN_GROW,
@@ -201,6 +954,7 @@ public class OverviewPanel extends JPanel {
                 null, null, null, 0, false));
 
         btnNavCashOut = new JButton("Cash Out");
+        UiTheme.styleSecondaryButton(btnNavCashOut);
         pnlQuickActions.add(btnNavCashOut, new GridConstraints(0, 1, 1, 1,
                 GridConstraints.ANCHOR_CENTER, GridConstraints.FILL_HORIZONTAL,
                 GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_CAN_GROW,
@@ -208,6 +962,7 @@ public class OverviewPanel extends JPanel {
                 null, null, null, 0, false));
 
         btnNavSendMoney = new JButton("Send Money");
+        UiTheme.styleSecondaryButton(btnNavSendMoney);
         pnlQuickActions.add(btnNavSendMoney, new GridConstraints(0, 2, 1, 1,
                 GridConstraints.ANCHOR_CENTER, GridConstraints.FILL_HORIZONTAL,
                 GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_CAN_GROW,
@@ -215,6 +970,7 @@ public class OverviewPanel extends JPanel {
                 null, null, null, 0, false));
 
         btnNavPayBills = new JButton("Pay Bills");
+        UiTheme.styleSecondaryButton(btnNavPayBills);
         pnlQuickActions.add(btnNavPayBills, new GridConstraints(0, 3, 1, 1,
                 GridConstraints.ANCHOR_CENTER, GridConstraints.FILL_HORIZONTAL,
                 GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_CAN_GROW,
@@ -222,6 +978,7 @@ public class OverviewPanel extends JPanel {
                 null, null, null, 0, false));
 
         btnNavPinSettings = new JButton("Set / Change PIN");
+        UiTheme.styleSecondaryButton(btnNavPinSettings);
         pnlQuickActions.add(btnNavPinSettings, new GridConstraints(0, 4, 1, 1,
                 GridConstraints.ANCHOR_CENTER, GridConstraints.FILL_HORIZONTAL,
                 GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_CAN_GROW,
@@ -230,6 +987,7 @@ public class OverviewPanel extends JPanel {
 
         btnExportStatement = new JButton("Export Statement");
         btnExportStatement.setToolTipText("Export wallet statement and recent activity to a file");
+        UiTheme.styleSecondaryButton(btnExportStatement);
         pnlQuickActions.add(btnExportStatement, new GridConstraints(0, 5, 1, 1,
                 GridConstraints.ANCHOR_CENTER, GridConstraints.FILL_HORIZONTAL,
                 GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_CAN_GROW,
@@ -238,6 +996,7 @@ public class OverviewPanel extends JPanel {
 
         btnLoadStatement = new JButton("Load Statement");
         btnLoadStatement.setToolTipText("Load and inspect a saved wallet statement file");
+        UiTheme.styleSecondaryButton(btnLoadStatement);
         pnlQuickActions.add(btnLoadStatement, new GridConstraints(0, 6, 1, 1,
                 GridConstraints.ANCHOR_CENTER, GridConstraints.FILL_HORIZONTAL,
                 GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_CAN_GROW,
@@ -267,7 +1026,7 @@ public class OverviewPanel extends JPanel {
                 null, null, null, 0, false));
 
         JLabel lblType = new JLabel("Type:");
-        lblType.setFont(UiTheme.font(UiTheme.FontRole.SMALL));
+        UiTheme.styleFormLabel(lblType);
         pnlHistoryFilters.add(lblType, new GridConstraints(0, 0, 1, 1,
                 GridConstraints.ANCHOR_WEST, GridConstraints.FILL_NONE,
                 GridConstraints.SIZEPOLICY_FIXED, GridConstraints.SIZEPOLICY_FIXED,
@@ -278,6 +1037,7 @@ public class OverviewPanel extends JPanel {
         for (TransactionType type : TransactionType.values()) {
             cmbFilterType.addItem(type.name());
         }
+        UiTheme.styleInputField(cmbFilterType);
         pnlHistoryFilters.add(cmbFilterType, new GridConstraints(0, 1, 1, 1,
                 GridConstraints.ANCHOR_WEST, GridConstraints.FILL_HORIZONTAL,
                 GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_CAN_GROW,
@@ -285,7 +1045,7 @@ public class OverviewPanel extends JPanel {
                 null, new Dimension(130, -1), null, 0, false));
 
         JLabel lblStatus = new JLabel("Status:");
-        lblStatus.setFont(UiTheme.font(UiTheme.FontRole.SMALL));
+        UiTheme.styleFormLabel(lblStatus);
         pnlHistoryFilters.add(lblStatus, new GridConstraints(0, 2, 1, 1,
                 GridConstraints.ANCHOR_WEST, GridConstraints.FILL_NONE,
                 GridConstraints.SIZEPOLICY_FIXED, GridConstraints.SIZEPOLICY_FIXED,
@@ -296,6 +1056,7 @@ public class OverviewPanel extends JPanel {
         for (TransactionStatus status : TransactionStatus.values()) {
             cmbFilterStatus.addItem(status.name());
         }
+        UiTheme.styleInputField(cmbFilterStatus);
         pnlHistoryFilters.add(cmbFilterStatus, new GridConstraints(0, 3, 1, 1,
                 GridConstraints.ANCHOR_WEST, GridConstraints.FILL_HORIZONTAL,
                 GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_CAN_GROW,
@@ -303,7 +1064,7 @@ public class OverviewPanel extends JPanel {
                 null, new Dimension(110, -1), null, 0, false));
 
         JLabel lblFrom = new JLabel("From:");
-        lblFrom.setFont(UiTheme.font(UiTheme.FontRole.SMALL));
+        UiTheme.styleFormLabel(lblFrom);
         pnlHistoryFilters.add(lblFrom, new GridConstraints(0, 4, 1, 1,
                 GridConstraints.ANCHOR_WEST, GridConstraints.FILL_NONE,
                 GridConstraints.SIZEPOLICY_FIXED, GridConstraints.SIZEPOLICY_FIXED,
@@ -311,6 +1072,7 @@ public class OverviewPanel extends JPanel {
 
         txtFilterFromDate = new JTextField(9);
         txtFilterFromDate.setToolTipText("Start date (YYYY-MM-DD)");
+        UiTheme.styleInputField(txtFilterFromDate);
         pnlHistoryFilters.add(txtFilterFromDate, new GridConstraints(0, 5, 1, 1,
                 GridConstraints.ANCHOR_WEST, GridConstraints.FILL_HORIZONTAL,
                 GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_CAN_GROW,
@@ -318,7 +1080,7 @@ public class OverviewPanel extends JPanel {
                 null, new Dimension(92, -1), null, 0, false));
 
         JLabel lblTo = new JLabel("To:");
-        lblTo.setFont(UiTheme.font(UiTheme.FontRole.SMALL));
+        UiTheme.styleFormLabel(lblTo);
         pnlHistoryFilters.add(lblTo, new GridConstraints(0, 6, 1, 1,
                 GridConstraints.ANCHOR_WEST, GridConstraints.FILL_NONE,
                 GridConstraints.SIZEPOLICY_FIXED, GridConstraints.SIZEPOLICY_FIXED,
@@ -326,6 +1088,7 @@ public class OverviewPanel extends JPanel {
 
         txtFilterToDate = new JTextField(9);
         txtFilterToDate.setToolTipText("End date (YYYY-MM-DD)");
+        UiTheme.styleInputField(txtFilterToDate);
         pnlHistoryFilters.add(txtFilterToDate, new GridConstraints(0, 7, 1, 1,
                 GridConstraints.ANCHOR_WEST, GridConstraints.FILL_HORIZONTAL,
                 GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_CAN_GROW,
@@ -334,6 +1097,7 @@ public class OverviewPanel extends JPanel {
 
         btnApplyFilters = new JButton("Filter");
         btnApplyFilters.setToolTipText("Filter owned transaction history by date, type, and status");
+        UiTheme.stylePrimaryButton(btnApplyFilters);
         pnlHistoryFilters.add(btnApplyFilters, new GridConstraints(0, 8, 1, 1,
                 GridConstraints.ANCHOR_CENTER, GridConstraints.FILL_HORIZONTAL,
                 GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_CAN_GROW,
@@ -342,6 +1106,7 @@ public class OverviewPanel extends JPanel {
 
         btnClearFilters = new JButton("Reset");
         btnClearFilters.setToolTipText("Clear active filters and show recent activity");
+        UiTheme.styleSecondaryButton(btnClearFilters);
         pnlHistoryFilters.add(btnClearFilters, new GridConstraints(0, 9, 1, 1,
                 GridConstraints.ANCHOR_CENTER, GridConstraints.FILL_HORIZONTAL,
                 GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_CAN_GROW,
@@ -373,6 +1138,7 @@ public class OverviewPanel extends JPanel {
         lblErrorState.setFont(UiTheme.font(UiTheme.FontRole.BODY));
         lblErrorState.setForeground(UiTheme.color(UiTheme.ColorRole.ERROR));
         btnRetryLoad = new JButton("Retry");
+        UiTheme.styleSecondaryButton(btnRetryLoad);
         pnlRetryWrapper = new JPanel(new FlowLayout(FlowLayout.CENTER));
         pnlRetryWrapper.add(btnRetryLoad);
         pnlErrorInner.add(lblErrorState, BorderLayout.CENTER);
@@ -387,9 +1153,8 @@ public class OverviewPanel extends JPanel {
             }
         };
         tblTransactions = new JTable(transactionsTableModel);
-        tblTransactions.setSelectionMode(ListSelectionModel.SINGLE_SELECTION);
-        tblTransactions.setRowHeight(OtogConfig.getInstance().getTableRowHeight());
-        tblTransactions.getTableHeader().setReorderingAllowed(false);
+        UiTheme.styleTable(tblTransactions, 115, 130, 95, 70, 95, 75, 125, 120, 175);
+        UiTheme.alignTableColumnsRight(tblTransactions, 4, 5);
 
         pnlReadyCard = new JPanel(new BorderLayout(6, 6));
         pnlReadyCard.add(new JScrollPane(tblTransactions), BorderLayout.CENTER);
@@ -400,11 +1165,15 @@ public class OverviewPanel extends JPanel {
         pnlTableActionButtons = new JPanel(new FlowLayout(FlowLayout.RIGHT, 8, 0));
         btnCheckStatus = new JButton("Lookup Status");
         btnCheckStatus.setEnabled(false);
+        UiTheme.styleSecondaryButton(btnCheckStatus);
         btnRepeatDraft = new JButton("Repeat Draft");
         btnRepeatDraft.setToolTipText("Clone selected transaction into a fresh repeat draft with a new reference number");
         btnRepeatDraft.setEnabled(false);
+        UiTheme.styleSecondaryButton(btnRepeatDraft);
         btnViewReceipt = new JButton("View Receipt");
+        UiTheme.styleSecondaryButton(btnViewReceipt);
         btnExportReceipt = new JButton("Save Receipt File");
+        UiTheme.styleSecondaryButton(btnExportReceipt);
         pnlTableActionButtons.add(btnCheckStatus);
         pnlTableActionButtons.add(btnRepeatDraft);
         pnlTableActionButtons.add(btnViewReceipt);
