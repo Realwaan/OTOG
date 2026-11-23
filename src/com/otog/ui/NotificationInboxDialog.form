@@ -1,0 +1,154 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<form xmlns="http://www.intellij.com/uidesigner/form/" version="1" bind-to-class="com.otog.ui.NotificationInboxDialog">
+  <grid id="notifRoot" binding="pnlRoot" layout-manager="GridLayoutManager" row-count="5" column-count="1" same-size-horizontally="false" same-size-vertically="false" hgap="8" vgap="8">
+    <margin top="12" left="14" bottom="12" right="14"/>
+    <constraints>
+      <xy x="20" y="20" width="720" height="480"/>
+    </constraints>
+    <properties/>
+    <border type="none"/>
+    <children>
+      <grid id="notifTopBar" binding="pnlTopBar" layout-manager="GridLayoutManager" row-count="1" column-count="4" same-size-horizontally="false" same-size-vertically="false" hgap="8" vgap="0">
+        <margin top="0" left="0" bottom="4" right="0"/>
+        <constraints>
+          <grid row="0" column="0" row-span="1" col-span="1" vsize-policy="0" hsize-policy="3" anchor="0" fill="3" indent="0" use-parent-layout="false"/>
+        </constraints>
+        <properties/>
+        <border type="none"/>
+        <children>
+          <component id="lblUnreadSummaryId" class="javax.swing.JLabel" binding="lblUnreadSummary">
+            <constraints>
+              <grid row="0" column="0" row-span="1" col-span="1" vsize-policy="0" hsize-policy="0" anchor="8" fill="0" indent="0" use-parent-layout="false"/>
+            </constraints>
+            <properties>
+              <font name="SansSerif" size="13" style="1"/>
+              <text value="Unread notifications: 0"/>
+            </properties>
+          </component>
+          <hspacer id="notifTopSpacer">
+            <constraints>
+              <grid row="0" column="1" row-span="1" col-span="1" vsize-policy="1" hsize-policy="6" anchor="0" fill="1" indent="0" use-parent-layout="false"/>
+            </constraints>
+          </hspacer>
+          <component id="chkUnreadOnlyId" class="javax.swing.JCheckBox" binding="chkUnreadOnly">
+            <constraints>
+              <grid row="0" column="2" row-span="1" col-span="1" vsize-policy="0" hsize-policy="0" anchor="4" fill="0" indent="0" use-parent-layout="false"/>
+            </constraints>
+            <properties>
+              <text value="Unread Only"/>
+            </properties>
+          </component>
+          <component id="btnRefreshInboxId" class="javax.swing.JButton" binding="btnRefreshInbox">
+            <constraints>
+              <grid row="0" column="3" row-span="1" col-span="1" vsize-policy="0" hsize-policy="3" anchor="4" fill="0" indent="0" use-parent-layout="false"/>
+            </constraints>
+            <properties>
+              <text value="Refresh"/>
+            </properties>
+          </component>
+        </children>
+      </grid>
+      <scrollpane id="notifTableScroll">
+        <constraints>
+          <grid row="1" column="0" row-span="1" col-span="1" vsize-policy="7" hsize-policy="7" anchor="0" fill="3" indent="0" use-parent-layout="false">
+            <preferred-size width="680" height="210"/>
+          </grid>
+        </constraints>
+        <properties/>
+        <border type="none"/>
+        <children>
+          <component id="tblNotificationsId" class="javax.swing.JTable" binding="tblNotifications">
+            <constraints/>
+            <properties/>
+          </component>
+        </children>
+      </scrollpane>
+      <scrollpane id="notifDetailScroll">
+        <constraints>
+          <grid row="2" column="0" row-span="1" col-span="1" vsize-policy="3" hsize-policy="7" anchor="0" fill="3" indent="0" use-parent-layout="false">
+            <preferred-size width="680" height="110"/>
+          </grid>
+        </constraints>
+        <properties/>
+        <border type="etched" title="Notification Detail"/>
+        <children>
+          <component id="txtNotifDetailId" class="javax.swing.JTextArea" binding="txtNotificationDetail">
+            <constraints/>
+            <properties>
+              <editable value="false"/>
+              <lineWrap value="true"/>
+              <wrapStyleWord value="true"/>
+            </properties>
+          </component>
+        </children>
+      </scrollpane>
+      <grid id="notifActions" binding="pnlActions" layout-manager="GridLayoutManager" row-count="1" column-count="6" same-size-horizontally="false" same-size-vertically="false" hgap="8" vgap="0">
+        <margin top="2" left="0" bottom="0" right="0"/>
+        <constraints>
+          <grid row="3" column="0" row-span="1" col-span="1" vsize-policy="0" hsize-policy="3" anchor="0" fill="3" indent="0" use-parent-layout="false"/>
+        </constraints>
+        <properties/>
+        <border type="none"/>
+        <children>
+          <component id="btnMarkReadId" class="javax.swing.JButton" binding="btnMarkRead">
+            <constraints>
+              <grid row="0" column="0" row-span="1" col-span="1" vsize-policy="0" hsize-policy="3" anchor="0" fill="1" indent="0" use-parent-layout="false"/>
+            </constraints>
+            <properties>
+              <enabled value="false"/>
+              <text value="Mark Read"/>
+            </properties>
+          </component>
+          <component id="btnMarkUnreadId" class="javax.swing.JButton" binding="btnMarkUnread">
+            <constraints>
+              <grid row="0" column="1" row-span="1" col-span="1" vsize-policy="0" hsize-policy="3" anchor="0" fill="1" indent="0" use-parent-layout="false"/>
+            </constraints>
+            <properties>
+              <enabled value="false"/>
+              <text value="Mark Unread"/>
+            </properties>
+          </component>
+          <component id="btnMarkAllReadId" class="javax.swing.JButton" binding="btnMarkAllRead">
+            <constraints>
+              <grid row="0" column="2" row-span="1" col-span="1" vsize-policy="0" hsize-policy="3" anchor="0" fill="1" indent="0" use-parent-layout="false"/>
+            </constraints>
+            <properties>
+              <text value="Mark All Read"/>
+            </properties>
+          </component>
+          <component id="btnViewLinkedReceiptId" class="javax.swing.JButton" binding="btnViewLinkedReceipt">
+            <constraints>
+              <grid row="0" column="3" row-span="1" col-span="1" vsize-policy="0" hsize-policy="3" anchor="0" fill="1" indent="0" use-parent-layout="false"/>
+            </constraints>
+            <properties>
+              <enabled value="false"/>
+              <text value="View Receipt"/>
+            </properties>
+          </component>
+          <hspacer id="notifActionsSpacer">
+            <constraints>
+              <grid row="0" column="4" row-span="1" col-span="1" vsize-policy="1" hsize-policy="6" anchor="0" fill="1" indent="0" use-parent-layout="false"/>
+            </constraints>
+          </hspacer>
+          <component id="btnCloseId" class="javax.swing.JButton" binding="btnClose">
+            <constraints>
+              <grid row="0" column="5" row-span="1" col-span="1" vsize-policy="0" hsize-policy="3" anchor="0" fill="1" indent="0" use-parent-layout="false"/>
+            </constraints>
+            <properties>
+              <text value="Close"/>
+            </properties>
+          </component>
+        </children>
+      </grid>
+      <component id="lblInboxFeedbackId" class="javax.swing.JLabel" binding="lblInboxFeedback">
+        <constraints>
+          <grid row="4" column="0" row-span="1" col-span="1" vsize-policy="0" hsize-policy="0" anchor="8" fill="0" indent="0" use-parent-layout="false"/>
+        </constraints>
+        <properties>
+          <font name="SansSerif" size="11" style="0"/>
+          <text value=" "/>
+        </properties>
+      </component>
+    </children>
+  </grid>
+</form>

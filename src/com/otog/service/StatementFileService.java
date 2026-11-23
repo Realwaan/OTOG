@@ -1,6 +1,7 @@
 package com.otog.service;
 
 import com.otog.exception.WalletException;
+import com.otog.model.ReceiptBuilder;
 import com.otog.model.Transaction;
 import com.otog.model.TransactionStatus;
 import com.otog.model.TransactionType;
@@ -193,16 +194,7 @@ public class StatementFileService {
      * never expose raw private account identifiers.
      */
     public static String maskIdentifier(String raw) {
-        if (raw == null || raw.trim().isEmpty()) {
-            return "N/A";
-        }
-        String trimmed = raw.trim();
-        if (trimmed.length() <= 4) {
-            return "***";
-        }
-        int prefixLen = Math.min(4, trimmed.length() / 2);
-        int suffixLen = Math.min(3, trimmed.length() - prefixLen);
-        return trimmed.substring(0, prefixLen) + "***" + trimmed.substring(trimmed.length() - suffixLen);
+        return ReceiptBuilder.maskIdentifier(raw);
     }
 
     public static DocumentFormat resolveFormatForPath(Path file) {

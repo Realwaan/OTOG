@@ -1,8 +1,10 @@
 package com.otog.service;
 
 import com.otog.exception.WalletException;
+import com.otog.model.Notification;
 import com.otog.model.PaymentMethod;
 import com.otog.model.Transaction;
+import com.otog.model.TransactionFilter;
 import com.otog.model.User;
 import com.otog.model.UserStatus;
 import com.otog.model.Wallet;
@@ -154,6 +156,75 @@ public class ProtectedWalletOperationsProxy implements WalletOperations {
     }
 
     @Override
+    public List<Transaction> getTransactionHistory(String walletId, TransactionFilter filter) {
+        User caller = requireActiveUser();
+        requireWalletOwnershipOrAdmin(caller, walletId);
+        return delegate.getTransactionHistory(walletId, filter);
+    }
+
+    @Override
+    public String getTransactionReceipt(String walletId, String transactionIdOrRef) {
+        User caller = requireActiveUser();
+        requireWalletOwnershipOrAdmin(caller, walletId);
+        return delegate.getTransactionReceipt(walletId, transactionIdOrRef);
+    }
+
+    @Override
+    public Transaction createRepeatTransactionDraft(String walletId, String transactionIdOrRef,
+                                                    String newReferenceNumber) {
+        User caller = requireActiveUser();
+        requireWalletOwnershipOrAdmin(caller, walletId);
+        return delegate.createRepeatTransactionDraft(walletId, transactionIdOrRef, newReferenceNumber);
+    }
+
+    @Override
+    public List<Notification> getNotifications(String userId, boolean unreadOnly) {
+        User caller = requireActiveUser();
+        requireUserOwnership(caller, userId, "Cannot read another user's notifications.");
+        return delegate.getNotifications(userId, unreadOnly);
+    }
+
+    @Override
+    public int getUnreadNotificationCount(String userId) {
+        User caller = requireActiveUser();
+        requireUserOwnership(caller, userId, "Cannot inspect another user's unread notifications.");
+        return delegate.getUnreadNotificationCount(userId);
+    }
+
+    @Override
+    public void markNotificationRead(String userId, String notificationId) {
+        User caller = requireActiveUser();
+        requireUserOwnership(caller, userId, "Cannot update another user's notification read status.");
+        delegate.markNotificationRead(userId, notificationId);
+    }
+
+    @Override
+    public void markNotificationUnread(String userId, String notificationId) {
+        User caller = requireActiveUser();
+        requireUserOwnership(caller, userId, "Cannot update another user's notification unread status.");
+        delegate.markNotificationUnread(userId, notificationId);
+    }
+
+    @Override
+    public int markAllNotificationsRead(String userId) {
+        User caller = requireActiveUser();
+        requireUserOwnership(caller, userId, "Cannot mark another user's notifications as read.");
+        return delegate.markAllNotificationsRead(userId);
+    }
+
+    @Override
+    public int retryPendingNotifications() {
+        requireActiveUser();
+        return delegate.retryPendingNotifications();
+    }
+
+    @Override
+    public NotificationService getNotificationService() {
+        requireActiveUser();
+        return delegate.getNotificationService();
+    }
+
+    @Override
     public List<PaymentMethod> getPaymentMethodsByUserId(String userId) {
         User caller = requireActiveUser();
         String cleanUserId = userId != null ? userId.trim() : null;
@@ -222,6 +293,15 @@ public class ProtectedWalletOperationsProxy implements WalletOperations {
         Wallet wallet = delegate.getWallet(walletId.trim());
         if (!caller.getUserId().equals(wallet.getUserId())) {
             throw new SecurityException("Access denied: Wallet " + walletId + " does not belong to active user.");
+        }
+    }
+
+    private static void requireUserOwnership(User caller, String targetUserId, String denialMessage) {
+        if (targetUserId == null || targetUserId.trim().isEmpty()) {
+            throw new IllegalArgumentException("User ID must not be null or empty");
+        }
+        if (!caller.getUserId().equals(targetUserId.trim())) {
+            throw new SecurityException("Access denied: " + denialMessage);
         }
     }
 }

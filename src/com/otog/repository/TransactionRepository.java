@@ -7,6 +7,7 @@ import com.otog.model.CashInOutTransaction;
 import com.otog.model.SendMoneyTransaction;
 import com.otog.model.Transaction;
 import com.otog.model.TransactionFactory;
+import com.otog.model.TransactionFilter;
 import com.otog.model.TransactionStatus;
 import com.otog.model.TransactionType;
 import com.otog.util.MoneyUtil;
@@ -203,6 +204,81 @@ public class TransactionRepository {
             ps.setString(1, walletId);
             ps.setString(2, walletId);
             ps.setInt(3, limit);
+            try (ResultSet rs = ps.executeQuery()) {
+                while (rs.next()) {
+                    list.add(mapRow(rs));
+                }
+            }
+        }
+        return list;
+    }
+
+    /**
+     * Queries owned transactions for a wallet matching optional date range, type, status, and keyword filters.
+     * Uses parameterized SQL predicates and deterministic newest-first ordering.
+     */
+    public List<Transaction> findByWalletIdFiltered(String walletId, TransactionFilter filter) {
+        try (Connection conn = databaseManager.getConnection()) {
+            return findByWalletIdFiltered(walletId, filter, conn);
+        } catch (SQLException e) {
+            throw new OtogException("Failed to query filtered transactions for wallet: " + e.getMessage(), e);
+        }
+    }
+
+    public List<Transaction> findByWalletIdFiltered(String walletId, TransactionFilter filter, Connection conn)
+            throws SQLException {
+        TransactionFilter effective = filter != null ? filter : TransactionFilter.empty();
+        StringBuilder sql = new StringBuilder(
+                "SELECT transaction_id, reference_number, source_wallet_id, target_wallet_id, " +
+                        "amount, fee, total_amount, currency, type, status, description, created_at, completed_at, " +
+                        "provider_reference, provider_status, channel " +
+                        "FROM transactions WHERE (source_wallet_id = ? OR target_wallet_id = ?)"
+        );
+        List<Object> params = new ArrayList<>();
+        params.add(walletId);
+        params.add(walletId);
+
+        if (effective.getType() != null) {
+            sql.append(" AND type = ?");
+            params.add(effective.getType().name());
+        }
+        if (effective.getStatus() != null) {
+            sql.append(" AND status = ?");
+            params.add(effective.getStatus().name());
+        }
+        if (effective.getFromDate() != null) {
+            sql.append(" AND created_at >= ?");
+            params.add(effective.getFromDate().atStartOfDay().toString());
+        }
+        if (effective.getToDate() != null) {
+            sql.append(" AND created_at < ?");
+            params.add(effective.getToDate().plusDays(1).atStartOfDay().toString());
+        }
+        if (effective.getKeyword() != null) {
+            sql.append(" AND (LOWER(reference_number) LIKE ? OR LOWER(COALESCE(provider_reference, '')) LIKE ? " +
+                    "OR LOWER(COALESCE(description, '')) LIKE ?)");
+            String likePattern = "%" + effective.getKeyword().toLowerCase(java.util.Locale.ROOT) + "%";
+            params.add(likePattern);
+            params.add(likePattern);
+            params.add(likePattern);
+        }
+
+        sql.append(" ORDER BY created_at DESC, transaction_id DESC, reference_number ASC");
+        if (effective.getLimit() > 0) {
+            sql.append(" LIMIT ?");
+            params.add(effective.getLimit());
+        }
+
+        List<Transaction> list = new ArrayList<>();
+        try (PreparedStatement ps = conn.prepareStatement(sql.toString())) {
+            for (int i = 0; i < params.size(); i++) {
+                Object param = params.get(i);
+                if (param instanceof Integer intVal) {
+                    ps.setInt(i + 1, intVal);
+                } else {
+                    ps.setString(i + 1, param.toString());
+                }
+            }
             try (ResultSet rs = ps.executeQuery()) {
                 while (rs.next()) {
                     list.add(mapRow(rs));

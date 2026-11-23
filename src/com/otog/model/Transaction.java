@@ -6,7 +6,6 @@ import com.otog.util.OtogConfig;
 
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
-import java.time.format.DateTimeFormatter;
 import java.util.Comparator;
 import java.util.Objects;
 
@@ -199,28 +198,18 @@ public class Transaction implements Comparable<Transaction>, TransactionPrototyp
     }
 
     /**
-     * Generates a Composite {@link ReceiptComponent} tree for this transaction via {@link ReceiptBuilder}.
+     * Generates a Composite {@link ReceiptComponent} tree for this transaction via {@link ReceiptBuilder}
+     * with masked identifiers, counterparty summary, and formatted timestamps.
      */
     public ReceiptComponent buildReceiptComponent() {
-        DateTimeFormatter dtf = DateTimeFormatter.ofPattern(OtogConfig.getInstance().getTimestampPattern());
-        ReceiptBuilder builder = new ReceiptBuilder()
-                .banner("OTOG E-WALLET RECEIPT")
-                .line("Txn ID", transactionId)
-                .line("Reference", referenceNumber)
-                .optionalLine("Provider Ref", providerReference);
-        appendSubtypeReceiptLines(builder);
-        builder.line("Type", type)
-                .line("Status", status)
-                .optionalLine("Prov Status", providerStatus)
-                .line("Date", createdAt != null ? createdAt.format(dtf) : "N/A")
-                .optionalLine("Source", sourceWalletId)
-                .optionalLine("Destination", targetWalletId)
-                .moneyLine("Amount", amount, currency)
-                .moneyLine("Fee", fee, currency)
-                .divider()
-                .moneyLine("Total", totalAmount, currency)
-                .optionalLine("Note", description);
-        return builder.buildComponent();
+        return buildReceiptComponent(null, null);
+    }
+
+    /**
+     * Generates a Composite {@link ReceiptComponent} tree tailored for a viewing wallet and resolved counterparty.
+     */
+    public ReceiptComponent buildReceiptComponent(String viewingWalletId, String counterpartyDisplay) {
+        return ReceiptBuilder.forTransaction(this, viewingWalletId, counterpartyDisplay).buildComponent();
     }
 
     /**
@@ -231,10 +220,18 @@ public class Transaction implements Comparable<Transaction>, TransactionPrototyp
     }
 
     /**
-     * Generates a readable receipt string for the transaction using its Composite receipt tree.
+     * Generates a readable masked receipt string for the transaction using its Composite receipt tree.
      */
     public String getReceipt() {
         return buildReceiptComponent().renderToString(ReceiptBuilder.DEFAULT_LABEL_WIDTH);
+    }
+
+    /**
+     * Generates a readable masked receipt string with resolved counterparty context for a specific wallet.
+     */
+    public String getReceipt(String viewingWalletId, String counterpartyDisplay) {
+        return buildReceiptComponent(viewingWalletId, counterpartyDisplay)
+                .renderToString(ReceiptBuilder.DEFAULT_LABEL_WIDTH);
     }
 
     @Override
