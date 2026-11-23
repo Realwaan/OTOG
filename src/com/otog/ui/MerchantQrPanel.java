@@ -36,6 +36,7 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.concurrent.ExecutionException;
+import java.util.function.Consumer;
 
 /**
  * Bound IntelliJ Swing form panel for Merchant QR Payments (CAP-11):
@@ -51,6 +52,8 @@ public class MerchantQrPanel extends JPanel {
     private final AuthService authService;
     private final Runnable backToOverviewCallback;
     private final Runnable paymentCompletedCallback;
+    private Consumer<Throwable> onPaymentError;
+    private volatile boolean lastPaymentExecutedOffEdt;
 
     private MerchantQrPayload loadedPayload;
     private MerchantQrPayload generatedPayload;
@@ -114,8 +117,32 @@ public class MerchantQrPanel extends JPanel {
         if (pnlRoot == null) {
             $$$setupUI$$$();
         }
+        ensureSalesTableModelInitialized();
         add(pnlRoot, BorderLayout.CENTER);
         initActions();
+    }
+
+    private void ensureSalesTableModelInitialized() {
+        if (salesTableModel == null) {
+            salesTableModel = new DefaultTableModel(SALES_COLUMNS, 0) {
+                @Override
+                public boolean isCellEditable(int row, int column) {
+                    return false;
+                }
+            };
+        }
+        if (tblMerchantSales != null && tblMerchantSales.getModel() != salesTableModel) {
+            tblMerchantSales.setModel(salesTableModel);
+            tblMerchantSales.setSelectionMode(ListSelectionModel.SINGLE_SELECTION);
+        }
+    }
+
+    public void setOnPaymentError(Consumer<Throwable> onPaymentError) {
+        this.onPaymentError = onPaymentError;
+    }
+
+    public boolean isLastPaymentExecutedOffEdt() {
+        return lastPaymentExecutedOffEdt;
     }
 
     private void initActions() {
@@ -304,6 +331,7 @@ public class MerchantQrPanel extends JPanel {
         SwingWorker<Transaction, Void> worker = new SwingWorker<>() {
             @Override
             protected Transaction doInBackground() {
+                lastPaymentExecutedOffEdt = !SwingUtilities.isEventDispatchThread();
                 MerchantPaymentPreview preview = qrService.previewPayment(currentUser.getUserId(), payload, inputAmount);
                 return qrService.confirmAndPay(preview, rawPin);
             }
@@ -331,6 +359,9 @@ public class MerchantQrPanel extends JPanel {
                     Throwable cause = e.getCause() != null ? e.getCause() : e;
                     lblPayFeedback.setText("Payment failed: " + cause.getMessage());
                     lblPayFeedback.setForeground(UiTheme.color(UiTheme.ColorRole.ERROR));
+                    if (onPaymentError != null) {
+                        onPaymentError.accept(cause);
+                    }
                 }
             }
         };
@@ -456,10 +487,20 @@ public class MerchantQrPanel extends JPanel {
         if (walletService == null) {
             return;
         }
+        ensureSalesTableModelInitialized();
 
         SessionManager session = SessionManager.getInstance();
         User currentUser = session.getCurrentUser();
         Wallet currentWallet = session.getCurrentWallet();
+
+        if (currentUser != null && currentUser.getRole() != UserRole.MERCHANT && !currentUser.isAdmin()) {
+            loadedMerchantSales = Collections.emptyList();
+            salesTableModel.setRowCount(0);
+            btnViewMerchantReceipt.setEnabled(false);
+            lblMerchantFeedback.setText("Sign in as a Merchant or Administrator to inspect received merchant sales.");
+            lblMerchantFeedback.setForeground(UiTheme.color(UiTheme.ColorRole.WARNING));
+            return;
+        }
 
         String merchantWalletId;
         if (currentUser != null && currentUser.getRole() == UserRole.MERCHANT && currentWallet != null) {
@@ -474,7 +515,8 @@ public class MerchantQrPanel extends JPanel {
         SwingWorker<List<Transaction>, Void> worker = new SwingWorker<>() {
             @Override
             protected List<Transaction> doInBackground() {
-                List<Transaction> all = walletService.getRecentTransactions(merchantWalletId, 50);
+                List<Transaction> all = walletService.getRecentTransactions(
+                        merchantWalletId, OtogConfig.getInstance().getRecentTransactionLimit());
                 List<Transaction> incoming = new ArrayList<>();
                 for (Transaction t : all) {
                     if (merchantWalletId.equals(t.getTargetWalletId())) {
@@ -489,7 +531,7 @@ public class MerchantQrPanel extends JPanel {
                 try {
                     loadedMerchantSales = get();
                     salesTableModel.setRowCount(0);
-                    DateTimeFormatter dtf = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm");
+                    DateTimeFormatter dtf = DateTimeFormatter.ofPattern(OtogConfig.getInstance().getUiDatePattern());
                     for (Transaction t : loadedMerchantSales) {
                         salesTableModel.addRow(new Object[]{
                                 t.getTransactionId(),
@@ -503,7 +545,9 @@ public class MerchantQrPanel extends JPanel {
                     lblMerchantFeedback.setText("Loaded " + loadedMerchantSales.size() + " incoming payment(s).");
                     lblMerchantFeedback.setForeground(UiTheme.color(UiTheme.ColorRole.SUCCESS));
                 } catch (Exception ex) {
-                    lblMerchantFeedback.setText("Failed to load sales: " + ex.getMessage());
+                    Throwable cause = (ex instanceof ExecutionException && ex.getCause() != null)
+                            ? ex.getCause() : ex;
+                    lblMerchantFeedback.setText("Failed to load sales: " + cause.getMessage());
                     lblMerchantFeedback.setForeground(UiTheme.color(UiTheme.ColorRole.ERROR));
                 }
             }
@@ -517,12 +561,16 @@ public class MerchantQrPanel extends JPanel {
             return;
         }
         Transaction txn = loadedMerchantSales.get(selectedRow);
-        String merchantName = OtogConfig.getInstance().getMerchantSeedConfig().username();
+        User currentUser = SessionManager.getInstance().getCurrentUser();
+        String merchantName = (currentUser != null && currentUser.getRole() == UserRole.MERCHANT
+                && currentUser.getName() != null && !currentUser.getName().trim().isEmpty())
+                ? currentUser.getName().trim()
+                : OtogConfig.getInstance().getMerchantSeedConfig().username();
         String receipt = ReceiptBuilder.forMerchantPayment(txn, merchantName, txn.getReferenceNumber(), true).build();
 
         JTextArea area = new JTextArea(receipt);
         area.setEditable(false);
-        area.setFont(new Font("Monospaced", Font.PLAIN, 12));
+        area.setFont(UiTheme.font(UiTheme.FontRole.MONO));
         JScrollPane scroll = new JScrollPane(area);
         scroll.setPreferredSize(new Dimension(500, 360));
         JOptionPane.showMessageDialog(this, scroll, "Merchant Payment Receipt", JOptionPane.INFORMATION_MESSAGE);

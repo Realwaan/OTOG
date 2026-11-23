@@ -7,6 +7,7 @@ import com.otog.database.DatabaseManager;
 import com.otog.exception.WalletException;
 import com.otog.model.BillPaymentTransaction;
 import com.otog.model.CashInOutTransaction;
+import com.otog.model.CompositeFeePolicy;
 import com.otog.model.PaymentMethod;
 import com.otog.model.PaymentMethodStatus;
 import com.otog.model.SendMoneyTransaction;
@@ -276,7 +277,15 @@ public class Main extends JFrame {
         MerchantQrService merchantQrService = walletService.createMerchantQrService(authService);
         merchantQrPanel = new MerchantQrPanel(merchantQrService, walletService, authService,
                 () -> navigateToTab("Overview"),
-                () -> refreshDashboardAsync());
+                () -> {
+                    lastPaymentExecutedOffEdt = merchantQrPanel.isLastPaymentExecutedOffEdt();
+                    refreshDashboardAsync();
+                });
+        merchantQrPanel.setOnPaymentError(err -> {
+            if (err != null) {
+                checkSessionTerminatedOnError(extractErrorMessage(err));
+            }
+        });
 
         wireOverviewPanel();
         wireCashInOutPanel();
@@ -580,7 +589,7 @@ public class Main extends JFrame {
         }
         boolean pinVerified = SessionManager.getInstance().isPinVerified();
         if (!hasPin) {
-            lblPinStatus.setText("Transaction PIN: Not Set (required for Cash Out, Send Money & Pay Bills)");
+            lblPinStatus.setText("Transaction PIN: Not Set (required for Cash Out, Send Money, Pay Bills & Merchant QR)");
             lblPinStatus.setForeground(UiTheme.color(UiTheme.ColorRole.WARNING));
             if (btnPinSettings != null) {
                 btnPinSettings.setText("Set PIN");
@@ -900,9 +909,13 @@ public class Main extends JFrame {
         }
 
         txtCashPin.setText("");
+        String selectedPmId = getSelectedPaymentMethodId();
+        String selectedSourceLabel = (selectedPmId != null && cmbPaymentMethod != null && cmbPaymentMethod.getSelectedItem() != null)
+                ? cmbPaymentMethod.getSelectedItem().toString()
+                : (channel != null ? channel : "OTOG Partner");
         StringBuilder confirmMsg = new StringBuilder();
         confirmMsg.append("Operation: ").append(opLabel).append("\n");
-        confirmMsg.append("Channel: ").append(channel != null ? channel : "OTOG Partner").append("\n");
+        confirmMsg.append(selectedPmId != null ? "Bank Account: " : "Channel: ").append(selectedSourceLabel).append("\n");
         confirmMsg.append("Amount: ").append(MoneyUtil.format(parsedAmount, config.getDefaultCurrency()));
         if (!note.isEmpty()) {
             confirmMsg.append("\nNote: ").append(note);
@@ -920,21 +933,41 @@ public class Main extends JFrame {
             return;
         }
 
-        submitCashOperationAsync(op, channel, amountText, note, pin).whenComplete((txn, err) -> runOnEdt(() -> {
+        submitCashOperationAsync(op, channel, selectedPmId, amountText, note, pin).whenComplete((txn, err) -> runOnEdt(() -> {
             if (err != null) {
                 if (!logoutHandled) {
                     Throwable cause = unwrapCause(err);
                     showDialogMessage(this, opLabel + " Failed", extractErrorMessage(cause), JOptionPane.ERROR_MESSAGE);
                 }
             } else if (txn != null) {
-                showDialogMessage(
-                        this,
-                        opLabel + " Complete",
-                        opLabel + " successful!\nAmount: "
-                                + MoneyUtil.format(txn.getAmount(), txn.getCurrency())
-                                + "\nReference: " + txn.getReferenceNumber(),
-                        JOptionPane.INFORMATION_MESSAGE
-                );
+                if (txn.getStatus() == TransactionStatus.COMPLETED) {
+                    showDialogMessage(
+                            this,
+                            opLabel + " Complete",
+                            opLabel + " successful!\nAmount: "
+                                    + MoneyUtil.format(txn.getAmount(), txn.getCurrency())
+                                    + "\nReference: " + txn.getReferenceNumber(),
+                            JOptionPane.INFORMATION_MESSAGE
+                    );
+                } else if (txn.getStatus() == TransactionStatus.FAILED) {
+                    showDialogMessage(
+                            this,
+                            opLabel + " Failed",
+                            opLabel + " was rejected by the bank provider.\nAmount: "
+                                    + MoneyUtil.format(txn.getAmount(), txn.getCurrency())
+                                    + "\nReference: " + txn.getReferenceNumber(),
+                            JOptionPane.ERROR_MESSAGE
+                    );
+                } else {
+                    showDialogMessage(
+                            this,
+                            opLabel + " Pending Settlement",
+                            opLabel + " is pending bank confirmation.\nUse 'Lookup Status' on Overview to check settlement.\nAmount: "
+                                    + MoneyUtil.format(txn.getAmount(), txn.getCurrency())
+                                    + "\nReference: " + txn.getReferenceNumber(),
+                            JOptionPane.WARNING_MESSAGE
+                    );
+                }
             }
         }));
     }
@@ -1206,6 +1239,7 @@ public class Main extends JFrame {
                     throw new IllegalArgumentException("Recipient identifier is required.");
                 }
                 BigDecimal amount = MoneyUtil.validatePositiveAmount(MoneyUtil.parse(amountText));
+                BigDecimal fee = CompositeFeePolicy.fromConfig().calculate(amount);
                 String ref = (explicitReference != null && !explicitReference.trim().isEmpty())
                         ? explicitReference.trim()
                         : IdGenerator.nextReferenceNumber();
@@ -1214,13 +1248,13 @@ public class Main extends JFrame {
                     if (authService != null && user != null) {
                         verifyPinOrThrow(user.getUserId(), cleanPin);
                         return walletService.sendMoneyToRecipient(
-                                ref, wallet.getWalletId(), recipient.trim(), amount, MoneyUtil.ZERO, note);
+                                ref, wallet.getWalletId(), recipient.trim(), amount, fee, note);
                     }
                     return walletService.sendMoneyToRecipientWithPin(
-                            ref, wallet.getWalletId(), recipient.trim(), amount, MoneyUtil.ZERO, note, cleanPin);
+                            ref, wallet.getWalletId(), recipient.trim(), amount, fee, note, cleanPin);
                 }
                 return walletService.sendMoneyToRecipient(
-                        ref, wallet.getWalletId(), recipient.trim(), amount, MoneyUtil.ZERO, note);
+                        ref, wallet.getWalletId(), recipient.trim(), amount, fee, note);
             }
 
             @Override

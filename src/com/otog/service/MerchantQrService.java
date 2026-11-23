@@ -255,6 +255,19 @@ public class MerchantQrService {
             effectiveAmount = MoneyUtil.validatePositiveAmount(inputAmount);
         }
 
+        // Validate customer account status before previewing payment
+        User customerUser = userRepository.findById(cleanCustomer)
+                .orElseThrow(() -> new EntityNotFoundException("Customer user", cleanCustomer));
+        if (customerUser.getStatus() == UserStatus.SUSPENDED) {
+            throw new WalletException("Suspended accounts cannot initiate payments: User " + cleanCustomer + " is suspended.");
+        }
+        if (customerUser.getStatus() == UserStatus.LOCKED) {
+            throw new WalletException("Account is locked: User " + cleanCustomer + " is locked.");
+        }
+        if (customerUser.getStatus() != UserStatus.ACTIVE) {
+            throw new WalletException("Customer account is not active: " + customerUser.getStatus());
+        }
+
         // Validate customer wallet & balance
         Wallet customerWallet = walletService.getWalletByUserId(cleanCustomer);
         if (customerWallet == null) {
@@ -382,9 +395,13 @@ public class MerchantQrService {
     private static String extractPayloadFromImage(BufferedImage image) {
         int width = image.getWidth();
         int height = image.getHeight();
+        long pixelCapacity = (long) width * (long) height;
+        int magicLen = MAGIC_HEADER.length;
+        if (width <= 0 || height <= 0 || pixelCapacity < (long) magicLen + 8L) {
+            throw new MalformedQrException("Selected image is too small to contain an OTOG Merchant QR payload.");
+        }
 
         // 1. Read and check magic header
-        int magicLen = MAGIC_HEADER.length;
         byte[] magic = new byte[magicLen];
         for (int i = 0; i < magicLen; i++) {
             int x = i % width;
@@ -406,7 +423,7 @@ public class MerchantQrService {
             len = (len << 8) | b;
         }
 
-        if (len <= 0 || len > 10000) {
+        if (len <= 0 || len > 10000 || (long) magicLen + 4L + (long) len + 4L > pixelCapacity) {
             throw new MalformedQrException("Corrupted QR payload length: " + len);
         }
 
