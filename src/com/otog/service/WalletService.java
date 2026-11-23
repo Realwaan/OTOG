@@ -12,6 +12,7 @@ import java.math.BigDecimal;
 import java.sql.Connection;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
@@ -35,6 +36,7 @@ public class WalletService implements WalletOperations {
     private BankApiClient bankApiClient;
     private final AdminActionRepository adminActionRepository;
     private final AdminService adminService;
+    private NotificationService notificationService;
 
     public WalletService(DatabaseManager databaseManager) {
         this(databaseManager,
@@ -109,6 +111,18 @@ public class WalletService implements WalletOperations {
         this.adminService = new AdminServiceImpl(databaseManager, this.userRepository,
                 this.walletRepository, this.transactionRepository, this.adminActionRepository,
                 new CredentialRepository(databaseManager));
+        this.notificationService = new NotificationServiceImpl(databaseManager);
+    }
+
+    @Override
+    public NotificationService getNotificationService() {
+        return notificationService;
+    }
+
+    public void setNotificationService(NotificationService notificationService) {
+        this.notificationService = notificationService != null
+                ? notificationService
+                : new NotificationServiceImpl(databaseManager);
     }
 
     @Override
@@ -312,6 +326,125 @@ public class WalletService implements WalletOperations {
     }
 
     @Override
+    public List<Transaction> getTransactionHistory(String walletId, TransactionFilter filter) {
+        if (walletId == null || walletId.trim().isEmpty()) {
+            throw new IllegalArgumentException("Wallet ID must not be null or empty");
+        }
+        String cleanWalletId = walletId.trim();
+        getWallet(cleanWalletId);
+        return Collections.unmodifiableList(transactionRepository.findByWalletIdFiltered(cleanWalletId, filter));
+    }
+
+    @Override
+    public String getTransactionReceipt(String walletId, String transactionIdOrRef) {
+        if (walletId == null || walletId.trim().isEmpty()) {
+            throw new IllegalArgumentException("Wallet ID must not be null or empty");
+        }
+        if (transactionIdOrRef == null || transactionIdOrRef.trim().isEmpty()) {
+            throw new IllegalArgumentException("Transaction ID or reference number must not be null or empty");
+        }
+        String cleanWalletId = walletId.trim();
+        String key = transactionIdOrRef.trim();
+        getWallet(cleanWalletId);
+
+        Transaction txn = transactionRepository.findById(key)
+                .or(() -> transactionRepository.findByReferenceNumber(key))
+                .orElseThrow(() -> new EntityNotFoundException("Transaction", key));
+
+        if (!isWalletParticipant(cleanWalletId, txn)) {
+            throw new SecurityException(
+                    "Access denied: Transaction " + key + " does not belong to wallet " + cleanWalletId);
+        }
+
+        String counterpartyDisplay = resolveMaskedCounterpartyForReceipt(cleanWalletId, txn);
+        return txn.getReceipt(cleanWalletId, counterpartyDisplay);
+    }
+
+    @Override
+    public Transaction createRepeatTransactionDraft(String walletId, String transactionIdOrRef,
+                                                    String newReferenceNumber) {
+        if (walletId == null || walletId.trim().isEmpty()) {
+            throw new IllegalArgumentException("Wallet ID must not be null or empty");
+        }
+        if (transactionIdOrRef == null || transactionIdOrRef.trim().isEmpty()) {
+            throw new IllegalArgumentException("Transaction ID or reference number must not be null or empty");
+        }
+        String cleanWalletId = walletId.trim();
+        String key = transactionIdOrRef.trim();
+        getWallet(cleanWalletId);
+
+        Transaction txn = transactionRepository.findById(key)
+                .or(() -> transactionRepository.findByReferenceNumber(key))
+                .orElseThrow(() -> new EntityNotFoundException("Transaction", key));
+
+        if (!isWalletParticipant(cleanWalletId, txn)) {
+            throw new SecurityException(
+                    "Access denied: Cannot clone another wallet's transaction " + key);
+        }
+
+        return ReceiptBuilder.createRepeatDraft(txn, newReferenceNumber);
+    }
+
+    @Override
+    public List<Notification> getNotifications(String userId, boolean unreadOnly) {
+        return notificationService.getNotificationsForUser(userId, unreadOnly);
+    }
+
+    @Override
+    public int getUnreadNotificationCount(String userId) {
+        return notificationService.getUnreadCount(userId);
+    }
+
+    @Override
+    public void markNotificationRead(String userId, String notificationId) {
+        notificationService.markNotificationRead(userId, notificationId);
+    }
+
+    @Override
+    public void markNotificationUnread(String userId, String notificationId) {
+        notificationService.markNotificationUnread(userId, notificationId);
+    }
+
+    @Override
+    public int markAllNotificationsRead(String userId) {
+        return notificationService.markAllNotificationsRead(userId);
+    }
+
+    @Override
+    public int retryPendingNotifications() {
+        return notificationService.retryPendingNotifications();
+    }
+
+    private boolean isWalletParticipant(String walletId, Transaction txn) {
+        return walletId.equals(txn.getSourceWalletId()) || walletId.equals(txn.getTargetWalletId());
+    }
+
+    private String resolveMaskedCounterpartyForReceipt(String viewingWalletId, Transaction txn) {
+        if (txn instanceof CashInOutTransaction cio) {
+            return (cio.getChannel() != null && !cio.getChannel().trim().isEmpty())
+                    ? cio.getChannel().trim()
+                    : "External Bank / OTC";
+        }
+        String counterpartyWalletId = null;
+        if (viewingWalletId.equals(txn.getSourceWalletId())) {
+            counterpartyWalletId = txn.getTargetWalletId();
+        } else if (viewingWalletId.equals(txn.getTargetWalletId())) {
+            counterpartyWalletId = txn.getSourceWalletId();
+        }
+        if (counterpartyWalletId != null && !counterpartyWalletId.trim().isEmpty()) {
+            Optional<Wallet> counterpartyWallet = walletRepository.findById(counterpartyWalletId);
+            if (counterpartyWallet.isPresent() && counterpartyWallet.get().getUserId() != null) {
+                User counterpartyUser = userRepository.findById(counterpartyWallet.get().getUserId()).orElse(null);
+                if (counterpartyUser != null) {
+                    return NotificationServiceImpl.formatMaskedCounterparty(counterpartyUser, counterpartyWalletId);
+                }
+            }
+            return "Wallet " + ReceiptBuilder.maskIdentifier(counterpartyWalletId);
+        }
+        return null;
+    }
+
+    @Override
     public Transaction sendMoneyToRecipient(String referenceNumber, String sourceWalletId,
                                             String recipientIdentifier, BigDecimal amount,
                                             BigDecimal fee, String description) {
@@ -399,11 +532,12 @@ public class WalletService implements WalletOperations {
         ReentrantLock lock1 = getLock(firstLockId);
         ReentrantLock lock2 = getLock(secondLockId);
 
+        CommittedTransfer committed;
         lock1.lock();
         try {
             lock2.lock();
             try {
-                return databaseManager.executeInTransaction(conn -> {
+                committed = databaseManager.executeInTransaction(conn -> {
                     // Check duplicate request reference
                     if (transactionRepository.existsByReferenceNumber(referenceNumber, conn)) {
                         throw new DuplicateTransactionException(referenceNumber,
@@ -412,10 +546,13 @@ public class WalletService implements WalletOperations {
 
                     Wallet sourceWallet = walletRepository.findById(sourceWalletId, conn)
                             .orElseThrow(() -> new EntityNotFoundException("Source wallet", sourceWalletId));
-                    validateAccountNotSuspended(sourceWallet.getUserId(), conn);
+                    User senderUser = validateAccountNotSuspended(sourceWallet.getUserId(), conn);
                     authorizeOutgoingPayment(sourceWallet.getUserId());
                     Wallet targetWallet = walletRepository.findById(targetWalletId, conn)
                             .orElseThrow(() -> new EntityNotFoundException("Target wallet", targetWalletId));
+                    User recipientUser = targetWallet.getUserId() != null
+                            ? userRepository.findById(targetWallet.getUserId(), conn).orElse(null)
+                            : null;
 
                     if (sourceWallet.getStatus() != WalletStatus.ACTIVE) {
                         throw new WalletException("Source wallet is not active: " + sourceWallet.getStatus());
@@ -480,8 +617,11 @@ public class WalletService implements WalletOperations {
                     );
                     ledgerRepository.save(creditEntry, conn);
 
-                    return txn;
+                    return new CommittedTransfer(txn, senderUser, recipientUser);
                 });
+                // Persist sender & recipient notifications strictly AFTER commit while holding locks to avoid SQLite lock contention
+                dispatchTransferNotificationsPostCommit(committed);
+                return committed.txn();
             } finally {
                 lock2.unlock();
             }
@@ -503,9 +643,10 @@ public class WalletService implements WalletOperations {
         BigDecimal validAmount = MoneyUtil.validatePositiveAmount(amount);
 
         ReentrantLock lock = getLock(targetWalletId);
+        CommittedCashOp committed;
         lock.lock();
         try {
-            return databaseManager.executeInTransaction(conn -> {
+            committed = databaseManager.executeInTransaction(conn -> {
                 if (transactionRepository.existsByReferenceNumber(referenceNumber, conn)) {
                     throw new DuplicateTransactionException(referenceNumber,
                             "Duplicate transaction request reference: " + referenceNumber);
@@ -602,8 +743,10 @@ public class WalletService implements WalletOperations {
                     transactionRepository.save(txn, conn);
                 }
 
-                return txn;
+                return new CommittedCashOp(txn, wallet.getUserId(), channel, true);
             });
+            dispatchCashNotificationPostCommit(committed);
+            return committed.txn();
         } finally {
             lock.unlock();
         }
@@ -628,9 +771,10 @@ public class WalletService implements WalletOperations {
         }
 
         ReentrantLock lock = getLock(sourceWalletId);
+        CommittedCashOp committed;
         lock.lock();
         try {
-            return databaseManager.executeInTransaction(conn -> {
+            committed = databaseManager.executeInTransaction(conn -> {
                 if (transactionRepository.existsByReferenceNumber(referenceNumber, conn)) {
                     throw new DuplicateTransactionException(referenceNumber,
                             "Duplicate transaction request reference: " + referenceNumber);
@@ -763,8 +907,10 @@ public class WalletService implements WalletOperations {
                             txn.getProviderReference(), txn.getProviderStatus(), null, conn);
                 }
 
-                return txn;
+                return new CommittedCashOp(txn, wallet.getUserId(), channel, true);
             });
+            dispatchCashNotificationPostCommit(committed);
+            return committed.txn();
         } finally {
             lock.unlock();
         }
@@ -818,15 +964,23 @@ public class WalletService implements WalletOperations {
         }
 
         ReentrantLock lock = getLock(walletId);
+        CommittedCashOp committed;
         lock.lock();
         try {
-            return databaseManager.executeInTransaction(conn -> {
+            committed = databaseManager.executeInTransaction(conn -> {
                 Transaction currentTxn = transactionRepository.findByReferenceNumber(referenceNumber, conn)
                         .orElseThrow(() -> new EntityNotFoundException("Transaction with reference", referenceNumber));
 
+                String channel = (currentTxn instanceof CashInOutTransaction cio && cio.getChannel() != null)
+                        ? cio.getChannel()
+                        : "Bank";
+                String ownerUserId = walletRepository.findById(walletId, conn)
+                        .map(Wallet::getUserId)
+                        .orElse(null);
+
                 // Re-check after acquiring lock and transaction boundary
                 if (currentTxn.getStatus() == TransactionStatus.COMPLETED || currentTxn.getStatus() == TransactionStatus.FAILED) {
-                    return currentTxn;
+                    return new CommittedCashOp(currentTxn, ownerUserId, channel, false);
                 }
 
                 BankApiResponse response = directResponse != null
@@ -834,7 +988,7 @@ public class WalletService implements WalletOperations {
                         : bankApiClient.checkStatus(referenceNumber, currentTxn.getProviderReference());
 
                 if (response == null) {
-                    return currentTxn;
+                    return new CommittedCashOp(currentTxn, ownerUserId, channel, false);
                 }
 
                 if (response.getProviderReference() != null) {
@@ -844,10 +998,12 @@ public class WalletService implements WalletOperations {
                     currentTxn.setProviderStatus(response.getStatus().name());
                 }
 
+                boolean transitioned = false;
                 if (currentTxn.getType() == TransactionType.CASH_IN) {
                     if (response.isSuccess()) {
                         Wallet wallet = walletRepository.findById(currentTxn.getTargetWalletId(), conn)
                                 .orElseThrow(() -> new EntityNotFoundException("Wallet", currentTxn.getTargetWalletId()));
+                        ownerUserId = wallet.getUserId();
 
                         BigDecimal balanceBefore = wallet.getBalance();
                         BigDecimal balanceAfter = balanceBefore.add(currentTxn.getAmount())
@@ -872,12 +1028,14 @@ public class WalletService implements WalletOperations {
                         currentTxn.setCompletedAt(LocalDateTime.now());
                         transactionRepository.updateStatus(currentTxn.getTransactionId(), TransactionStatus.COMPLETED,
                                 currentTxn.getProviderReference(), currentTxn.getProviderStatus(), currentTxn.getCompletedAt(), conn);
+                        transitioned = true;
                     } else if (response.isFailure()) {
                         // Credit cash-in only on success; failed cash-in does not credit wallet
                         currentTxn.setStatus(TransactionStatus.FAILED);
                         currentTxn.setCompletedAt(LocalDateTime.now());
                         transactionRepository.updateStatus(currentTxn.getTransactionId(), TransactionStatus.FAILED,
                                 currentTxn.getProviderReference(), currentTxn.getProviderStatus(), currentTxn.getCompletedAt(), conn);
+                        transitioned = true;
                     } else {
                         // Unknown / pending / timeout outcomes stay pending
                         transactionRepository.updateStatus(currentTxn.getTransactionId(), TransactionStatus.PENDING,
@@ -890,10 +1048,12 @@ public class WalletService implements WalletOperations {
                         currentTxn.setCompletedAt(LocalDateTime.now());
                         transactionRepository.updateStatus(currentTxn.getTransactionId(), TransactionStatus.COMPLETED,
                                 currentTxn.getProviderReference(), currentTxn.getProviderStatus(), currentTxn.getCompletedAt(), conn);
+                        transitioned = true;
                     } else if (response.isFailure()) {
                         // Confirmed failure: release reserved funds back to source wallet
                         Wallet wallet = walletRepository.findById(currentTxn.getSourceWalletId(), conn)
                                 .orElseThrow(() -> new EntityNotFoundException("Wallet", currentTxn.getSourceWalletId()));
+                        ownerUserId = wallet.getUserId();
 
                         BigDecimal balanceBefore = wallet.getBalance();
                         BigDecimal balanceAfter = balanceBefore.add(currentTxn.getTotalAmount())
@@ -918,6 +1078,7 @@ public class WalletService implements WalletOperations {
                         currentTxn.setCompletedAt(LocalDateTime.now());
                         transactionRepository.updateStatus(currentTxn.getTransactionId(), TransactionStatus.FAILED,
                                 currentTxn.getProviderReference(), currentTxn.getProviderStatus(), currentTxn.getCompletedAt(), conn);
+                        transitioned = true;
                     } else {
                         // Unknown / pending / timeout outcomes stay pending; funds remain reserved
                         transactionRepository.updateStatus(currentTxn.getTransactionId(), TransactionStatus.PENDING,
@@ -925,8 +1086,12 @@ public class WalletService implements WalletOperations {
                     }
                 }
 
-                return currentTxn;
+                return new CommittedCashOp(currentTxn, ownerUserId, channel, transitioned);
             });
+            if (committed.shouldNotify()) {
+                dispatchCashNotificationPostCommit(committed);
+            }
+            return committed.txn();
         } finally {
             lock.unlock();
         }
@@ -977,9 +1142,9 @@ public class WalletService implements WalletOperations {
         }
     }
 
-    private void validateAccountNotSuspended(String userId, Connection conn) throws java.sql.SQLException {
+    private User validateAccountNotSuspended(String userId, Connection conn) throws java.sql.SQLException {
         if (userId == null) {
-            return;
+            return null;
         }
         User user = userRepository.findById(userId, conn)
                 .orElseThrow(() -> new EntityNotFoundException("User", userId));
@@ -992,6 +1157,7 @@ public class WalletService implements WalletOperations {
         if (user.getStatus() != UserStatus.ACTIVE) {
             throw new WalletException("Account is not active: User " + userId + " status is " + user.getStatus());
         }
+        return user;
     }
 
     private void authorizeOutgoingPayment(String walletOwnerUserId) {
@@ -1037,6 +1203,10 @@ public class WalletService implements WalletOperations {
     }
 
     public List<Transaction> getTransactionHistory(String requesterUserId, String walletId) {
+        return getTransactionHistory(requesterUserId, walletId, TransactionFilter.empty());
+    }
+
+    public List<Transaction> getTransactionHistory(String requesterUserId, String walletId, TransactionFilter filter) {
         SessionManager session = SessionManager.getInstance();
         session.requireAuthentication();
 
@@ -1057,7 +1227,7 @@ public class WalletService implements WalletOperations {
         if (requester.getRole() != UserRole.ADMIN && !wallet.getUserId().equals(requester.getUserId())) {
             throw new SecurityException("Access denied: Ordinary users cannot inspect another user's transaction history.");
         }
-        List<Transaction> txns = transactionRepository.findByWalletId(wallet.getWalletId());
+        List<Transaction> txns = transactionRepository.findByWalletIdFiltered(wallet.getWalletId(), filter);
         if (requester.getRole() == UserRole.ADMIN && !wallet.getUserId().equals(requester.getUserId())) {
             AdminAction action = new AdminAction(
                     IdGenerator.nextAdminActionId(),
@@ -1070,6 +1240,37 @@ public class WalletService implements WalletOperations {
             adminActionRepository.save(action);
         }
         return txns;
+    }
+
+    private void dispatchTransferNotificationsPostCommit(CommittedTransfer committed) {
+        if (committed == null || committed.txn() == null || notificationService == null) {
+            return;
+        }
+        try {
+            notificationService.notifyTransferCommitted(committed.txn(), committed.sender(), committed.recipient());
+        } catch (RuntimeException ex) {
+            System.err.println("[WARN] Post-commit transfer notification dispatch encountered an error for ref "
+                    + committed.txn().getReferenceNumber() + ": " + ex.getMessage());
+        }
+    }
+
+    private void dispatchCashNotificationPostCommit(CommittedCashOp committed) {
+        if (committed == null || committed.txn() == null || notificationService == null) {
+            return;
+        }
+        try {
+            notificationService.notifyCashOperationCommitted(
+                    committed.txn(), committed.ownerUserId(), committed.channel());
+        } catch (RuntimeException ex) {
+            System.err.println("[WARN] Post-commit cash notification dispatch encountered an error for ref "
+                    + committed.txn().getReferenceNumber() + ": " + ex.getMessage());
+        }
+    }
+
+    private record CommittedTransfer(SendMoneyTransaction txn, User sender, User recipient) {
+    }
+
+    private record CommittedCashOp(Transaction txn, String ownerUserId, String channel, boolean shouldNotify) {
     }
 
     public List<AdminAction> getAdminActions(String requesterUserId) {
