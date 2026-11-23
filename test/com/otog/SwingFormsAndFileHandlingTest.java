@@ -79,6 +79,7 @@ public class SwingFormsAndFileHandlingTest {
                 "com/otog/ui/OverviewPanel.form", "com.otog.ui.OverviewPanel",
                 "com/otog/ui/CashInOutPanel.form", "com.otog.ui.CashInOutPanel",
                 "com/otog/ui/SendMoneyPanel.form", "com.otog.ui.SendMoneyPanel",
+                "com/otog/ui/PayBillsPanel.form", "com.otog.ui.PayBillsPanel",
                 "com/otog/ui/AdminControlsPanel.form", "com.otog.ui.AdminControlsPanel",
                 "com/otog/ui/NotificationInboxDialog.form", "com.otog.ui.NotificationInboxDialog"
         );
@@ -141,6 +142,16 @@ public class SwingFormsAndFileHandlingTest {
         SendMoneyPanel sendPanel = new SendMoneyPanel();
         assertNotNull(sendPanel.$$$getRootComponent$$$());
         assertInstanceOf(GridLayoutManager.class, sendPanel.getRootPanel().getLayout());
+
+        com.otog.ui.PayBillsPanel payBillsPanel = new com.otog.ui.PayBillsPanel();
+        assertNotNull(payBillsPanel.$$$getRootComponent$$$());
+        assertInstanceOf(GridLayoutManager.class, payBillsPanel.getRootPanel().getLayout());
+        assertNotNull(payBillsPanel.getBillerComboBox());
+        assertNotNull(payBillsPanel.getBillReferenceField());
+        assertNotNull(payBillsPanel.getBillAmountField());
+        assertNotNull(payBillsPanel.getBillPinField());
+        assertNotNull(payBillsPanel.getSubmitBillPaymentButton());
+        assertNotNull(payBillsPanel.getBillBackToOverviewButton());
 
         AdminControlsPanel adminPanel = new AdminControlsPanel(null, null, null, null);
         assertNotNull(adminPanel.$$$getRootComponent$$$());

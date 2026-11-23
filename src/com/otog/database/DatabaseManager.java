@@ -133,6 +133,7 @@ public class DatabaseManager implements AutoCloseable {
                         "provider_reference TEXT, " +
                         "provider_status TEXT, " +
                         "channel TEXT, " +
+                        "biller_reference TEXT, " +
                         "FOREIGN KEY (source_wallet_id) REFERENCES wallets(wallet_id), " +
                         "FOREIGN KEY (target_wallet_id) REFERENCES wallets(wallet_id));",
 
@@ -250,6 +251,7 @@ public class DatabaseManager implements AutoCloseable {
         boolean hasProviderRef = false;
         boolean hasProviderStatus = false;
         boolean hasChannel = false;
+        boolean hasBillerRef = false;
         try (Statement stmt = conn.createStatement();
              ResultSet rs = stmt.executeQuery("PRAGMA table_info(transactions)")) {
             while (rs.next()) {
@@ -260,6 +262,8 @@ public class DatabaseManager implements AutoCloseable {
                     hasProviderStatus = true;
                 } else if ("channel".equalsIgnoreCase(col)) {
                     hasChannel = true;
+                } else if ("biller_reference".equalsIgnoreCase(col)) {
+                    hasBillerRef = true;
                 }
             }
         }
@@ -272,6 +276,9 @@ public class DatabaseManager implements AutoCloseable {
             }
             if (!hasChannel) {
                 stmt.execute("ALTER TABLE transactions ADD COLUMN channel TEXT");
+            }
+            if (!hasBillerRef) {
+                stmt.execute("ALTER TABLE transactions ADD COLUMN biller_reference TEXT");
             }
         }
     }
