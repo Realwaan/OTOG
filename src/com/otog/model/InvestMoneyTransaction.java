@@ -20,8 +20,20 @@ public class InvestMoneyTransaction extends Transaction {
 
     public InvestMoneyTransaction(String transactionId, String referenceNumber, String walletId,
                                   BigDecimal amount, BigDecimal fee, String product, BigDecimal units) {
-        super(transactionId, referenceNumber, walletId, null, amount, fee,
-                TransactionType.INVESTMENT_BUY, "Investment in " + product);
+        this(transactionId, referenceNumber, walletId, amount, fee, product, units, TransactionType.INVESTMENT_BUY);
+    }
+
+    public InvestMoneyTransaction(String transactionId, String referenceNumber, String walletId,
+                                  BigDecimal amount, BigDecimal fee, String product, BigDecimal units,
+                                  TransactionType investmentType) {
+        super(transactionId, referenceNumber,
+                investmentType == TransactionType.INVESTMENT_REDEEM ? null : walletId,
+                investmentType == TransactionType.INVESTMENT_REDEEM ? walletId : null,
+                amount, fee,
+                investmentType == TransactionType.INVESTMENT_REDEEM
+                        ? TransactionType.INVESTMENT_REDEEM
+                        : TransactionType.INVESTMENT_BUY,
+                (investmentType == TransactionType.INVESTMENT_REDEEM ? "Redemption from " : "Investment in ") + product);
         this.product = product;
         this.units = units != null ? units : BigDecimal.ONE;
     }
@@ -69,8 +81,10 @@ public class InvestMoneyTransaction extends Transaction {
     @Override
     protected void appendSubtypeReceiptLines(ReceiptBuilder builder) {
         builder.optionalLine("Product", product)
-                .optionalLine("Units", units != null ? units.toPlainString() : null)
-                .optionalLine("Est. Returns", MoneyUtil.format(getReturns(), getCurrency()));
+                .optionalLine("Units", units != null ? units.toPlainString() : null);
+        if (getType() != TransactionType.INVESTMENT_REDEEM) {
+            builder.optionalLine("Est. Returns", MoneyUtil.format(getReturns(), getCurrency()));
+        }
     }
 
     @Override

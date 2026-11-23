@@ -9,6 +9,7 @@ import com.otog.util.MoneyUtil;
 import com.otog.util.OtogConfig;
 
 import java.math.BigDecimal;
+import java.math.RoundingMode;
 import java.sql.Connection;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
@@ -22,13 +23,14 @@ import java.util.concurrent.locks.ReentrantLock;
  * Service orchestrating wallet domain logic, transaction correctness, atomic commits,
  * and concurrency protection against double-spending.
  */
-public class WalletService implements WalletOperations {
+public class WalletService implements WalletOperations, InvestmentService {
     private final DatabaseManager databaseManager;
     private final UserRepository userRepository;
     private final WalletRepository walletRepository;
     private final PaymentMethodRepository paymentMethodRepository;
     private final TransactionRepository transactionRepository;
     private final LedgerRepository ledgerRepository;
+    private final InvestmentRepository investmentRepository;
 
     private final ConcurrentHashMap<String, ReentrantLock> walletLocks = new ConcurrentHashMap<>();
     private final AuthService authService;
@@ -104,6 +106,7 @@ public class WalletService implements WalletOperations {
         this.paymentMethodRepository = paymentMethodRepository;
         this.transactionRepository = transactionRepository;
         this.ledgerRepository = ledgerRepository;
+        this.investmentRepository = new InvestmentRepository(databaseManager);
         this.authService = authService;
         this.requirePinAuthorization = requirePinAuthorization;
         this.bankApiClient = new BankApiClient();
@@ -232,6 +235,10 @@ public class WalletService implements WalletOperations {
 
     public LedgerRepository getLedgerRepository() {
         return ledgerRepository;
+    }
+
+    public InvestmentRepository getInvestmentRepository() {
+        return investmentRepository;
     }
 
     private ReentrantLock getLock(String walletId) {
@@ -1535,5 +1542,492 @@ public class WalletService implements WalletOperations {
         if (ref == null || ref.trim().isEmpty()) {
             throw new IllegalArgumentException("Transaction reference number cannot be null or empty");
         }
+    }
+
+    // --- CAP-13: Basic Simulated Investment Workflow ---
+
+    @Override
+    public SimulatedProduct getSeededProduct() {
+        return investmentRepository.findSeededProduct();
+    }
+
+    @Override
+    public InvestmentHolding getHolding(String walletId) {
+        if (walletId == null || walletId.trim().isEmpty()) {
+            throw new IllegalArgumentException("Wallet ID must not be null or empty");
+        }
+        String cleanWalletId = walletId.trim();
+        Wallet wallet = getWallet(cleanWalletId);
+        SimulatedProduct product = getSeededProduct();
+        InvestmentRepository.HoldingRecord rec =
+                investmentRepository.findHolding(cleanWalletId, product.getProductCode());
+        BigDecimal units = rec.units().setScale(InvestmentService.UNIT_SCALE, RoundingMode.HALF_UP);
+        BigDecimal marketValue = units.multiply(product.getSimulatedUnitPrice())
+                .setScale(MoneyUtil.DEFAULT_SCALE, MoneyUtil.DEFAULT_ROUNDING);
+        return new InvestmentHolding(
+                cleanWalletId,
+                product.getProductName(),
+                units,
+                product.getSimulatedUnitPrice(),
+                marketValue,
+                rec.totalInvested().setScale(MoneyUtil.DEFAULT_SCALE, MoneyUtil.DEFAULT_ROUNDING),
+                wallet.getCurrency()
+        );
+    }
+
+    @Override
+    public InvestmentPreview previewBuy(String walletId, BigDecimal unitsInput, BigDecimal amountInput) {
+        if (walletId == null || walletId.trim().isEmpty()) {
+            throw new IllegalArgumentException("Wallet ID must not be null or empty");
+        }
+        String cleanWalletId = walletId.trim();
+        Wallet wallet = getWallet(cleanWalletId);
+        validateUserStatusActive(wallet.getUserId());
+        if (wallet.getStatus() != WalletStatus.ACTIVE) {
+            throw new WalletException("Wallet is not active: " + wallet.getStatus());
+        }
+        SimulatedProduct product = getSeededProduct();
+        UnitsAndAmount resolved = resolveBuyUnitsAndAmount(
+                unitsInput, amountInput, product.getSimulatedUnitPrice(), wallet.getCurrency());
+        if (wallet.getBalance().compareTo(resolved.amount()) < 0) {
+            throw new InsufficientFundsException(cleanWalletId, wallet.getBalance(), resolved.amount());
+        }
+        InvestmentHolding holding = getHolding(cleanWalletId);
+        BigDecimal projectedUnits = holding.getUnits().add(resolved.units())
+                .setScale(InvestmentService.UNIT_SCALE, RoundingMode.HALF_UP);
+        return new InvestmentPreview(
+                "BUY",
+                cleanWalletId,
+                product.getProductName(),
+                resolved.units(),
+                product.getSimulatedUnitPrice(),
+                resolved.amount(),
+                MoneyUtil.ZERO,
+                resolved.amount(),
+                holding.getUnits(),
+                projectedUnits,
+                wallet.getCurrency(),
+                IdGenerator.nextReferenceNumber()
+        );
+    }
+
+    @Override
+    public InvestmentPreview previewRedeem(String walletId, BigDecimal unitsToRedeem) {
+        if (walletId == null || walletId.trim().isEmpty()) {
+            throw new IllegalArgumentException("Wallet ID must not be null or empty");
+        }
+        String cleanWalletId = walletId.trim();
+        Wallet wallet = getWallet(cleanWalletId);
+        validateUserStatusActive(wallet.getUserId());
+        if (wallet.getStatus() != WalletStatus.ACTIVE) {
+            throw new WalletException("Wallet is not active: " + wallet.getStatus());
+        }
+        BigDecimal units = validatePositiveUnits(unitsToRedeem);
+        SimulatedProduct product = getSeededProduct();
+        BigDecimal proceeds = units.multiply(product.getSimulatedUnitPrice())
+                .setScale(MoneyUtil.DEFAULT_SCALE, MoneyUtil.DEFAULT_ROUNDING);
+        if (proceeds.compareTo(BigDecimal.ZERO) <= 0) {
+            throw new InvalidAmountException("Redemption proceeds must be positive.");
+        }
+        InvestmentHolding holding = getHolding(cleanWalletId);
+        if (holding.getUnits().compareTo(units) < 0) {
+            throw new WalletException("Insufficient investment holdings to redeem "
+                    + units.toPlainString() + " units (available: "
+                    + holding.getUnits().toPlainString() + " units). Overselling is not allowed.");
+        }
+        BigDecimal projectedUnits = holding.getUnits().subtract(units)
+                .setScale(InvestmentService.UNIT_SCALE, RoundingMode.HALF_UP);
+        return new InvestmentPreview(
+                "REDEEM",
+                cleanWalletId,
+                product.getProductName(),
+                units,
+                product.getSimulatedUnitPrice(),
+                proceeds,
+                MoneyUtil.ZERO,
+                proceeds,
+                holding.getUnits(),
+                projectedUnits,
+                wallet.getCurrency(),
+                IdGenerator.nextReferenceNumber()
+        );
+    }
+
+    @Override
+    public InvestMoneyTransaction invest(String referenceNumber, String walletId, String product,
+                                         BigDecimal amount, BigDecimal units) {
+        validateReferenceNumber(referenceNumber);
+        String cleanRef = referenceNumber.trim();
+        if (walletId == null || walletId.trim().isEmpty()) {
+            throw new IllegalArgumentException("Wallet ID must not be null or empty");
+        }
+        String cleanWalletId = walletId.trim();
+        SimulatedProduct seeded = getSeededProduct();
+        String effectiveProduct = validateSimulatedProduct(product, seeded);
+        UnitsAndAmount resolved = resolveBuyUnitsAndAmount(
+                units, amount, seeded.getSimulatedUnitPrice(), seeded.getCurrency());
+
+        if (requirePinAuthorization) {
+            SessionManager.getInstance().requirePinAuthorization(null);
+        }
+
+        ReentrantLock lock = getLock(cleanWalletId);
+        CommittedInvestmentOp committed;
+        lock.lock();
+        try {
+            committed = databaseManager.executeInTransaction(conn -> {
+                if (transactionRepository.existsByReferenceNumber(cleanRef, conn)) {
+                    throw new DuplicateTransactionException(cleanRef,
+                            "Duplicate transaction request reference: " + cleanRef);
+                }
+
+                Wallet wallet = walletRepository.findById(cleanWalletId, conn)
+                        .orElseThrow(() -> new EntityNotFoundException("Wallet", cleanWalletId));
+                validateAccountNotSuspended(wallet.getUserId(), conn);
+                authorizeOutgoingPayment(wallet.getUserId());
+
+                if (wallet.getStatus() != WalletStatus.ACTIVE) {
+                    throw new WalletException("Wallet is not active: " + wallet.getStatus());
+                }
+                BigDecimal balanceBefore = wallet.getBalance();
+                if (balanceBefore.compareTo(resolved.amount()) < 0) {
+                    throw new InsufficientFundsException(cleanWalletId, balanceBefore, resolved.amount());
+                }
+
+                String txnId = IdGenerator.nextTransactionId();
+                String desc = "Buy " + resolved.units().toPlainString() + " units of " + effectiveProduct
+                        + " @ " + MoneyUtil.format(seeded.getSimulatedUnitPrice(), wallet.getCurrency()) + " [SIMULATED]";
+                InvestMoneyTransaction txn = new TransactionBuilder()
+                        .transactionId(txnId)
+                        .referenceNumber(cleanRef)
+                        .from(cleanWalletId)
+                        .amount(resolved.amount())
+                        .fee(MoneyUtil.ZERO)
+                        .currency(wallet.getCurrency())
+                        .product(effectiveProduct)
+                        .units(resolved.units())
+                        .type(TransactionType.INVESTMENT_BUY)
+                        .description(desc)
+                        .buildInvestment();
+                txn.invest();
+                transactionRepository.save(txn, conn);
+
+                BigDecimal balanceAfter = balanceBefore.subtract(resolved.amount())
+                        .setScale(MoneyUtil.DEFAULT_SCALE, MoneyUtil.DEFAULT_ROUNDING);
+                walletRepository.updateBalance(cleanWalletId, balanceAfter, conn);
+                wallet.setBalance(balanceAfter);
+
+                LedgerEntry debitEntry = new LedgerEntry(
+                        IdGenerator.nextLedgerEntryId(),
+                        txnId,
+                        cleanWalletId,
+                        LedgerEntryType.DEBIT,
+                        resolved.amount(),
+                        balanceBefore,
+                        balanceAfter,
+                        wallet.getCurrency(),
+                        txn.getDescription()
+                );
+                ledgerRepository.save(debitEntry, conn);
+
+                InvestmentRepository.HoldingRecord current =
+                        investmentRepository.findHolding(cleanWalletId, seeded.getProductCode(), conn);
+                BigDecimal newUnits = current.units().add(resolved.units())
+                        .setScale(InvestmentService.UNIT_SCALE, RoundingMode.HALF_UP);
+                BigDecimal newTotalInvested = current.totalInvested().add(resolved.amount())
+                        .setScale(MoneyUtil.DEFAULT_SCALE, MoneyUtil.DEFAULT_ROUNDING);
+                investmentRepository.upsertHolding(
+                        cleanWalletId, seeded.getProductCode(), newUnits, newTotalInvested, conn);
+
+                return new CommittedInvestmentOp(txn, wallet.getUserId());
+            });
+            dispatchInvestmentNotificationPostCommit(committed);
+            return committed.txn();
+        } finally {
+            lock.unlock();
+        }
+    }
+
+    @Override
+    public InvestMoneyTransaction buyInvestment(String referenceNumber, String walletId,
+                                                BigDecimal units, BigDecimal amount) {
+        return invest(referenceNumber, walletId, getSeededProduct().getProductName(), amount, units);
+    }
+
+    @Override
+    public InvestMoneyTransaction buyInvestmentWithPin(String referenceNumber, String walletId,
+                                                       BigDecimal units, BigDecimal amount, String rawPin) {
+        authorizeWithPin(walletId, rawPin);
+        return buyInvestment(referenceNumber, walletId, units, amount);
+    }
+
+    @Override
+    public InvestMoneyTransaction redeemInvestment(String referenceNumber, String walletId, BigDecimal unitsToRedeem) {
+        validateReferenceNumber(referenceNumber);
+        String cleanRef = referenceNumber.trim();
+        if (walletId == null || walletId.trim().isEmpty()) {
+            throw new IllegalArgumentException("Wallet ID must not be null or empty");
+        }
+        String cleanWalletId = walletId.trim();
+        BigDecimal units = validatePositiveUnits(unitsToRedeem);
+        SimulatedProduct seeded = getSeededProduct();
+        BigDecimal proceeds = units.multiply(seeded.getSimulatedUnitPrice())
+                .setScale(MoneyUtil.DEFAULT_SCALE, MoneyUtil.DEFAULT_ROUNDING);
+        if (proceeds.compareTo(BigDecimal.ZERO) <= 0) {
+            throw new InvalidAmountException("Redemption proceeds must be positive.");
+        }
+
+        if (requirePinAuthorization) {
+            SessionManager.getInstance().requirePinAuthorization(null);
+        }
+
+        ReentrantLock lock = getLock(cleanWalletId);
+        CommittedInvestmentOp committed;
+        lock.lock();
+        try {
+            committed = databaseManager.executeInTransaction(conn -> {
+                if (transactionRepository.existsByReferenceNumber(cleanRef, conn)) {
+                    throw new DuplicateTransactionException(cleanRef,
+                            "Duplicate transaction request reference: " + cleanRef);
+                }
+
+                Wallet wallet = walletRepository.findById(cleanWalletId, conn)
+                        .orElseThrow(() -> new EntityNotFoundException("Wallet", cleanWalletId));
+                validateAccountNotSuspended(wallet.getUserId(), conn);
+                authorizeOutgoingPayment(wallet.getUserId());
+
+                if (wallet.getStatus() != WalletStatus.ACTIVE) {
+                    throw new WalletException("Wallet is not active: " + wallet.getStatus());
+                }
+
+                InvestmentRepository.HoldingRecord current =
+                        investmentRepository.findHolding(cleanWalletId, seeded.getProductCode(), conn);
+                if (current.units().compareTo(units) < 0) {
+                    throw new WalletException("Insufficient investment holdings to redeem "
+                            + units.toPlainString() + " units (available: "
+                            + current.units().toPlainString() + " units). Overselling is not allowed.");
+                }
+
+                String txnId = IdGenerator.nextTransactionId();
+                String desc = "Redeem " + units.toPlainString() + " units of " + seeded.getProductName()
+                        + " @ " + MoneyUtil.format(seeded.getSimulatedUnitPrice(), wallet.getCurrency()) + " [SIMULATED]";
+                InvestMoneyTransaction txn = new TransactionBuilder()
+                        .transactionId(txnId)
+                        .referenceNumber(cleanRef)
+                        .to(cleanWalletId)
+                        .amount(proceeds)
+                        .fee(MoneyUtil.ZERO)
+                        .currency(wallet.getCurrency())
+                        .product(seeded.getProductName())
+                        .units(units)
+                        .type(TransactionType.INVESTMENT_REDEEM)
+                        .description(desc)
+                        .buildInvestment();
+                txn.withdraw();
+                transactionRepository.save(txn, conn);
+
+                BigDecimal balanceBefore = wallet.getBalance();
+                BigDecimal balanceAfter = balanceBefore.add(proceeds)
+                        .setScale(MoneyUtil.DEFAULT_SCALE, MoneyUtil.DEFAULT_ROUNDING);
+                walletRepository.updateBalance(cleanWalletId, balanceAfter, conn);
+                wallet.setBalance(balanceAfter);
+
+                LedgerEntry creditEntry = new LedgerEntry(
+                        IdGenerator.nextLedgerEntryId(),
+                        txnId,
+                        cleanWalletId,
+                        LedgerEntryType.CREDIT,
+                        proceeds,
+                        balanceBefore,
+                        balanceAfter,
+                        wallet.getCurrency(),
+                        txn.getDescription()
+                );
+                ledgerRepository.save(creditEntry, conn);
+
+                BigDecimal newUnits = current.units().subtract(units)
+                        .setScale(InvestmentService.UNIT_SCALE, RoundingMode.HALF_UP);
+                BigDecimal newTotalInvested;
+                if (newUnits.compareTo(BigDecimal.ZERO) <= 0) {
+                    newUnits = BigDecimal.ZERO.setScale(InvestmentService.UNIT_SCALE, RoundingMode.HALF_UP);
+                    newTotalInvested = MoneyUtil.ZERO;
+                } else {
+                    newTotalInvested = current.totalInvested()
+                            .multiply(newUnits)
+                            .divide(current.units(), MoneyUtil.DEFAULT_SCALE, MoneyUtil.DEFAULT_ROUNDING);
+                }
+                investmentRepository.upsertHolding(
+                        cleanWalletId, seeded.getProductCode(), newUnits, newTotalInvested, conn);
+
+                return new CommittedInvestmentOp(txn, wallet.getUserId());
+            });
+            dispatchInvestmentNotificationPostCommit(committed);
+            return committed.txn();
+        } finally {
+            lock.unlock();
+        }
+    }
+
+    @Override
+    public InvestMoneyTransaction redeemInvestmentWithPin(String referenceNumber, String walletId,
+                                                          BigDecimal unitsToRedeem, String rawPin) {
+        authorizeWithPin(walletId, rawPin);
+        return redeemInvestment(referenceNumber, walletId, unitsToRedeem);
+    }
+
+    @Override
+    public Transaction withdrawInvestment(String referenceNumber, String walletId, String investmentTransactionId) {
+        if (investmentTransactionId == null || investmentTransactionId.trim().isEmpty()) {
+            throw new IllegalArgumentException("Investment transaction ID must not be null or empty");
+        }
+        String key = investmentTransactionId.trim();
+        Transaction found = transactionRepository.findById(key)
+                .or(() -> transactionRepository.findByReferenceNumber(key))
+                .orElseThrow(() -> new EntityNotFoundException("Investment transaction", key));
+        if (!(found instanceof InvestMoneyTransaction imt) || found.getType() != TransactionType.INVESTMENT_BUY) {
+            throw new WalletException("Referenced transaction is not an investment purchase: " + key);
+        }
+        if (walletId != null && !walletId.trim().equals(found.getSourceWalletId())) {
+            throw new SecurityException("Investment transaction does not belong to wallet " + walletId);
+        }
+        return redeemInvestment(referenceNumber, walletId != null ? walletId : found.getSourceWalletId(), imt.getUnits());
+    }
+
+    @Override
+    public BigDecimal calculateReturns(String investmentTransactionId) {
+        if (investmentTransactionId == null || investmentTransactionId.trim().isEmpty()) {
+            throw new IllegalArgumentException("Investment transaction ID must not be null or empty");
+        }
+        String key = investmentTransactionId.trim();
+        Transaction found = transactionRepository.findById(key)
+                .or(() -> transactionRepository.findByReferenceNumber(key))
+                .orElseThrow(() -> new EntityNotFoundException("Investment transaction", key));
+
+        SessionManager session = SessionManager.getInstance();
+        if (session.isLoggedIn()) {
+            User activeUser = session.getCurrentUser();
+            if (activeUser != null && !activeUser.isAdmin()) {
+                Optional<Wallet> activeWalletOpt = walletRepository.findByUserId(activeUser.getUserId());
+                String activeWalletId = activeWalletOpt.map(Wallet::getWalletId).orElse(null);
+                if (activeWalletId == null || !isWalletParticipant(activeWalletId, found)) {
+                    throw new SecurityException("Access denied: Transaction " + key
+                            + " does not belong to active user's wallet.");
+                }
+            }
+        }
+
+        if (found instanceof InvestMoneyTransaction imt) {
+            return imt.getReturns();
+        }
+        return MoneyUtil.ZERO;
+    }
+
+    @Override
+    public List<InvestMoneyTransaction> getInvestmentsByWalletId(String walletId) {
+        List<Transaction> txns = getTransactionsByWalletId(walletId);
+        List<InvestMoneyTransaction> result = new ArrayList<>();
+        for (Transaction txn : txns) {
+            if (txn instanceof InvestMoneyTransaction imt
+                    && (txn.getType() == TransactionType.INVESTMENT_BUY
+                    || txn.getType() == TransactionType.INVESTMENT_REDEEM)) {
+                result.add(imt);
+            }
+        }
+        return Collections.unmodifiableList(result);
+    }
+
+    private void validateUserStatusActive(String userId) {
+        if (userId == null) {
+            return;
+        }
+        User user = userRepository.findById(userId)
+                .orElseThrow(() -> new EntityNotFoundException("User", userId));
+        if (user.getStatus() == UserStatus.SUSPENDED) {
+            throw new WalletException("Suspended accounts cannot initiate payments: User " + userId + " is suspended.");
+        }
+        if (user.getStatus() == UserStatus.LOCKED) {
+            throw new WalletException("Account is locked: User " + userId + " is locked.");
+        }
+        if (user.getStatus() != UserStatus.ACTIVE) {
+            throw new WalletException("Account is not active: User " + userId + " status is " + user.getStatus());
+        }
+    }
+
+    private void dispatchInvestmentNotificationPostCommit(CommittedInvestmentOp committed) {
+        if (committed == null || committed.txn() == null || notificationService == null) {
+            return;
+        }
+        try {
+            notificationService.notifyInvestmentCommitted(committed.txn(), committed.ownerUserId());
+        } catch (RuntimeException ex) {
+            System.err.println("[WARN] Post-commit investment notification dispatch encountered an error for ref "
+                    + committed.txn().getReferenceNumber() + ": " + ex.getMessage());
+        }
+    }
+
+    private String validateSimulatedProduct(String product, SimulatedProduct seeded) {
+        if (product == null || product.trim().isEmpty()) {
+            return seeded.getProductName();
+        }
+        String trimmed = product.trim();
+        if (trimmed.equalsIgnoreCase(seeded.getProductName()) || trimmed.equalsIgnoreCase(seeded.getProductCode())) {
+            return seeded.getProductName();
+        }
+        throw new WalletException("Unsupported investment product '" + trimmed
+                + "'. Only the seeded simulated product '" + seeded.getProductName() + "' is supported.");
+    }
+
+    private BigDecimal validatePositiveUnits(BigDecimal rawUnits) {
+        if (rawUnits == null || rawUnits.compareTo(BigDecimal.ZERO) <= 0) {
+            throw new InvalidAmountException("Investment units must be greater than zero.");
+        }
+        BigDecimal scaled = rawUnits.setScale(InvestmentService.UNIT_SCALE, RoundingMode.HALF_UP);
+        if (scaled.compareTo(BigDecimal.ZERO) <= 0) {
+            throw new InvalidAmountException("Investment units must be at least 0.0001.");
+        }
+        return scaled;
+    }
+
+    private UnitsAndAmount resolveBuyUnitsAndAmount(BigDecimal unitsInput, BigDecimal amountInput,
+                                                    BigDecimal unitPrice, String currency) {
+        String effectiveCurrency = (currency != null && !currency.trim().isEmpty())
+                ? currency.trim()
+                : OtogConfig.getInstance().getDefaultCurrency();
+        if (unitsInput == null && amountInput == null) {
+            throw new InvalidAmountException("Specify either units or " + effectiveCurrency + " amount to invest.");
+        }
+        if (unitsInput != null) {
+            BigDecimal validUnits = validatePositiveUnits(unitsInput);
+            BigDecimal computedAmount = validUnits.multiply(unitPrice)
+                    .setScale(MoneyUtil.DEFAULT_SCALE, MoneyUtil.DEFAULT_ROUNDING);
+            if (computedAmount.compareTo(BigDecimal.ZERO) <= 0) {
+                throw new InvalidAmountException("Investment amount must be positive.");
+            }
+            if (amountInput != null) {
+                BigDecimal validAmount = MoneyUtil.validatePositiveAmount(amountInput);
+                if (validAmount.compareTo(computedAmount) != 0) {
+                    throw new InvalidAmountException("Entered amount (" + validAmount.toPlainString()
+                            + ") does not match units * simulated price (" + computedAmount.toPlainString() + ").");
+                }
+            }
+            return new UnitsAndAmount(validUnits, computedAmount);
+        }
+        BigDecimal validAmount = MoneyUtil.validatePositiveAmount(amountInput);
+        BigDecimal computedUnits = validAmount.divide(unitPrice, InvestmentService.UNIT_SCALE, RoundingMode.DOWN);
+        if (computedUnits.compareTo(BigDecimal.ZERO) <= 0) {
+            throw new InvalidAmountException("Investment amount is too small to purchase at least 0.0001 units.");
+        }
+        BigDecimal exactCost = computedUnits.multiply(unitPrice)
+                .setScale(MoneyUtil.DEFAULT_SCALE, MoneyUtil.DEFAULT_ROUNDING);
+        if (exactCost.compareTo(BigDecimal.ZERO) <= 0) {
+            throw new InvalidAmountException("Computed investment cost must be positive.");
+        }
+        return new UnitsAndAmount(computedUnits, exactCost);
+    }
+
+    private record UnitsAndAmount(BigDecimal units, BigDecimal amount) {
+    }
+
+    private record CommittedInvestmentOp(InvestMoneyTransaction txn, String ownerUserId) {
     }
 }

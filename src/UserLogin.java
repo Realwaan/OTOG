@@ -369,9 +369,9 @@ public class UserLogin extends JFrame {
     public com.otog.ui.Main openDashboard() {
         com.otog.ui.Main dashboard;
         if (this.walletService != null) {
-            dashboard = new com.otog.ui.Main(
-                    ProtectedWalletOperationsProxy.wrap(this.walletService),
-                    this.authService);
+            com.otog.service.WalletOperations wrapped = ProtectedWalletOperationsProxy.wrap(this.walletService);
+            com.otog.service.InvestmentService invService = ProtectedWalletOperationsProxy.asInvestmentServiceOrNull(wrapped);
+            dashboard = new com.otog.ui.Main(wrapped, this.authService, null, invService);
         } else {
             DatabaseManager ownedDb = (preparedDashboardDatabase != null)
                     ? preparedDashboardDatabase
