@@ -222,12 +222,16 @@ public class NotificationServiceImpl implements NotificationService {
         }
         String cleanBiller = (billerName != null && !billerName.trim().isEmpty())
                 ? billerName.trim()
-                : (txn instanceof BillPaymentTransaction bpt && bpt.getBillerName() != null
-                ? bpt.getBillerName().trim()
-                : "Biller");
-        String cleanRef = billerReference != null ? billerReference.trim()
-                : (txn instanceof BillPaymentTransaction bpt ? bpt.getBillerReference() : null);
-        String maskedRef = cleanRef != null ? ReceiptBuilder.maskIdentifier(cleanRef) : null;
+                : (txn instanceof BillPaymentTransaction bpt
+                        && bpt.getBillerName() != null && !bpt.getBillerName().trim().isEmpty()
+                        ? bpt.getBillerName().trim()
+                        : "Biller");
+        String rawRef = (billerReference != null && !billerReference.trim().isEmpty())
+                ? billerReference.trim()
+                : (txn instanceof BillPaymentTransaction bpt && bpt.getBillerReference() != null
+                        ? bpt.getBillerReference().trim()
+                        : null);
+        String maskedRef = (rawRef != null && !rawRef.isEmpty()) ? ReceiptBuilder.maskIdentifier(rawRef) : null;
         String billerDisplay = cleanBiller + (maskedRef != null ? " (" + maskedRef + ")" : "");
         String amountText = MoneyUtil.format(txn.getAmount(), txn.getCurrency());
         String feeText = (txn.getFee() != null && txn.getFee().compareTo(BigDecimal.ZERO) > 0)

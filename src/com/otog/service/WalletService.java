@@ -1195,7 +1195,7 @@ public class WalletService implements WalletOperations {
                 String txnId = IdGenerator.nextTransactionId();
                 String desc = (description != null && !description.trim().isEmpty())
                         ? description.trim()
-                        : "Bill Payment to " + cleanBiller + " [" + cleanBillerRef + "]";
+                        : "Bill Payment to " + cleanBiller + " [" + ReceiptBuilder.maskIdentifier(cleanBillerRef) + "]";
 
                 BillPaymentTransaction txn = TransactionFactory.createBillPayment(
                         cleanRef,

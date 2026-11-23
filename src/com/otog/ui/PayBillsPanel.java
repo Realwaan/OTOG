@@ -6,13 +6,14 @@ import com.intellij.uiDesigner.core.Spacer;
 import com.otog.exception.DuplicateTransactionException;
 import com.otog.exception.InsufficientFundsException;
 import com.otog.exception.WalletException;
-import com.otog.model.CompositeFeePolicy;
 import com.otog.model.FeeComponent;
 import com.otog.model.ReceiptBuilder;
 import com.otog.model.Transaction;
 import com.otog.model.TransactionStatus;
 import com.otog.model.Wallet;
 import com.otog.service.AuthService;
+import com.otog.service.BankResponseStatus;
+import com.otog.service.PaymentProviderFactory;
 import com.otog.service.SessionManager;
 import com.otog.service.WalletOperations;
 import com.otog.service.WalletService;
@@ -28,6 +29,10 @@ import java.awt.*;
 import java.math.BigDecimal;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.function.BooleanSupplier;
 import java.util.function.Consumer;
 
 /**
@@ -60,9 +65,32 @@ public class PayBillsPanel extends JPanel {
 
     private WalletOperations walletService;
     private AuthService authService;
-    private FeeComponent feePolicy = CompositeFeePolicy.forBillPayment();
+    private FeeComponent customFeePolicy;
     private Runnable onBackToOverview;
     private Consumer<Transaction> onPaymentSuccess;
+    private Consumer<Throwable> onPaymentError;
+    private BooleanSupplier beforeInteractiveSubmit;
+    private BooleanSupplier pinConfiguredSupplier;
+    private Runnable onPinNotSet;
+    private final AtomicBoolean paymentInFlight = new AtomicBoolean(false);
+    private volatile boolean lastPaymentExecutedOffEdt;
+
+    private record BillPaymentRequest(
+            String biller,
+            String billerReference,
+            BigDecimal amount,
+            BigDecimal fee,
+            String pin
+    ) {
+    }
+
+    private record ValidatedDetails(
+            String biller,
+            String billerReference,
+            BigDecimal amount,
+            BigDecimal fee
+    ) {
+    }
 
     public PayBillsPanel() {
         this(null, null);
@@ -101,7 +129,7 @@ public class PayBillsPanel extends JPanel {
     }
 
     public void setFeePolicy(FeeComponent feePolicy) {
-        this.feePolicy = feePolicy != null ? feePolicy : CompositeFeePolicy.forBillPayment();
+        this.customFeePolicy = feePolicy;
         updateFeePreview();
     }
 
@@ -111,6 +139,26 @@ public class PayBillsPanel extends JPanel {
 
     public void setOnPaymentSuccess(Consumer<Transaction> onPaymentSuccess) {
         this.onPaymentSuccess = onPaymentSuccess;
+    }
+
+    public void setOnPaymentError(Consumer<Throwable> onPaymentError) {
+        this.onPaymentError = onPaymentError;
+    }
+
+    public void setBeforeInteractiveSubmit(BooleanSupplier beforeInteractiveSubmit) {
+        this.beforeInteractiveSubmit = beforeInteractiveSubmit;
+    }
+
+    public void setPinConfiguredSupplier(BooleanSupplier pinConfiguredSupplier) {
+        this.pinConfiguredSupplier = pinConfiguredSupplier;
+    }
+
+    public void setOnPinNotSet(Runnable onPinNotSet) {
+        this.onPinNotSet = onPinNotSet;
+    }
+
+    public boolean isLastPaymentExecutedOffEdt() {
+        return lastPaymentExecutedOffEdt;
     }
 
     private void initInteractions() {
@@ -142,11 +190,22 @@ public class PayBillsPanel extends JPanel {
         });
     }
 
+    private FeeComponent resolveFeePolicy() {
+        if (customFeePolicy != null) {
+            return customFeePolicy;
+        }
+        BankResponseStatus mode = walletService != null
+                ? walletService.getCurrentProviderMode()
+                : BankResponseStatus.SUCCESS;
+        return PaymentProviderFactory.forMode(mode).createBillPaymentFeePolicy();
+    }
+
     public BigDecimal calculateFee(BigDecimal amount) {
         if (amount == null || amount.compareTo(BigDecimal.ZERO) <= 0) {
             return MoneyUtil.ZERO;
         }
-        return feePolicy != null ? feePolicy.calculate(amount) : MoneyUtil.ZERO;
+        FeeComponent policy = resolveFeePolicy();
+        return policy != null ? policy.calculate(amount) : MoneyUtil.ZERO;
     }
 
     public void updateFeePreview() {
@@ -179,11 +238,25 @@ public class PayBillsPanel extends JPanel {
         WalletService.validateBillerReference(ref);
     }
 
+    protected int showConfirmDialog(String title, String message) {
+        if (GraphicsEnvironment.isHeadless()) {
+            return JOptionPane.OK_OPTION;
+        }
+        return JOptionPane.showConfirmDialog(
+                this,
+                message,
+                title,
+                JOptionPane.OK_CANCEL_OPTION,
+                JOptionPane.QUESTION_MESSAGE
+        );
+    }
+
     public CompletableFuture<Transaction> submitPaymentAsync() {
-        CompletableFuture<Transaction> future = new CompletableFuture<>();
-        if (!btnSubmitBillPayment.isEnabled()) {
-            future.complete(null);
-            return future;
+        if (!btnSubmitBillPayment.isEnabled() || paymentInFlight.get()) {
+            return CompletableFuture.completedFuture(null);
+        }
+        if (beforeInteractiveSubmit != null && !beforeInteractiveSubmit.getAsBoolean()) {
+            return CompletableFuture.completedFuture(null);
         }
 
         String biller = (String) cmbBiller.getSelectedItem();
@@ -191,69 +264,108 @@ public class PayBillsPanel extends JPanel {
         String amountText = txtBillAmount.getText() != null ? txtBillAmount.getText().trim() : "";
         String pin = new String(txtBillPin.getPassword()).trim();
 
+        BillPaymentRequest request;
         try {
-            if (biller == null || biller.trim().isEmpty()) {
-                throw new IllegalArgumentException("Please select a biller.");
-            }
-            validateReference(ref);
-            if (amountText.isEmpty()) {
-                throw new IllegalArgumentException("Please enter a bill payment amount.");
-            }
-            BigDecimal parsedAmount = MoneyUtil.validatePositiveAmount(MoneyUtil.parse(amountText));
-            BigDecimal fee = calculateFee(parsedAmount);
-
-            OtogConfig config = OtogConfig.getInstance();
-            if (pin.isEmpty()) {
-                throw new IllegalArgumentException("Please enter your " + config.getPinMinLength() + "-"
-                        + config.getPinMaxLength() + " digit Transaction PIN.");
-            }
-
-            if (!GraphicsEnvironment.isHeadless()) {
-                BigDecimal total = parsedAmount.add(fee).setScale(MoneyUtil.DEFAULT_SCALE, MoneyUtil.DEFAULT_ROUNDING);
-                int choice = JOptionPane.showConfirmDialog(
-                        this,
-                        "Biller: " + biller + "\n"
-                                + "Account / Ref: " + ReceiptBuilder.maskIdentifier(ref) + "\n"
-                                + "Amount: " + MoneyUtil.format(parsedAmount, config.getDefaultCurrency()) + "\n"
-                                + "Fee: " + MoneyUtil.format(fee, config.getDefaultCurrency()) + "\n"
-                                + "Total: " + MoneyUtil.format(total, config.getDefaultCurrency()),
-                        "Confirm Bill Payment",
-                        JOptionPane.OK_CANCEL_OPTION,
-                        JOptionPane.QUESTION_MESSAGE
-                );
-                if (choice != JOptionPane.OK_OPTION) {
-                    lblBillFeedback.setForeground(UiTheme.color(UiTheme.ColorRole.MUTED));
-                    lblBillFeedback.setText("Bill payment cancelled.");
-                    future.complete(null);
-                    return future;
+            ValidatedDetails details = validatePaymentDetails(biller, ref, amountText);
+            if (authService != null && pinConfiguredSupplier != null && !pinConfiguredSupplier.getAsBoolean()) {
+                txtBillPin.setText("");
+                lblBillFeedback.setForeground(UiTheme.color(UiTheme.ColorRole.WARNING));
+                lblBillFeedback.setText("Transaction PIN is not set. Please set a Transaction PIN before paying bills.");
+                if (onPinNotSet != null) {
+                    onPinNotSet.run();
                 }
+                return CompletableFuture.completedFuture(null);
             }
+            String cleanPin = validatePinPresent(pin);
+            request = new BillPaymentRequest(
+                    details.biller(),
+                    details.billerReference(),
+                    details.amount(),
+                    details.fee(),
+                    cleanPin
+            );
         } catch (RuntimeException ex) {
-            txtBillPin.setText("");
-            lblBillFeedback.setForeground(UiTheme.color(UiTheme.ColorRole.ERROR));
-            lblBillFeedback.setText("Payment validation failed: " + ex.getMessage());
-            future.completeExceptionally(ex);
-            return future;
+            applyFailureUi(ex);
+            if (onPaymentError != null) {
+                onPaymentError.accept(ex);
+            }
+            return CompletableFuture.failedFuture(ex);
         }
 
-        btnSubmitBillPayment.setEnabled(false);
-        lblBillFeedback.setForeground(UiTheme.color(UiTheme.ColorRole.INFO));
-        lblBillFeedback.setText("Processing bill payment...");
+        // Always clear PIN field before displaying confirmation so cancellation never retains typed PIN
+        txtBillPin.setText("");
+        OtogConfig config = OtogConfig.getInstance();
+        BigDecimal total = request.amount().add(request.fee())
+                .setScale(MoneyUtil.DEFAULT_SCALE, MoneyUtil.DEFAULT_ROUNDING);
+        String confirmMessage = "Biller: " + request.biller() + "\n"
+                + "Account / Ref: " + ReceiptBuilder.maskIdentifier(request.billerReference()) + "\n"
+                + "Amount: " + MoneyUtil.format(request.amount(), config.getDefaultCurrency()) + "\n"
+                + "Fee: " + MoneyUtil.format(request.fee(), config.getDefaultCurrency()) + "\n"
+                + "Total: " + MoneyUtil.format(total, config.getDefaultCurrency());
+        int choice = showConfirmDialog("Confirm Bill Payment", confirmMessage);
+        if (choice != JOptionPane.OK_OPTION) {
+            lblBillFeedback.setForeground(UiTheme.color(UiTheme.ColorRole.MUTED));
+            lblBillFeedback.setText("Bill payment cancelled.");
+            return CompletableFuture.completedFuture(null);
+        }
+
+        return executePaymentAsync(request);
+    }
+
+    public CompletableFuture<Transaction> submitPaymentAsync(String biller,
+                                                             String billerReference,
+                                                             String amountText,
+                                                             String pin) {
+        BillPaymentRequest request;
+        try {
+            request = validateInputs(biller, billerReference, amountText, pin);
+        } catch (RuntimeException ex) {
+            CompletableFuture<Transaction> future = new CompletableFuture<>();
+            runOnEdt(() -> {
+                applyFailureUi(ex);
+                if (onPaymentError != null) {
+                    onPaymentError.accept(ex);
+                }
+                future.completeExceptionally(ex);
+            });
+            return future;
+        }
+        return executePaymentAsync(request);
+    }
+
+    private CompletableFuture<Transaction> executePaymentAsync(BillPaymentRequest request) {
+        if (!paymentInFlight.compareAndSet(false, true)) {
+            return CompletableFuture.completedFuture(null);
+        }
+        CompletableFuture<Transaction> future = new CompletableFuture<>();
+        runOnEdt(() -> {
+            btnSubmitBillPayment.setEnabled(false);
+            txtBillPin.setText("");
+            lblBillFeedback.setForeground(UiTheme.color(UiTheme.ColorRole.INFO));
+            lblBillFeedback.setText("Processing bill payment...");
+        });
 
         SwingWorker<Transaction, Void> worker = new SwingWorker<>() {
             @Override
             protected Transaction doInBackground() {
-                return executePayment();
+                lastPaymentExecutedOffEdt = !SwingUtilities.isEventDispatchThread();
+                return performPaymentWork(request);
             }
 
             @Override
             protected void done() {
+                paymentInFlight.set(false);
                 btnSubmitBillPayment.setEnabled(true);
                 try {
                     Transaction txn = get();
+                    applyPaymentOutcomeUi(request, txn);
                     future.complete(txn);
                 } catch (Exception ex) {
-                    Throwable cause = ex.getCause() != null ? ex.getCause() : ex;
+                    Throwable cause = unwrapCause(ex);
+                    applyFailureUi(cause);
+                    if (onPaymentError != null) {
+                        onPaymentError.accept(cause);
+                    }
                     future.completeExceptionally(cause);
                 }
             }
@@ -269,108 +381,175 @@ public class PayBillsPanel extends JPanel {
         String pin = new String(txtBillPin.getPassword()).trim();
 
         try {
-            if (biller == null || biller.trim().isEmpty()) {
-                throw new IllegalArgumentException("Please select a biller.");
-            }
-            validateReference(ref);
-            if (amountText.isEmpty()) {
-                throw new IllegalArgumentException("Please enter a bill payment amount.");
-            }
-            BigDecimal parsedAmount = MoneyUtil.validatePositiveAmount(MoneyUtil.parse(amountText));
-            BigDecimal fee = calculateFee(parsedAmount);
-
-            OtogConfig config = OtogConfig.getInstance();
-            if (pin.isEmpty()) {
-                throw new IllegalArgumentException("Please enter your " + config.getPinMinLength() + "-"
-                        + config.getPinMaxLength() + " digit Transaction PIN.");
-            }
-
-            if (walletService == null) {
-                lblBillFeedback.setForeground(UiTheme.color(UiTheme.ColorRole.INFO));
-                lblBillFeedback.setText("Validated: " + biller + " Ref: " + ref + " Amount: " + parsedAmount);
-                return null;
-            }
-
-            SessionManager session = SessionManager.getInstance();
-            Wallet wallet = session.getCurrentWallet();
-            if (wallet == null) {
-                wallet = session.refreshWallet(walletService);
-            }
-            if (wallet == null) {
-                throw new IllegalStateException("Active wallet session required to pay bills.");
-            }
-
-            String reqReference = IdGenerator.nextReferenceNumber();
-            String desc = "Bill Payment to " + biller + " [" + ReceiptBuilder.maskIdentifier(ref) + "]";
-            Transaction txn;
-
-            if (authService != null) {
-                if (!authService.verifyPin(wallet.getUserId(), pin)) {
-                    txtBillPin.setText("");
-                    if (session.isLockedOutByPin()) {
-                        throw new WalletException("Session locked after excessive failed PIN attempts.");
-                    }
-                    throw new WalletException("Invalid transaction PIN. Outgoing payment blocked.");
-                }
-                txn = walletService.payBill(
-                        reqReference,
-                        wallet.getWalletId(),
-                        biller,
-                        ref,
-                        parsedAmount,
-                        fee,
-                        desc
-                );
-            } else {
-                txn = walletService.payBillWithPin(
-                        reqReference,
-                        wallet.getWalletId(),
-                        biller,
-                        ref,
-                        parsedAmount,
-                        fee,
-                        desc,
-                        pin
-                );
-            }
-
-            txtBillPin.setText("");
-            txtBillReference.setText("");
-            txtBillAmount.setText("");
-            session.refreshWallet(walletService);
-
-            if (txn.getStatus() == TransactionStatus.COMPLETED) {
-                lblBillFeedback.setForeground(UiTheme.color(UiTheme.ColorRole.SUCCESS));
-                lblBillFeedback.setText("Bill payment successful! Ref: " + txn.getReferenceNumber()
-                        + " Total: " + MoneyUtil.format(txn.getTotalAmount(), txn.getCurrency()));
-            } else if (txn.getStatus() == TransactionStatus.FAILED) {
-                lblBillFeedback.setForeground(UiTheme.color(UiTheme.ColorRole.ERROR));
-                lblBillFeedback.setText("Bill payment failed. Reserved funds released back to wallet.");
-            } else {
-                lblBillFeedback.setForeground(UiTheme.color(UiTheme.ColorRole.WARNING));
-                lblBillFeedback.setText("Bill payment pending provider settlement. Ref: " + txn.getReferenceNumber());
-            }
-
-            if (onPaymentSuccess != null) {
-                onPaymentSuccess.accept(txn);
-            }
+            BillPaymentRequest request = validateInputs(biller, ref, amountText, pin);
+            Transaction txn = performPaymentWork(request);
+            applyPaymentOutcomeUi(request, txn);
             return txn;
-        } catch (DuplicateTransactionException ex) {
-            txtBillPin.setText("");
-            lblBillFeedback.setForeground(UiTheme.color(UiTheme.ColorRole.ERROR));
-            lblBillFeedback.setText("Payment failed: Duplicate transaction detected (" + ex.getMessage() + ")");
-            throw ex;
-        } catch (InsufficientFundsException ex) {
-            txtBillPin.setText("");
-            lblBillFeedback.setForeground(UiTheme.color(UiTheme.ColorRole.ERROR));
-            lblBillFeedback.setText("Payment failed: Insufficient wallet balance.");
-            throw ex;
         } catch (RuntimeException ex) {
-            txtBillPin.setText("");
-            lblBillFeedback.setForeground(UiTheme.color(UiTheme.ColorRole.ERROR));
-            lblBillFeedback.setText("Payment validation failed: " + ex.getMessage());
+            applyFailureUi(ex);
+            if (onPaymentError != null) {
+                onPaymentError.accept(ex);
+            }
             throw ex;
         }
+    }
+
+    private BillPaymentRequest validateInputs(String biller, String ref, String amountText, String pin) {
+        ValidatedDetails details = validatePaymentDetails(biller, ref, amountText);
+        String cleanPin = validatePinPresent(pin);
+        return new BillPaymentRequest(
+                details.biller(),
+                details.billerReference(),
+                details.amount(),
+                details.fee(),
+                cleanPin
+        );
+    }
+
+    private ValidatedDetails validatePaymentDetails(String biller, String ref, String amountText) {
+        if (biller == null || biller.trim().isEmpty()) {
+            throw new IllegalArgumentException("Please select a biller.");
+        }
+        String cleanBiller = biller.trim();
+        validateReference(ref);
+        String cleanRef = ref.trim();
+        String cleanAmountText = amountText != null ? amountText.trim() : "";
+        if (cleanAmountText.isEmpty()) {
+            throw new IllegalArgumentException("Please enter a bill payment amount.");
+        }
+        BigDecimal parsedAmount = MoneyUtil.validatePositiveAmount(MoneyUtil.parse(cleanAmountText));
+        BigDecimal fee = calculateFee(parsedAmount);
+        return new ValidatedDetails(cleanBiller, cleanRef, parsedAmount, fee);
+    }
+
+    private String validatePinPresent(String pin) {
+        OtogConfig config = OtogConfig.getInstance();
+        String cleanPin = pin != null ? pin.trim() : "";
+        if (cleanPin.isEmpty()) {
+            throw new IllegalArgumentException("Please enter your " + config.getPinMinLength() + "-"
+                    + config.getPinMaxLength() + " digit Transaction PIN.");
+        }
+        return cleanPin;
+    }
+
+    private Transaction performPaymentWork(BillPaymentRequest request) {
+        if (walletService == null) {
+            return null;
+        }
+        SessionManager session = SessionManager.getInstance();
+        Wallet wallet = session.getCurrentWallet();
+        if (wallet == null) {
+            wallet = session.refreshWallet(walletService);
+        }
+        if (wallet == null) {
+            throw new IllegalStateException("Active wallet session required to pay bills.");
+        }
+
+        String reqReference = IdGenerator.nextReferenceNumber();
+        String desc = "Bill Payment to " + request.biller() + " [" + ReceiptBuilder.maskIdentifier(request.billerReference()) + "]";
+        Transaction txn;
+
+        if (authService != null) {
+            verifyPinOrThrow(wallet.getUserId(), request.pin());
+            txn = walletService.payBill(
+                    reqReference,
+                    wallet.getWalletId(),
+                    request.biller(),
+                    request.billerReference(),
+                    request.amount(),
+                    request.fee(),
+                    desc
+            );
+        } else {
+            txn = walletService.payBillWithPin(
+                    reqReference,
+                    wallet.getWalletId(),
+                    request.biller(),
+                    request.billerReference(),
+                    request.amount(),
+                    request.fee(),
+                    desc,
+                    request.pin()
+            );
+        }
+        session.refreshWallet(walletService);
+        return txn;
+    }
+
+    private void verifyPinOrThrow(String userId, String rawPin) {
+        try {
+            if (!authService.verifyPin(userId, rawPin)) {
+                SessionManager session = SessionManager.getInstance();
+                if (session.isLockedOutByPin()) {
+                    throw new WalletException("Session terminated after maximum failed PIN attempts.");
+                }
+                throw new WalletException("Invalid transaction PIN. Outgoing payment blocked.");
+            }
+        } catch (SecurityException ex) {
+            throw new WalletException(ex.getMessage(), ex);
+        }
+    }
+
+    private void applyPaymentOutcomeUi(BillPaymentRequest request, Transaction txn) {
+        txtBillPin.setText("");
+        if (txn == null) {
+            lblBillFeedback.setForeground(UiTheme.color(UiTheme.ColorRole.INFO));
+            lblBillFeedback.setText("Validated: " + request.biller()
+                    + " Ref: " + ReceiptBuilder.maskIdentifier(request.billerReference())
+                    + " Amount: " + request.amount());
+            return;
+        }
+        if (txn.getStatus() == TransactionStatus.COMPLETED) {
+            txtBillReference.setText("");
+            txtBillAmount.setText("");
+            lblBillFeedback.setForeground(UiTheme.color(UiTheme.ColorRole.SUCCESS));
+            lblBillFeedback.setText("Bill payment successful! Ref: " + txn.getReferenceNumber()
+                    + " Total: " + MoneyUtil.format(txn.getTotalAmount(), txn.getCurrency()));
+        } else if (txn.getStatus() == TransactionStatus.FAILED) {
+            // Preserve txtBillReference and txtBillAmount so the user does not have to retype after a rejection
+            lblBillFeedback.setForeground(UiTheme.color(UiTheme.ColorRole.ERROR));
+            lblBillFeedback.setText("Bill payment failed. Reserved funds released back to wallet.");
+        } else {
+            txtBillReference.setText("");
+            txtBillAmount.setText("");
+            lblBillFeedback.setForeground(UiTheme.color(UiTheme.ColorRole.WARNING));
+            lblBillFeedback.setText("Bill payment pending provider settlement. Ref: " + txn.getReferenceNumber());
+        }
+        if (onPaymentSuccess != null) {
+            onPaymentSuccess.accept(txn);
+        }
+    }
+
+    private void applyFailureUi(Throwable ex) {
+        txtBillPin.setText("");
+        lblBillFeedback.setForeground(UiTheme.color(UiTheme.ColorRole.ERROR));
+        if (ex instanceof DuplicateTransactionException) {
+            lblBillFeedback.setText("Payment failed: Duplicate transaction detected (" + ex.getMessage() + ")");
+        } else if (ex instanceof InsufficientFundsException) {
+            lblBillFeedback.setText("Payment failed: Insufficient wallet balance.");
+        } else {
+            String msg = (ex != null && ex.getMessage() != null && !ex.getMessage().trim().isEmpty())
+                    ? ex.getMessage()
+                    : (ex != null ? ex.getClass().getSimpleName() : "Unknown error");
+            lblBillFeedback.setText("Payment validation failed: " + msg);
+        }
+    }
+
+    private static void runOnEdt(Runnable action) {
+        if (SwingUtilities.isEventDispatchThread()) {
+            action.run();
+        } else {
+            SwingUtilities.invokeLater(action);
+        }
+    }
+
+    private static Throwable unwrapCause(Throwable ex) {
+        Throwable current = ex;
+        while ((current instanceof ExecutionException || current instanceof CompletionException)
+                && current.getCause() != null) {
+            current = current.getCause();
+        }
+        return current;
     }
 
     public JPanel getRootPanel() {

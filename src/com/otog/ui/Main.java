@@ -168,6 +168,7 @@ public class Main extends JFrame {
     private volatile boolean lastAdminLoadExecutedOffEdt;
     private volatile boolean cachedHasPin;
     private CompletableFuture<Void> initialLoadFuture;
+    private volatile CompletableFuture<Void> lastPayBillsRefreshFuture = CompletableFuture.completedFuture(null);
     private List<Transaction> loadedTransactions = Collections.emptyList();
     private volatile TransactionFilter activeHistoryFilter = TransactionFilter.empty();
     private volatile int cachedUnreadNotifications;
@@ -454,11 +455,45 @@ public class Main extends JFrame {
             return;
         }
         payBillsPanel.setOnBackToOverview(() -> navigateToTab("Overview"));
+        payBillsPanel.setBeforeInteractiveSubmit(this::ensureActiveSessionForInteraction);
+        payBillsPanel.setPinConfiguredSupplier(() -> cachedHasPin);
+        payBillsPanel.setOnPinNotSet(() ->
+                promptPinSetupIfMissing("A Transaction PIN is required before paying bills."));
         payBillsPanel.setOnPaymentSuccess(txn -> {
-            lastPaymentExecutedOffEdt = !SwingUtilities.isEventDispatchThread();
-            lblStatus.setText("Bill payment completed: " + txn.getReferenceNumber());
-            refreshDashboardAsync();
+            lastPaymentExecutedOffEdt = payBillsPanel.isLastPaymentExecutedOffEdt();
+            if (txn != null) {
+                String billStatusText;
+                if (txn.getStatus() == TransactionStatus.COMPLETED) {
+                    billStatusText = "Bill payment completed: " + txn.getReferenceNumber();
+                } else if (txn.getStatus() == TransactionStatus.FAILED) {
+                    billStatusText = "Bill payment failed: " + txn.getReferenceNumber();
+                } else {
+                    billStatusText = "Bill payment pending settlement: " + txn.getReferenceNumber();
+                }
+                lblStatus.setText(billStatusText);
+                lastPayBillsRefreshFuture = refreshDashboardAsync().whenComplete((v, err) -> {
+                    if (currentState != DashboardState.ERROR) {
+                        runOnEdt(() -> lblStatus.setText(billStatusText));
+                    }
+                });
+            } else {
+                lastPayBillsRefreshFuture = refreshDashboardAsync();
+            }
         });
+        payBillsPanel.setOnPaymentError(err -> {
+            String msg = extractErrorMessage(err);
+            lblStatus.setText("Bill payment failed: " + msg);
+            checkSessionTerminatedOnError(msg);
+        });
+    }
+
+    public CompletableFuture<Transaction> submitBillPaymentAsync(String biller, String billerReference,
+                                                                 String amountText, String rawPin) {
+        return payBillsPanel.submitPaymentAsync(biller, billerReference, amountText, rawPin)
+                .thenCompose(txn -> {
+                    CompletableFuture<Void> refresh = lastPayBillsRefreshFuture;
+                    return refresh != null ? refresh.thenApply(v -> txn) : CompletableFuture.completedFuture(txn);
+                });
     }
 
     public PayBillsPanel getPayBillsPanel() {
@@ -533,7 +568,7 @@ public class Main extends JFrame {
         }
         boolean pinVerified = SessionManager.getInstance().isPinVerified();
         if (!hasPin) {
-            lblPinStatus.setText("Transaction PIN: Not Set (required for Cash Out & Send Money)");
+            lblPinStatus.setText("Transaction PIN: Not Set (required for Cash Out, Send Money & Pay Bills)");
             lblPinStatus.setForeground(UiTheme.color(UiTheme.ColorRole.WARNING));
             if (btnPinSettings != null) {
                 btnPinSettings.setText("Set PIN");

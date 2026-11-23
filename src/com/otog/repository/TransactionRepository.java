@@ -328,11 +328,7 @@ public class TransactionRepository {
             smt.setNote(rs.getString("description"));
         } else if (t instanceof BillPaymentTransaction bpt) {
             bpt.setBillerName(rs.getString("channel"));
-            String billerRef = null;
-            try {
-                billerRef = rs.getString("biller_reference");
-            } catch (SQLException ignored) {
-            }
+            String billerRef = rs.getString("biller_reference");
             if (billerRef == null || billerRef.trim().isEmpty()) {
                 billerRef = extractBillerReference(rs.getString("description"));
             }

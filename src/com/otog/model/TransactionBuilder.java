@@ -334,7 +334,8 @@ public class TransactionBuilder {
         BigDecimal effectiveFee = (fee != null) ? fee : MoneyUtil.ZERO;
         String effectiveDesc = (note != null && !note.trim().isEmpty())
                 ? note.trim()
-                : "Bill Payment to " + effectiveBiller + (effectiveBillerRef != null ? " [" + effectiveBillerRef + "]" : "");
+                : "Bill Payment to " + effectiveBiller
+                        + (effectiveBillerRef != null ? " [" + ReceiptBuilder.maskIdentifier(effectiveBillerRef) + "]" : "");
 
         BillPaymentTransaction txn = new BillPaymentTransaction(
                 resolveTransactionId(),

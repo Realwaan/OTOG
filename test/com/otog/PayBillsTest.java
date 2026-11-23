@@ -14,6 +14,7 @@ import com.otog.model.Notification;
 import com.otog.model.NotificationType;
 import com.otog.model.ReceiptBuilder;
 import com.otog.model.Transaction;
+import com.otog.model.TransactionBuilder;
 import com.otog.model.TransactionStatus;
 import com.otog.model.TransactionType;
 import com.otog.model.User;
@@ -47,9 +48,12 @@ import java.sql.Connection;
 import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -93,6 +97,7 @@ public class PayBillsTest {
 
     @AfterEach
     void tearDown() {
+        OtogConfig.getInstance().clearOverrides();
         if (activeDashboard != null) {
             activeDashboard.dispose();
             activeDashboard = null;
@@ -259,6 +264,10 @@ public class PayBillsTest {
         assertNotNull(txn.getCompletedAt());
         // 5000 - 800 + 800 (refund) = 5000
         assertEquals(new BigDecimal("5000.00"), walletService.getBalance(testWallet.getWalletId()));
+        // On FAILED settlement, reference and amount stay populated while PIN is cleared
+        assertEquals("ACC-MAY-67890", panel.getBillReferenceField().getText());
+        assertEquals("800.00", panel.getBillAmountField().getText());
+        assertEquals("", new String(panel.getBillPinField().getPassword()));
     }
 
     @Test
@@ -538,5 +547,344 @@ public class PayBillsTest {
         assertNotNull(overview.getNavPayBillsButton());
         overview.getNavPayBillsButton().doClick();
         assertEquals("Pay Bills", activeDashboard.getTabs().getTitleAt(activeDashboard.getTabs().getSelectedIndex()));
+    }
+
+    @Test
+    @DisplayName("Thread Safety: submitPaymentAsync executes service/DB off-EDT and runs Swing callbacks on EDT")
+    void testSubmitPaymentAsyncRunsOffEdtAndInvokesCallbacksOnEdt() throws Exception {
+        AtomicBoolean payBillOffEdt = new AtomicBoolean(false);
+        WalletService spyWalletService = new WalletService(databaseManager, authService) {
+            @Override
+            public Transaction payBill(String referenceNumber, String sourceWalletId, String billerName,
+                                       String billerReference, BigDecimal amount, BigDecimal fee, String description) {
+                payBillOffEdt.set(!SwingUtilities.isEventDispatchThread());
+                return super.payBill(referenceNumber, sourceWalletId, billerName, billerReference, amount, fee, description);
+            }
+        };
+        spyWalletService.setPaymentProviderFactory(PaymentProviderFactory.successFactory());
+
+        PayBillsPanel panel = new PayBillsPanel(spyWalletService, authService);
+        AtomicBoolean callbackOnEdt = new AtomicBoolean(false);
+        AtomicReference<Transaction> callbackTxn = new AtomicReference<>();
+        panel.setOnPaymentSuccess(txn -> {
+            callbackOnEdt.set(SwingUtilities.isEventDispatchThread());
+            callbackTxn.set(txn);
+        });
+
+        SwingUtilities.invokeAndWait(() -> {
+            panel.getBillReferenceField().setText("PRE-FILLED-REF");
+            panel.getBillAmountField().setText("999.00");
+            panel.getBillPinField().setText("9999");
+        });
+
+        Transaction txn = panel.submitPaymentAsync("Meralco (Electricity)", "ACC-ASYNC-01", "250.00", "1234")
+                .get(5, TimeUnit.SECONDS);
+
+        assertNotNull(txn);
+        assertEquals(TransactionStatus.COMPLETED, txn.getStatus());
+        assertTrue(payBillOffEdt.get(), "payBill service call must run off the Swing EDT");
+        assertTrue(panel.isLastPaymentExecutedOffEdt(), "SwingWorker must record off-EDT execution");
+        assertTrue(callbackOnEdt.get(), "onPaymentSuccess callback must execute on the Swing EDT");
+        assertSame(txn, callbackTxn.get());
+        assertEquals(new BigDecimal("4750.00"), walletService.getBalance(testWallet.getWalletId()));
+
+        SwingUtilities.invokeAndWait(() -> {
+            assertTrue(panel.getSubmitBillPaymentButton().isEnabled());
+            assertEquals("", panel.getBillReferenceField().getText());
+            assertEquals("", panel.getBillAmountField().getText());
+            assertEquals("", new String(panel.getBillPinField().getPassword()));
+        });
+    }
+
+    @Test
+    @DisplayName("UI Snapshot & PIN Clearing: Interactive confirm uses captured inputs and clears PIN before dialog")
+    void testInteractiveConfirmUsesCapturedSnapshotAndClearsPinBeforeDialog() throws Exception {
+        walletService.setPaymentProviderFactory(PaymentProviderFactory.successFactory());
+        AtomicReference<String> pinSeenDuringDialog = new AtomicReference<>();
+        AtomicReference<String> confirmMessageSeen = new AtomicReference<>();
+
+        PayBillsPanel panel = new PayBillsPanel(walletService, authService) {
+            @Override
+            protected int showConfirmDialog(String title, String message) {
+                pinSeenDuringDialog.set(new String(getBillPinField().getPassword()));
+                confirmMessageSeen.set(message);
+                // Simulate concurrent/post-confirm field tampering before worker completes
+                getBillerComboBox().setSelectedItem("Globe Telecom (Mobile & Broadband)");
+                getBillReferenceField().setText("TAMPERED-999999");
+                getBillAmountField().setText("999.00");
+                getBillPinField().setText("0000");
+                return JOptionPane.OK_OPTION;
+            }
+        };
+
+        AtomicReference<CompletableFuture<Transaction>> futureRef = new AtomicReference<>();
+        SwingUtilities.invokeAndWait(() -> {
+            panel.getBillerComboBox().setSelectedItem("Meralco (Electricity)");
+            panel.getBillReferenceField().setText("ORIG-123456");
+            panel.getBillAmountField().setText("200.00");
+            panel.getBillPinField().setText("1234");
+            futureRef.set(panel.submitPaymentAsync());
+        });
+
+        Transaction txn = futureRef.get().get(5, TimeUnit.SECONDS);
+        assertNotNull(txn);
+        BillPaymentTransaction bpt = assertInstanceOf(BillPaymentTransaction.class, txn);
+        assertEquals("", pinSeenDuringDialog.get(), "PIN field must be cleared before confirmation dialog opens");
+        assertTrue(confirmMessageSeen.get().contains(ReceiptBuilder.maskIdentifier("ORIG-123456")));
+        assertEquals("Meralco (Electricity)", bpt.getBillerName());
+        assertEquals("ORIG-123456", bpt.getBillerReference());
+        assertEquals(new BigDecimal("200.00"), bpt.getAmount());
+        assertEquals(new BigDecimal("4800.00"), walletService.getBalance(testWallet.getWalletId()));
+    }
+
+    @Test
+    @DisplayName("UI Cancel: Cancelling confirmation dialog clears typed PIN and leaves balance untouched")
+    void testCancelConfirmDialogClearsPinAndDoesNotDebit() throws Exception {
+        PayBillsPanel panel = new PayBillsPanel(walletService, authService) {
+            @Override
+            protected int showConfirmDialog(String title, String message) {
+                return JOptionPane.CANCEL_OPTION;
+            }
+        };
+
+        AtomicReference<CompletableFuture<Transaction>> futureRef = new AtomicReference<>();
+        SwingUtilities.invokeAndWait(() -> {
+            panel.getBillerComboBox().setSelectedItem("Meralco (Electricity)");
+            panel.getBillReferenceField().setText("ACC-CANCEL-01");
+            panel.getBillAmountField().setText("300.00");
+            panel.getBillPinField().setText("1234");
+            futureRef.set(panel.submitPaymentAsync());
+        });
+
+        assertNull(futureRef.get().get(5, TimeUnit.SECONDS));
+        SwingUtilities.invokeAndWait(() -> {
+            assertEquals("", new String(panel.getBillPinField().getPassword()),
+                    "Typed PIN must remain cleared after cancelling confirmation");
+            assertEquals("Bill payment cancelled.", panel.getBillFeedbackLabel().getText());
+        });
+        assertEquals(new BigDecimal("5000.00"), walletService.getBalance(testWallet.getWalletId()));
+    }
+
+    @Test
+    @DisplayName("Dashboard Integration: Main status is status-aware and preserves fields on FAILED settlement")
+    void testDashboardPayBillsStatusAwareAndPreservesFieldsOnFailure() throws Exception {
+        activeDashboard = new Main(walletService, authService, null, null);
+        activeDashboard.getInitialLoadFuture().get(5, TimeUnit.SECONDS);
+        PayBillsPanel panel = activeDashboard.getPayBillsPanel();
+
+        // 1. FAILED outcome: status label says failed (not completed) and form inputs stay populated
+        walletService.setPaymentProviderFactory(PaymentProviderFactory.failureFactory());
+        SwingUtilities.invokeAndWait(() -> {
+            panel.getBillReferenceField().setText("FAIL-REF-111");
+            panel.getBillAmountField().setText("300.00");
+        });
+        Transaction failed = activeDashboard
+                .submitBillPaymentAsync("Meralco (Electricity)", "FAIL-REF-111", "300.00", "1234")
+                .get(5, TimeUnit.SECONDS);
+        assertEquals(TransactionStatus.FAILED, failed.getStatus());
+        assertTrue(activeDashboard.isLastPaymentExecutedOffEdt());
+        assertTrue(activeDashboard.getStatusLabel().getText().contains("failed"));
+        assertFalse(activeDashboard.getStatusLabel().getText().contains("completed"));
+        assertEquals("FAIL-REF-111", panel.getBillReferenceField().getText());
+        assertEquals("300.00", panel.getBillAmountField().getText());
+
+        // 2. PENDING outcome: status label says pending settlement (not completed) and inputs clear
+        walletService.setPaymentProviderFactory(PaymentProviderFactory.timeoutFactory());
+        Transaction pending = activeDashboard
+                .submitBillPaymentAsync("PLDT (Telecom & Internet)", "PEND-REF-222", "400.00", "1234")
+                .get(5, TimeUnit.SECONDS);
+        assertEquals(TransactionStatus.PENDING, pending.getStatus());
+        assertTrue(activeDashboard.getStatusLabel().getText().contains("pending"));
+        assertFalse(activeDashboard.getStatusLabel().getText().contains("completed"));
+        assertEquals("", panel.getBillReferenceField().getText());
+        assertEquals("", panel.getBillAmountField().getText());
+
+        // 3. COMPLETED outcome: status label says completed, balance updates, and inputs clear
+        walletService.setPaymentProviderFactory(PaymentProviderFactory.successFactory());
+        Transaction completed = activeDashboard
+                .submitBillPaymentAsync("Manila Water (Water)", "SUCC-REF-333", "500.00", "1234")
+                .get(5, TimeUnit.SECONDS);
+        assertEquals(TransactionStatus.COMPLETED, completed.getStatus());
+        assertTrue(activeDashboard.getStatusLabel().getText().contains("completed"));
+        assertEquals("PHP 4,100.00", activeDashboard.getBalanceLabel().getText());
+        assertEquals("", panel.getBillReferenceField().getText());
+        assertEquals("", panel.getBillAmountField().getText());
+    }
+
+    @Test
+    @DisplayName("AC-3 Masking: Null or blank descriptions mask billerReference in default notes, receipts, and builder")
+    void testDefaultDescriptionMasksBillerReferenceWhenDescriptionIsNullOrBlank() {
+        walletService.setPaymentProviderFactory(PaymentProviderFactory.successFactory());
+        String rawAcct = "987654321012";
+        String maskedAcct = ReceiptBuilder.maskIdentifier(rawAcct);
+
+        Transaction nullDescTxn = walletService.payBillWithPin(
+                "REQ-MASK-NULL",
+                testWallet.getWalletId(),
+                "PLDT (Telecom & Internet)",
+                rawAcct,
+                new BigDecimal("100.00"),
+                BigDecimal.ZERO,
+                null,
+                "1234"
+        );
+        assertFalse(nullDescTxn.getDescription().contains(rawAcct), "Default description must mask billerReference");
+        assertTrue(nullDescTxn.getDescription().contains(maskedAcct));
+        String receiptNull = walletService.getTransactionReceipt(testWallet.getWalletId(), "REQ-MASK-NULL");
+        assertFalse(receiptNull.contains(rawAcct), "Receipt Note must never expose raw billerReference");
+        assertTrue(receiptNull.contains(maskedAcct));
+
+        Transaction blankDescTxn = walletService.payBillWithPin(
+                "REQ-MASK-BLANK",
+                testWallet.getWalletId(),
+                "PLDT (Telecom & Internet)",
+                rawAcct,
+                new BigDecimal("100.00"),
+                BigDecimal.ZERO,
+                "   ",
+                "1234"
+        );
+        assertFalse(blankDescTxn.getDescription().contains(rawAcct));
+        assertTrue(blankDescTxn.getDescription().contains(maskedAcct));
+
+        BillPaymentTransaction builtNull = new TransactionBuilder()
+                .referenceNumber("REQ-BLD-NULL")
+                .sourceWalletId(testWallet.getWalletId())
+                .amount(new BigDecimal("100.00"))
+                .billerName("PLDT (Telecom & Internet)")
+                .billerReference(rawAcct)
+                .note(null)
+                .buildBillPayment();
+        assertFalse(builtNull.getDescription().contains(rawAcct));
+        assertTrue(builtNull.getDescription().contains(maskedAcct));
+        assertEquals(rawAcct, builtNull.getBillerReference());
+
+        BillPaymentTransaction builtBlank = new TransactionBuilder()
+                .referenceNumber("REQ-BLD-BLANK")
+                .sourceWalletId(testWallet.getWalletId())
+                .amount(new BigDecimal("100.00"))
+                .billerName("PLDT (Telecom & Internet)")
+                .billerReference(rawAcct)
+                .note("   ")
+                .buildBillPayment();
+        assertFalse(builtBlank.getDescription().contains(rawAcct));
+        assertTrue(builtBlank.getDescription().contains(maskedAcct));
+        assertEquals(rawAcct, builtBlank.getBillerReference());
+    }
+
+    @Test
+    @DisplayName("PIN Handling: Missing PIN wraps SecurityException in WalletException and interactive flow invokes setup prompt")
+    void testPinNotSetWrapsInWalletExceptionAndInteractivePromptsSetup() throws Exception {
+        User noPinUser = authService.registerUser("No Pin User", "09189998888", "nopin@otog.ph", "Secret123");
+        Wallet noPinWallet = walletService.getWalletByUserId(noPinUser.getUserId());
+        walletService.setPaymentProviderFactory(PaymentProviderFactory.successFactory());
+        walletService.cashIn("INIT-NOPIN-01", noPinWallet.getWalletId(), null, new BigDecimal("500.00"), "Seed");
+        noPinWallet = walletService.getWallet(noPinWallet.getWalletId());
+        SessionManager.getInstance().login(noPinUser, noPinWallet);
+
+        PayBillsPanel panel = new PayBillsPanel(walletService, authService);
+        ExecutionException ex = assertThrows(ExecutionException.class, () ->
+                panel.submitPaymentAsync("Meralco (Electricity)", "1234567890", "100.00", "1234")
+                        .get(5, TimeUnit.SECONDS));
+        assertInstanceOf(WalletException.class, ex.getCause(),
+                "PIN-not-set SecurityException must be wrapped in WalletException");
+
+        AtomicBoolean setupPrompted = new AtomicBoolean(false);
+        panel.setPinConfiguredSupplier(() -> false);
+        panel.setOnPinNotSet(() -> setupPrompted.set(true));
+
+        AtomicReference<CompletableFuture<Transaction>> futureRef = new AtomicReference<>();
+        SwingUtilities.invokeAndWait(() -> {
+            panel.getBillReferenceField().setText("1234567890");
+            panel.getBillAmountField().setText("100.00");
+            panel.getBillPinField().setText("1234");
+            futureRef.set(panel.submitPaymentAsync());
+        });
+
+        assertNull(futureRef.get().get(5, TimeUnit.SECONDS));
+        assertTrue(setupPrompted.get(), "Interactive submit with no PIN set must trigger setup prompt");
+        assertEquals("", new String(panel.getBillPinField().getPassword()));
+        assertEquals(new BigDecimal("500.00"), walletService.getBalance(noPinWallet.getWalletId()));
+    }
+
+    @Test
+    @DisplayName("PIN Lockout: 3 wrong PINs from Pay Bills locks out session and notifies Main immediately")
+    void testThreeWrongPinsInPayBillsLocksOutAndNotifiesMainImmediately() throws Exception {
+        activeDashboard = new Main(walletService, authService, null, null);
+        activeDashboard.getInitialLoadFuture().get(5, TimeUnit.SECONDS);
+
+        CountDownLatch logoutLatch = new CountDownLatch(1);
+        activeDashboard.setOnLogoutCallback(logoutLatch::countDown);
+
+        for (int i = 1; i <= 2; i++) {
+            ExecutionException badPin = assertThrows(ExecutionException.class, () ->
+                    activeDashboard.submitBillPaymentAsync("Meralco (Electricity)", "1234567890", "100.00", "0000")
+                            .get(5, TimeUnit.SECONDS));
+            assertInstanceOf(WalletException.class, badPin.getCause());
+            assertTrue(SessionManager.getInstance().isLoggedIn());
+        }
+
+        ExecutionException lockoutEx = assertThrows(ExecutionException.class, () ->
+                activeDashboard.submitBillPaymentAsync("Meralco (Electricity)", "1234567890", "100.00", "0000")
+                        .get(5, TimeUnit.SECONDS));
+        assertInstanceOf(WalletException.class, lockoutEx.getCause());
+        assertTrue(logoutLatch.await(3, TimeUnit.SECONDS),
+                "3 wrong PIN attempts in Pay Bills must immediately trigger dashboard session termination");
+        assertTrue(SessionManager.getInstance().isLockedOutByPin());
+        assertFalse(SessionManager.getInstance().isLoggedIn());
+        assertEquals(new BigDecimal("5000.00"), walletService.getBalance(testWallet.getWalletId()));
+    }
+
+    @Test
+    @DisplayName("Config & Factory: Dynamic OtogConfig bill fee overrides apply after PayBillsPanel construction")
+    void testDynamicOtogConfigFeeOverridesReflectedInPayBillsPanel() throws Exception {
+        PayBillsPanel panel = new PayBillsPanel(walletService, authService);
+        OtogConfig config = OtogConfig.getInstance();
+        try {
+            config.setOverride("bills.default.fee.flat", "15.00");
+            config.setOverride("bills.default.fee.percent", "0.02");
+
+            assertEquals(new BigDecimal("35.00"), panel.calculateFee(new BigDecimal("1000.00")));
+            assertEquals(new BigDecimal("35.00"),
+                    PaymentProviderFactory.successFactory().createBillPaymentFeePolicy().calculate(new BigDecimal("1000.00")));
+
+            SwingUtilities.invokeAndWait(() -> {
+                panel.getBillAmountField().setText("1000.00");
+                panel.updateFeePreview();
+                assertEquals("PHP 35.00", panel.getFeePreviewLabel().getText());
+                assertEquals("PHP 1,035.00", panel.getTotalPreviewLabel().getText());
+            });
+        } finally {
+            config.clearOverrides();
+        }
+    }
+
+    @Test
+    @DisplayName("Notifications: Whitespace-only billerReference does not produce Biller (N/A) placeholder")
+    void testNotificationOmitsPlaceholderForWhitespaceBillerReference() {
+        BillPaymentTransaction txn = new BillPaymentTransaction(
+                "TXN-WS-REF",
+                "REQ-WS-REF",
+                testWallet.getWalletId(),
+                new BigDecimal("250.00"),
+                BigDecimal.ZERO,
+                "Meralco (Electricity)",
+                null,
+                "Power bill"
+        );
+        txn.setStatus(TransactionStatus.COMPLETED);
+        walletService.getTransactionRepository().save(txn);
+
+        walletService.getNotificationService().notifyBillPaymentCommitted(
+                txn, testUser.getUserId(), "Meralco (Electricity)", "   ");
+
+        List<Notification> notifs = walletService.getNotifications(testUser.getUserId(), true);
+        Notification wsNotif = notifs.stream()
+                .filter(n -> "REQ-WS-REF".equals(n.getReferenceNumber()))
+                .findFirst()
+                .orElseThrow();
+        assertTrue(wsNotif.getMessage().contains("Meralco (Electricity)"));
+        assertFalse(wsNotif.getMessage().contains("N/A"),
+                "Whitespace-only billerReference must not emit (N/A) placeholder");
     }
 }
