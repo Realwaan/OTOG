@@ -135,6 +135,7 @@ public class DatabaseManager implements AutoCloseable {
                         "channel TEXT, " +
                         "product TEXT, " +
                         "units TEXT, " +
+                        "biller_reference TEXT, " +
                         "FOREIGN KEY (source_wallet_id) REFERENCES wallets(wallet_id), " +
                         "FOREIGN KEY (target_wallet_id) REFERENCES wallets(wallet_id));",
 
@@ -273,6 +274,7 @@ public class DatabaseManager implements AutoCloseable {
         boolean hasChannel = false;
         boolean hasProduct = false;
         boolean hasUnits = false;
+        boolean hasBillerRef = false;
         try (Statement stmt = conn.createStatement();
              ResultSet rs = stmt.executeQuery("PRAGMA table_info(transactions)")) {
             while (rs.next()) {
@@ -287,6 +289,8 @@ public class DatabaseManager implements AutoCloseable {
                     hasProduct = true;
                 } else if ("units".equalsIgnoreCase(col)) {
                     hasUnits = true;
+                } else if ("biller_reference".equalsIgnoreCase(col)) {
+                    hasBillerRef = true;
                 }
             }
         }
@@ -305,6 +309,9 @@ public class DatabaseManager implements AutoCloseable {
             }
             if (!hasUnits) {
                 stmt.execute("ALTER TABLE transactions ADD COLUMN units TEXT");
+            }
+            if (!hasBillerRef) {
+                stmt.execute("ALTER TABLE transactions ADD COLUMN biller_reference TEXT");
             }
         }
     }

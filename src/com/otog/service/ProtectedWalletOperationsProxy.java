@@ -145,6 +145,23 @@ public class ProtectedWalletOperationsProxy implements WalletOperations, Investm
     }
 
     @Override
+    public Transaction payBill(String referenceNumber, String sourceWalletId, String billerName,
+                               String billerReference, BigDecimal amount, BigDecimal fee, String description) {
+        User caller = requireActiveUser();
+        requireWalletOwnershipOrAdmin(caller, sourceWalletId);
+        return delegate.payBill(referenceNumber, sourceWalletId, billerName, billerReference, amount, fee, description);
+    }
+
+    @Override
+    public Transaction payBillWithPin(String referenceNumber, String sourceWalletId, String billerName,
+                                      String billerReference, BigDecimal amount, BigDecimal fee,
+                                      String description, String rawPin) {
+        User caller = requireActiveUser();
+        requireWalletOwnershipOrAdmin(caller, sourceWalletId);
+        return delegate.payBillWithPin(referenceNumber, sourceWalletId, billerName, billerReference, amount, fee, description, rawPin);
+    }
+
+    @Override
     public List<Transaction> getTransactionsByWalletId(String walletId) {
         User caller = requireActiveUser();
         requireWalletOwnershipOrAdmin(caller, walletId);

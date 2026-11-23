@@ -144,6 +144,17 @@ public interface WalletOperations {
     Transaction cashOutWithPin(String referenceNumber, String sourceWalletId, String paymentMethodId,
                                BigDecimal amount, BigDecimal fee, String description, String rawPin);
 
+    default Transaction payBill(String referenceNumber, String sourceWalletId, String billerName,
+                                String billerReference, BigDecimal amount, BigDecimal fee, String description) {
+        throw new UnsupportedOperationException("Bill payment not supported");
+    }
+
+    default Transaction payBillWithPin(String referenceNumber, String sourceWalletId, String billerName,
+                                       String billerReference, BigDecimal amount, BigDecimal fee,
+                                       String description, String rawPin) {
+        throw new UnsupportedOperationException("Bill payment with PIN not supported");
+    }
+
     default List<PaymentMethod> getPaymentMethodsByUserId(String userId) {
         return Collections.emptyList();
     }

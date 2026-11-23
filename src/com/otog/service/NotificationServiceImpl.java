@@ -2,6 +2,7 @@ package com.otog.service;
 
 import com.otog.database.DatabaseManager;
 import com.otog.exception.EntityNotFoundException;
+import com.otog.model.BillPaymentTransaction;
 import com.otog.model.InvestMoneyTransaction;
 import com.otog.model.Notification;
 import com.otog.model.NotificationType;
@@ -171,6 +172,16 @@ public class NotificationServiceImpl implements NotificationService {
         if (txn == null || ownerUserId == null || ownerUserId.trim().isEmpty()) {
             return;
         }
+        if (txn.getType() == TransactionType.BILL_PAYMENT) {
+            String bName = channel;
+            String bRef = null;
+            if (txn instanceof BillPaymentTransaction bpt) {
+                bName = bpt.getBillerName();
+                bRef = bpt.getBillerReference();
+            }
+            notifyBillPaymentCommitted(txn, ownerUserId, bName, bRef);
+            return;
+        }
         boolean isCashIn = txn.getType() == TransactionType.CASH_IN;
         String opLabel = isCashIn ? "Cash In" : "Cash Out";
         String channelLabel = (channel != null && !channel.trim().isEmpty()) ? channel.trim() : "Bank";
@@ -224,6 +235,55 @@ public class NotificationServiceImpl implements NotificationService {
         String message = isRedeem
                 ? "Redeemed " + unitsText + " units of " + productName + " for " + amountText + ". Ref: " + ref
                 : "Purchased " + unitsText + " units of " + productName + " for " + amountText + ". Ref: " + ref;
+        notifyTransactionEvent(txn, ownerUserId, notifType, title, message);
+    }
+
+    @Override
+    public void notifyBillPaymentCommitted(Transaction txn, String ownerUserId, String billerName, String billerReference) {
+        if (txn == null || ownerUserId == null || ownerUserId.trim().isEmpty()) {
+            return;
+        }
+        String cleanBiller = (billerName != null && !billerName.trim().isEmpty())
+                ? billerName.trim()
+                : (txn instanceof BillPaymentTransaction bpt
+                        && bpt.getBillerName() != null && !bpt.getBillerName().trim().isEmpty()
+                        ? bpt.getBillerName().trim()
+                        : "Biller");
+        String rawRef = (billerReference != null && !billerReference.trim().isEmpty())
+                ? billerReference.trim()
+                : (txn instanceof BillPaymentTransaction bpt && bpt.getBillerReference() != null
+                        ? bpt.getBillerReference().trim()
+                        : null);
+        String maskedRef = (rawRef != null && !rawRef.isEmpty()) ? ReceiptBuilder.maskIdentifier(rawRef) : null;
+        String billerDisplay = cleanBiller + (maskedRef != null ? " (" + maskedRef + ")" : "");
+        String amountText = MoneyUtil.format(txn.getAmount(), txn.getCurrency());
+        String feeText = (txn.getFee() != null && txn.getFee().compareTo(BigDecimal.ZERO) > 0)
+                ? MoneyUtil.format(txn.getFee(), txn.getCurrency())
+                : null;
+        String ref = txn.getReferenceNumber() != null ? txn.getReferenceNumber() : txn.getTransactionId();
+
+        NotificationType notifType;
+        String title;
+        String message;
+        TransactionStatus status = txn.getStatus();
+
+        if (status == TransactionStatus.COMPLETED) {
+            notifType = NotificationType.BILL_PAYMENT_COMPLETED;
+            title = "Bill Payment Completed";
+            message = "Bill payment of " + amountText + (feeText != null ? " (Fee: " + feeText + ")" : "")
+                    + " to " + billerDisplay + " completed successfully. Ref: " + ref;
+        } else if (status == TransactionStatus.FAILED) {
+            notifType = NotificationType.BILL_PAYMENT_FAILED;
+            title = "Bill Payment Failed";
+            message = "Bill payment of " + amountText + " to " + billerDisplay
+                    + " failed. Reserved funds released back to wallet. Ref: " + ref;
+        } else {
+            notifType = NotificationType.BILL_PAYMENT_PENDING;
+            title = "Bill Payment Pending";
+            message = "Bill payment of " + amountText + " to " + billerDisplay
+                    + " is pending provider settlement (funds reserved). Ref: " + ref;
+        }
+
         notifyTransactionEvent(txn, ownerUserId, notifType, title, message);
     }
 

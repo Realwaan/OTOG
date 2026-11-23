@@ -109,6 +109,12 @@ public class ReceiptBuilder {
             }
             return "External Bank / OTC";
         }
+        if (txn instanceof BillPaymentTransaction bpt) {
+            if (bpt.getBillerName() != null && !bpt.getBillerName().trim().isEmpty()) {
+                return bpt.getBillerName().trim();
+            }
+            return "Biller";
+        }
         if (txn instanceof SendMoneyTransaction smt) {
             if (viewingWalletId != null && viewingWalletId.equals(txn.getTargetWalletId())
                     && txn.getSourceWalletId() != null) {

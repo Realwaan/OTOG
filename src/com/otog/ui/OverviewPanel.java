@@ -30,6 +30,7 @@ public class OverviewPanel extends JPanel {
     private JButton btnNavCashIn;
     private JButton btnNavCashOut;
     private JButton btnNavSendMoney;
+    private JButton btnNavPayBills;
     private JButton btnNavInvest;
     private JButton btnNavPinSettings;
     private JButton btnExportStatement;
@@ -86,6 +87,10 @@ public class OverviewPanel extends JPanel {
 
     public JButton getNavSendMoneyButton() {
         return btnNavSendMoney;
+    }
+
+    public JButton getNavPayBillsButton() {
+        return btnNavPayBills;
     }
 
     public JButton getNavInvestButton() {
@@ -185,7 +190,7 @@ public class OverviewPanel extends JPanel {
         pnlRoot.setLayout(new GridLayoutManager(2, 1, new Insets(10, 8, 6, 8), 10, 12));
 
         pnlQuickActions = new JPanel();
-        pnlQuickActions.setLayout(new GridLayoutManager(1, 8, new Insets(6, 8, 6, 8), 8, 4));
+        pnlQuickActions.setLayout(new GridLayoutManager(1, 9, new Insets(6, 8, 6, 8), 8, 4));
         pnlQuickActions.setBorder(UiTheme.titledBorder("Quick Actions & Statement Files"));
         pnlRoot.add(pnlQuickActions, new GridConstraints(0, 0, 1, 1,
                 GridConstraints.ANCHOR_CENTER, GridConstraints.FILL_BOTH,
@@ -214,16 +219,23 @@ public class OverviewPanel extends JPanel {
                 GridConstraints.SIZEPOLICY_FIXED,
                 null, null, null, 0, false));
 
+        btnNavPayBills = new JButton("Pay Bills");
+        pnlQuickActions.add(btnNavPayBills, new GridConstraints(0, 3, 1, 1,
+                GridConstraints.ANCHOR_CENTER, GridConstraints.FILL_HORIZONTAL,
+                GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_CAN_GROW,
+                GridConstraints.SIZEPOLICY_FIXED,
+                null, null, null, 0, false));
+
         btnNavInvest = new JButton("Investments");
         btnNavInvest.setVisible(false);
-        pnlQuickActions.add(btnNavInvest, new GridConstraints(0, 3, 1, 1,
+        pnlQuickActions.add(btnNavInvest, new GridConstraints(0, 4, 1, 1,
                 GridConstraints.ANCHOR_CENTER, GridConstraints.FILL_HORIZONTAL,
                 GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_CAN_GROW,
                 GridConstraints.SIZEPOLICY_FIXED,
                 null, null, null, 0, false));
 
         btnNavPinSettings = new JButton("Set / Change PIN");
-        pnlQuickActions.add(btnNavPinSettings, new GridConstraints(0, 4, 1, 1,
+        pnlQuickActions.add(btnNavPinSettings, new GridConstraints(0, 5, 1, 1,
                 GridConstraints.ANCHOR_CENTER, GridConstraints.FILL_HORIZONTAL,
                 GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_CAN_GROW,
                 GridConstraints.SIZEPOLICY_FIXED,
@@ -231,7 +243,7 @@ public class OverviewPanel extends JPanel {
 
         btnExportStatement = new JButton("Export Statement");
         btnExportStatement.setToolTipText("Export wallet statement and recent activity to a file");
-        pnlQuickActions.add(btnExportStatement, new GridConstraints(0, 5, 1, 1,
+        pnlQuickActions.add(btnExportStatement, new GridConstraints(0, 6, 1, 1,
                 GridConstraints.ANCHOR_CENTER, GridConstraints.FILL_HORIZONTAL,
                 GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_CAN_GROW,
                 GridConstraints.SIZEPOLICY_FIXED,
@@ -239,13 +251,13 @@ public class OverviewPanel extends JPanel {
 
         btnLoadStatement = new JButton("Load Statement");
         btnLoadStatement.setToolTipText("Load and inspect a saved wallet statement file");
-        pnlQuickActions.add(btnLoadStatement, new GridConstraints(0, 6, 1, 1,
+        pnlQuickActions.add(btnLoadStatement, new GridConstraints(0, 7, 1, 1,
                 GridConstraints.ANCHOR_CENTER, GridConstraints.FILL_HORIZONTAL,
                 GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_CAN_GROW,
                 GridConstraints.SIZEPOLICY_FIXED,
                 null, null, null, 0, false));
 
-        pnlQuickActions.add(new Spacer(), new GridConstraints(0, 7, 1, 1,
+        pnlQuickActions.add(new Spacer(), new GridConstraints(0, 8, 1, 1,
                 GridConstraints.ANCHOR_CENTER, GridConstraints.FILL_HORIZONTAL,
                 GridConstraints.SIZEPOLICY_WANT_GROW, 1,
                 null, null, null, 0, false));

@@ -49,6 +49,8 @@ public interface NotificationService {
 
     void notifyInvestmentCommitted(InvestMoneyTransaction txn, String ownerUserId);
 
+    void notifyBillPaymentCommitted(Transaction txn, String ownerUserId, String billerName, String billerReference);
+
     void notifyTransactionEvent(Transaction txn, String ownerUserId, NotificationType type,
                                 String title, String message);
 }
