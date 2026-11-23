@@ -28,6 +28,7 @@ import com.otog.service.SessionManager;
 import com.otog.service.StatementFileService;
 import com.otog.service.WalletOperations;
 import com.otog.service.WalletService;
+import com.otog.service.MerchantQrService;
 import com.otog.util.IdGenerator;
 import com.otog.util.MoneyUtil;
 import com.otog.util.OtogConfig;
@@ -106,6 +107,7 @@ public class Main extends JFrame {
     private OverviewPanel overviewPanel;
     private CashInOutPanel cashInOutPanel;
     private SendMoneyPanel sendMoneyPanel;
+    private MerchantQrPanel merchantQrPanel;
     private AdminControlsPanel adminControlsPanel;
     private final StatementFileService statementFileService = new StatementFileService();
 
@@ -265,6 +267,10 @@ public class Main extends JFrame {
         overviewPanel = new OverviewPanel();
         cashInOutPanel = new CashInOutPanel(walletService.getCurrentProviderMode());
         sendMoneyPanel = new SendMoneyPanel();
+        MerchantQrService merchantQrService = walletService.createMerchantQrService(authService);
+        merchantQrPanel = new MerchantQrPanel(merchantQrService, walletService, authService,
+                () -> navigateToTab("Overview"),
+                () -> refreshDashboardAsync());
 
         wireOverviewPanel();
         wireCashInOutPanel();
@@ -273,6 +279,7 @@ public class Main extends JFrame {
         registerTab("Overview", overviewPanel);
         registerTab("Cash In / Out", cashInOutPanel);
         registerTab("Send Money", sendMoneyPanel);
+        registerTab("Merchant QR", merchantQrPanel);
 
         // Hide unfinished modules unless an implementation is explicitly provided
         if (loanService != null) {
@@ -346,6 +353,11 @@ public class Main extends JFrame {
             navigateToTab("Send Money");
             txtRecipient.requestFocusInWindow();
         });
+
+        JButton btnNavMerchantQr = overviewPanel.getNavMerchantQrButton();
+        if (btnNavMerchantQr != null) {
+            btnNavMerchantQr.addActionListener(e -> navigateToTab("Merchant QR"));
+        }
 
         btnNavPinSettings.setEnabled(authService != null);
         btnNavPinSettings.addActionListener(e -> openPinSettingsDialog());
@@ -2149,6 +2161,10 @@ public class Main extends JFrame {
 
     public AdminControlsPanel getAdminControlsPanel() {
         return adminControlsPanel;
+    }
+
+    public MerchantQrPanel getMerchantQrPanel() {
+        return merchantQrPanel;
     }
 
     public JButton getExportStatementButton() {

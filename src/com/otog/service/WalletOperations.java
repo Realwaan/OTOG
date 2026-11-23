@@ -166,4 +166,8 @@ public interface WalletOperations {
     default SendMoneyService createSendMoneyService(AuthService authService) {
         return null;
     }
+
+    default MerchantQrService createMerchantQrService(AuthService authService) {
+        return null;
+    }
 }

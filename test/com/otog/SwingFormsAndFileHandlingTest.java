@@ -15,6 +15,7 @@ import com.otog.service.WalletService;
 import com.otog.ui.AdminControlsPanel;
 import com.otog.ui.CashInOutPanel;
 import com.otog.ui.Main;
+import com.otog.ui.MerchantQrPanel;
 import com.otog.ui.NotificationInboxDialog;
 import com.otog.ui.OverviewPanel;
 import com.otog.ui.PinSettingsDialog;
@@ -80,7 +81,8 @@ public class SwingFormsAndFileHandlingTest {
                 "com/otog/ui/CashInOutPanel.form", "com.otog.ui.CashInOutPanel",
                 "com/otog/ui/SendMoneyPanel.form", "com.otog.ui.SendMoneyPanel",
                 "com/otog/ui/AdminControlsPanel.form", "com.otog.ui.AdminControlsPanel",
-                "com/otog/ui/NotificationInboxDialog.form", "com.otog.ui.NotificationInboxDialog"
+                "com/otog/ui/NotificationInboxDialog.form", "com.otog.ui.NotificationInboxDialog",
+                "com/otog/ui/MerchantQrPanel.form", "com.otog.ui.MerchantQrPanel"
         );
 
         for (Map.Entry<String, String> entry : expectedForms.entrySet()) {
@@ -145,6 +147,14 @@ public class SwingFormsAndFileHandlingTest {
         AdminControlsPanel adminPanel = new AdminControlsPanel(null, null, null, null);
         assertNotNull(adminPanel.$$$getRootComponent$$$());
         assertInstanceOf(GridLayoutManager.class, adminPanel.getRootPanel().getLayout());
+
+        MerchantQrPanel merchantQrPanel = new MerchantQrPanel();
+        assertNotNull(merchantQrPanel.$$$getRootComponent$$$());
+        assertInstanceOf(GridLayoutManager.class, merchantQrPanel.getRootPanel().getLayout());
+        assertNotNull(merchantQrPanel.getImportQrButton());
+        assertNotNull(merchantQrPanel.getConfirmPayButton());
+        assertNotNull(merchantQrPanel.getGenerateQrButton());
+        assertNotNull(merchantQrPanel.getSaveQrButton());
 
         NotificationInboxDialog notifDialog = new NotificationInboxDialog(null, null, null, null, null);
         try {

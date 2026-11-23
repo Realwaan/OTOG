@@ -33,6 +33,7 @@ public class OverviewPanel extends JPanel {
     private JButton btnNavPinSettings;
     private JButton btnExportStatement;
     private JButton btnLoadStatement;
+    private JButton btnNavMerchantQr;
 
     private JComboBox<String> cmbFilterType;
     private JComboBox<String> cmbFilterStatus;
@@ -97,6 +98,10 @@ public class OverviewPanel extends JPanel {
 
     public JButton getLoadStatementButton() {
         return btnLoadStatement;
+    }
+
+    public JButton getNavMerchantQrButton() {
+        return btnNavMerchantQr;
     }
 
     public JComboBox<String> getFilterTypeComboBox() {
@@ -180,7 +185,7 @@ public class OverviewPanel extends JPanel {
         pnlRoot.setLayout(new GridLayoutManager(2, 1, new Insets(10, 8, 6, 8), 10, 12));
 
         pnlQuickActions = new JPanel();
-        pnlQuickActions.setLayout(new GridLayoutManager(1, 7, new Insets(6, 8, 6, 8), 8, 4));
+        pnlQuickActions.setLayout(new GridLayoutManager(1, 8, new Insets(6, 8, 6, 8), 8, 4));
         pnlQuickActions.setBorder(UiTheme.titledBorder("Quick Actions & Statement Files"));
         pnlRoot.add(pnlQuickActions, new GridConstraints(0, 0, 1, 1,
                 GridConstraints.ANCHOR_CENTER, GridConstraints.FILL_BOTH,
@@ -232,7 +237,15 @@ public class OverviewPanel extends JPanel {
                 GridConstraints.SIZEPOLICY_FIXED,
                 null, null, null, 0, false));
 
-        pnlQuickActions.add(new Spacer(), new GridConstraints(0, 6, 1, 1,
+        btnNavMerchantQr = new JButton("Merchant QR");
+        btnNavMerchantQr.setToolTipText("Pay merchants via QR image or open merchant QR terminal");
+        pnlQuickActions.add(btnNavMerchantQr, new GridConstraints(0, 6, 1, 1,
+                GridConstraints.ANCHOR_CENTER, GridConstraints.FILL_HORIZONTAL,
+                GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_CAN_GROW,
+                GridConstraints.SIZEPOLICY_FIXED,
+                null, null, null, 0, false));
+
+        pnlQuickActions.add(new Spacer(), new GridConstraints(0, 7, 1, 1,
                 GridConstraints.ANCHOR_CENTER, GridConstraints.FILL_HORIZONTAL,
                 GridConstraints.SIZEPOLICY_WANT_GROW, 1,
                 null, null, null, 0, false));

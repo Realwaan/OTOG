@@ -135,6 +135,12 @@ public class WalletService implements WalletOperations {
         return new SendMoneyService(this, this.userRepository, effectiveAuthService);
     }
 
+    @Override
+    public MerchantQrService createMerchantQrService(AuthService effectiveAuthService) {
+        return new MerchantQrService(this, this.userRepository,
+                effectiveAuthService != null ? effectiveAuthService : this.authService);
+    }
+
     public AdminActionRepository getAdminActionRepository() {
         return adminActionRepository;
     }
