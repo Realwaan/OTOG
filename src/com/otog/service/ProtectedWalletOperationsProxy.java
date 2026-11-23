@@ -1,6 +1,7 @@
 package com.otog.service;
 
 import com.otog.exception.WalletException;
+import com.otog.model.InvestMoneyTransaction;
 import com.otog.model.Notification;
 import com.otog.model.PaymentMethod;
 import com.otog.model.Transaction;
@@ -18,7 +19,7 @@ import java.util.Objects;
  * callers by enforcing an active, non-suspended session and wallet ownership verification
  * before delegating to the underlying {@link WalletService} facade.
  */
-public class ProtectedWalletOperationsProxy implements WalletOperations {
+public class ProtectedWalletOperationsProxy implements WalletOperations, InvestmentService {
 
     private final WalletOperations delegate;
 
@@ -245,6 +246,98 @@ public class ProtectedWalletOperationsProxy implements WalletOperations {
             return new SendMoneyService(this, ws.getUserRepository(), authService);
         }
         return delegate.createSendMoneyService(authService);
+    }
+
+    @Override
+    public SimulatedProduct getSeededProduct() {
+        return requireInvestmentDelegate().getSeededProduct();
+    }
+
+    @Override
+    public InvestmentHolding getHolding(String walletId) {
+        User caller = requireActiveUser();
+        requireWalletOwnershipOrAdmin(caller, walletId);
+        return requireInvestmentDelegate().getHolding(walletId);
+    }
+
+    @Override
+    public InvestmentPreview previewBuy(String walletId, BigDecimal units, BigDecimal amount) {
+        User caller = requireActiveUser();
+        requireWalletOwnershipOrAdmin(caller, walletId);
+        return requireInvestmentDelegate().previewBuy(walletId, units, amount);
+    }
+
+    @Override
+    public InvestmentPreview previewRedeem(String walletId, BigDecimal units) {
+        User caller = requireActiveUser();
+        requireWalletOwnershipOrAdmin(caller, walletId);
+        return requireInvestmentDelegate().previewRedeem(walletId, units);
+    }
+
+    @Override
+    public InvestMoneyTransaction invest(String referenceNumber, String walletId, String product,
+                                         BigDecimal amount, BigDecimal units) {
+        User caller = requireActiveUser();
+        requireWalletOwnershipOrAdmin(caller, walletId);
+        return requireInvestmentDelegate().invest(referenceNumber, walletId, product, amount, units);
+    }
+
+    @Override
+    public InvestMoneyTransaction buyInvestment(String referenceNumber, String walletId,
+                                                BigDecimal units, BigDecimal amount) {
+        User caller = requireActiveUser();
+        requireWalletOwnershipOrAdmin(caller, walletId);
+        return requireInvestmentDelegate().buyInvestment(referenceNumber, walletId, units, amount);
+    }
+
+    @Override
+    public InvestMoneyTransaction buyInvestmentWithPin(String referenceNumber, String walletId,
+                                                       BigDecimal units, BigDecimal amount, String rawPin) {
+        User caller = requireActiveUser();
+        requireWalletOwnershipOrAdmin(caller, walletId);
+        return requireInvestmentDelegate().buyInvestmentWithPin(referenceNumber, walletId, units, amount, rawPin);
+    }
+
+    @Override
+    public InvestMoneyTransaction redeemInvestment(String referenceNumber, String walletId, BigDecimal units) {
+        User caller = requireActiveUser();
+        requireWalletOwnershipOrAdmin(caller, walletId);
+        return requireInvestmentDelegate().redeemInvestment(referenceNumber, walletId, units);
+    }
+
+    @Override
+    public InvestMoneyTransaction redeemInvestmentWithPin(String referenceNumber, String walletId,
+                                                          BigDecimal units, String rawPin) {
+        User caller = requireActiveUser();
+        requireWalletOwnershipOrAdmin(caller, walletId);
+        return requireInvestmentDelegate().redeemInvestmentWithPin(referenceNumber, walletId, units, rawPin);
+    }
+
+    @Override
+    public Transaction withdrawInvestment(String referenceNumber, String walletId, String investmentTransactionId) {
+        User caller = requireActiveUser();
+        requireWalletOwnershipOrAdmin(caller, walletId);
+        return requireInvestmentDelegate().withdrawInvestment(referenceNumber, walletId, investmentTransactionId);
+    }
+
+    @Override
+    public BigDecimal calculateReturns(String investmentTransactionId) {
+        requireActiveUser();
+        return requireInvestmentDelegate().calculateReturns(investmentTransactionId);
+    }
+
+    @Override
+    public List<InvestMoneyTransaction> getInvestmentsByWalletId(String walletId) {
+        User caller = requireActiveUser();
+        requireWalletOwnershipOrAdmin(caller, walletId);
+        return requireInvestmentDelegate().getInvestmentsByWalletId(walletId);
+    }
+
+    private InvestmentService requireInvestmentDelegate() {
+        if (delegate instanceof InvestmentService investmentDelegate) {
+            return investmentDelegate;
+        }
+        throw new UnsupportedOperationException("Delegate does not implement InvestmentService");
     }
 
     private static User requireActiveUser() {

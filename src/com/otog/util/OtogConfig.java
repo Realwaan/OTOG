@@ -26,6 +26,10 @@ public final class OtogConfig {
 
     public static final String DEFAULT_CONFIG_PATH = "config/otog.properties";
     public static final String CONFIG_FILE_SYSPROP = "otog.config.file";
+    public static final String DEFAULT_INVESTMENT_PRODUCT_CODE = "OTOG-SIM-FUND";
+    public static final String DEFAULT_INVESTMENT_PRODUCT_NAME = "OTOG Simulated Balanced Fund";
+    public static final BigDecimal DEFAULT_INVESTMENT_SIMULATED_UNIT_PRICE = new BigDecimal("100.00");
+    public static final BigDecimal DEFAULT_INVESTMENT_SIMULATED_ANNUAL_RETURN_RATE = new BigDecimal("0.0450");
     private static final String SYSPROP_PREFIX = "otog.";
 
     private static volatile OtogConfig instance;
@@ -304,6 +308,24 @@ public final class OtogConfig {
 
     public BigDecimal getInvestmentReturnRate() {
         return getBigDecimal("investment.default.return.rate", "0.05");
+    }
+
+    public String getInvestmentProductCode() {
+        String code = getString("investment.product.code", DEFAULT_INVESTMENT_PRODUCT_CODE);
+        return (code == null || code.isBlank()) ? DEFAULT_INVESTMENT_PRODUCT_CODE : code.trim();
+    }
+
+    public String getInvestmentProductName() {
+        String name = getString("investment.product.name", DEFAULT_INVESTMENT_PRODUCT_NAME);
+        return (name == null || name.isBlank()) ? DEFAULT_INVESTMENT_PRODUCT_NAME : name.trim();
+    }
+
+    public BigDecimal getInvestmentSimulatedUnitPrice() {
+        BigDecimal price = getBigDecimal("investment.simulated.unit.price", DEFAULT_INVESTMENT_SIMULATED_UNIT_PRICE.toPlainString());
+        if (price.compareTo(BigDecimal.ZERO) <= 0) {
+            price = DEFAULT_INVESTMENT_SIMULATED_UNIT_PRICE;
+        }
+        return price.setScale(MoneyUtil.DEFAULT_SCALE, MoneyUtil.DEFAULT_ROUNDING);
     }
 
     public int getRecentTransactionLimit() {

@@ -3,6 +3,7 @@ package com.otog.repository;
 import com.otog.database.DatabaseManager;
 import com.otog.exception.OtogException;
 import com.otog.model.CashInOutTransaction;
+import com.otog.model.InvestMoneyTransaction;
 import com.otog.model.SendMoneyTransaction;
 import com.otog.model.Transaction;
 import com.otog.model.TransactionFactory;
@@ -41,10 +42,16 @@ public class TransactionRepository {
         if (txn instanceof CashInOutTransaction cio) {
             channel = cio.getChannel();
         }
+        String product = null;
+        String units = null;
+        if (txn instanceof InvestMoneyTransaction imt) {
+            product = imt.getProduct();
+            units = imt.getUnits() != null ? imt.getUnits().toPlainString() : null;
+        }
         String sql = "INSERT INTO transactions (transaction_id, reference_number, source_wallet_id, " +
                 "target_wallet_id, amount, fee, total_amount, currency, type, status, description, " +
-                "created_at, completed_at, provider_reference, provider_status, channel) " +
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
+                "created_at, completed_at, provider_reference, provider_status, channel, product, units) " +
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
         try (PreparedStatement ps = conn.prepareStatement(sql)) {
             ps.setString(1, txn.getTransactionId());
             ps.setString(2, txn.getReferenceNumber());
@@ -62,6 +69,8 @@ public class TransactionRepository {
             ps.setString(14, txn.getProviderReference());
             ps.setString(15, txn.getProviderStatus());
             ps.setString(16, channel);
+            ps.setString(17, product);
+            ps.setString(18, units);
             ps.executeUpdate();
             return txn;
         }
@@ -97,7 +106,7 @@ public class TransactionRepository {
     public Optional<Transaction> findById(String transactionId, Connection conn) throws SQLException {
         String sql = "SELECT transaction_id, reference_number, source_wallet_id, target_wallet_id, " +
                 "amount, fee, total_amount, currency, type, status, description, created_at, completed_at, " +
-                "provider_reference, provider_status, channel " +
+                "provider_reference, provider_status, channel, product, units " +
                 "FROM transactions WHERE transaction_id = ?";
         try (PreparedStatement ps = conn.prepareStatement(sql)) {
             ps.setString(1, transactionId);
@@ -121,7 +130,7 @@ public class TransactionRepository {
     public Optional<Transaction> findByReferenceNumber(String refNum, Connection conn) throws SQLException {
         String sql = "SELECT transaction_id, reference_number, source_wallet_id, target_wallet_id, " +
                 "amount, fee, total_amount, currency, type, status, description, created_at, completed_at, " +
-                "provider_reference, provider_status, channel " +
+                "provider_reference, provider_status, channel, product, units " +
                 "FROM transactions WHERE reference_number = ?";
         try (PreparedStatement ps = conn.prepareStatement(sql)) {
             ps.setString(1, refNum);
@@ -163,7 +172,7 @@ public class TransactionRepository {
     public List<Transaction> findByWalletId(String walletId, Connection conn) throws SQLException {
         String sql = "SELECT transaction_id, reference_number, source_wallet_id, target_wallet_id, " +
                 "amount, fee, total_amount, currency, type, status, description, created_at, completed_at, " +
-                "provider_reference, provider_status, channel " +
+                "provider_reference, provider_status, channel, product, units " +
                 "FROM transactions WHERE source_wallet_id = ? OR target_wallet_id = ? ORDER BY created_at DESC";
         List<Transaction> list = new ArrayList<>();
         try (PreparedStatement ps = conn.prepareStatement(sql)) {
@@ -193,7 +202,7 @@ public class TransactionRepository {
     public List<Transaction> findRecentByWalletId(String walletId, int limit, Connection conn) throws SQLException {
         String sql = "SELECT transaction_id, reference_number, source_wallet_id, target_wallet_id, " +
                 "amount, fee, total_amount, currency, type, status, description, created_at, completed_at, " +
-                "provider_reference, provider_status, channel " +
+                "provider_reference, provider_status, channel, product, units " +
                 "FROM transactions WHERE source_wallet_id = ? OR target_wallet_id = ? " +
                 "ORDER BY created_at DESC, transaction_id DESC, reference_number ASC LIMIT ?";
         List<Transaction> list = new ArrayList<>();
@@ -228,7 +237,7 @@ public class TransactionRepository {
         StringBuilder sql = new StringBuilder(
                 "SELECT transaction_id, reference_number, source_wallet_id, target_wallet_id, " +
                         "amount, fee, total_amount, currency, type, status, description, created_at, completed_at, " +
-                        "provider_reference, provider_status, channel " +
+                        "provider_reference, provider_status, channel, product, units " +
                         "FROM transactions WHERE (source_wallet_id = ? OR target_wallet_id = ?)"
         );
         List<Object> params = new ArrayList<>();
@@ -296,7 +305,7 @@ public class TransactionRepository {
     public List<Transaction> findAll(Connection conn) throws SQLException {
         String sql = "SELECT transaction_id, reference_number, source_wallet_id, target_wallet_id, " +
                 "amount, fee, total_amount, currency, type, status, description, created_at, completed_at, " +
-                "provider_reference, provider_status, channel " +
+                "provider_reference, provider_status, channel, product, units " +
                 "FROM transactions ORDER BY created_at DESC";
         List<Transaction> list = new ArrayList<>();
         try (Statement st = conn.createStatement();
@@ -317,6 +326,21 @@ public class TransactionRepository {
         } else if (t instanceof SendMoneyTransaction smt) {
             smt.setRecipientNumber(rs.getString("target_wallet_id"));
             smt.setNote(rs.getString("description"));
+        } else if (t instanceof InvestMoneyTransaction imt) {
+            try {
+                String product = rs.getString("product");
+                if (product != null && !product.isBlank()) {
+                    imt.setProduct(product);
+                }
+            } catch (SQLException ignored) {
+            }
+            try {
+                String unitsStr = rs.getString("units");
+                if (unitsStr != null && !unitsStr.isBlank()) {
+                    imt.setUnits(new BigDecimal(unitsStr));
+                }
+            } catch (SQLException ignored) {
+            }
         }
         t.setTransactionId(rs.getString("transaction_id"));
         t.setReferenceNumber(rs.getString("reference_number"));

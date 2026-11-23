@@ -133,6 +133,8 @@ public class DatabaseManager implements AutoCloseable {
                         "provider_reference TEXT, " +
                         "provider_status TEXT, " +
                         "channel TEXT, " +
+                        "product TEXT, " +
+                        "units TEXT, " +
                         "FOREIGN KEY (source_wallet_id) REFERENCES wallets(wallet_id), " +
                         "FOREIGN KEY (target_wallet_id) REFERENCES wallets(wallet_id));",
 
@@ -199,7 +201,23 @@ public class DatabaseManager implements AutoCloseable {
                         "FOREIGN KEY (transaction_id) REFERENCES transactions(transaction_id) ON DELETE SET NULL);",
                 "CREATE INDEX IF NOT EXISTS idx_notif_user ON notifications(user_id);",
                 "CREATE INDEX IF NOT EXISTS idx_notif_user_read ON notifications(user_id, is_read);",
-                "CREATE INDEX IF NOT EXISTS idx_notif_txn ON notifications(transaction_id);"
+                "CREATE INDEX IF NOT EXISTS idx_notif_txn ON notifications(transaction_id);",
+
+                "CREATE TABLE IF NOT EXISTS investment_products (" +
+                        "product_code TEXT PRIMARY KEY, " +
+                        "product_name TEXT NOT NULL, " +
+                        "simulated_unit_price TEXT NOT NULL, " +
+                        "currency TEXT NOT NULL DEFAULT 'PHP', " +
+                        "is_simulated INTEGER NOT NULL DEFAULT 1);",
+
+                "CREATE TABLE IF NOT EXISTS investment_holdings (" +
+                        "wallet_id TEXT NOT NULL, " +
+                        "product TEXT NOT NULL, " +
+                        "units TEXT NOT NULL, " +
+                        "total_invested TEXT NOT NULL DEFAULT '0.00', " +
+                        "updated_at TEXT NOT NULL, " +
+                        "PRIMARY KEY (wallet_id, product), " +
+                        "FOREIGN KEY (wallet_id) REFERENCES wallets(wallet_id) ON DELETE RESTRICT);"
         };
 
         try (Connection conn = getConnection();
@@ -209,6 +227,7 @@ public class DatabaseManager implements AutoCloseable {
             }
             ensureCredentialPinColumns(conn);
             ensureTransactionColumns(conn);
+            seedSimulatedInvestmentProduct(conn);
             seedDefaultAdmin(conn);
             seedDemoPaymentMethods(conn);
         } catch (SQLException e) {
@@ -250,6 +269,8 @@ public class DatabaseManager implements AutoCloseable {
         boolean hasProviderRef = false;
         boolean hasProviderStatus = false;
         boolean hasChannel = false;
+        boolean hasProduct = false;
+        boolean hasUnits = false;
         try (Statement stmt = conn.createStatement();
              ResultSet rs = stmt.executeQuery("PRAGMA table_info(transactions)")) {
             while (rs.next()) {
@@ -260,6 +281,10 @@ public class DatabaseManager implements AutoCloseable {
                     hasProviderStatus = true;
                 } else if ("channel".equalsIgnoreCase(col)) {
                     hasChannel = true;
+                } else if ("product".equalsIgnoreCase(col)) {
+                    hasProduct = true;
+                } else if ("units".equalsIgnoreCase(col)) {
+                    hasUnits = true;
                 }
             }
         }
@@ -273,6 +298,25 @@ public class DatabaseManager implements AutoCloseable {
             if (!hasChannel) {
                 stmt.execute("ALTER TABLE transactions ADD COLUMN channel TEXT");
             }
+            if (!hasProduct) {
+                stmt.execute("ALTER TABLE transactions ADD COLUMN product TEXT");
+            }
+            if (!hasUnits) {
+                stmt.execute("ALTER TABLE transactions ADD COLUMN units TEXT");
+            }
+        }
+    }
+
+    private void seedSimulatedInvestmentProduct(Connection conn) throws SQLException {
+        OtogConfig config = OtogConfig.getInstance();
+        String sql = "INSERT OR IGNORE INTO investment_products " +
+                "(product_code, product_name, simulated_unit_price, currency, is_simulated) VALUES (?, ?, ?, ?, 1)";
+        try (PreparedStatement ps = conn.prepareStatement(sql)) {
+            ps.setString(1, config.getInvestmentProductCode());
+            ps.setString(2, config.getInvestmentProductName());
+            ps.setString(3, config.getInvestmentSimulatedUnitPrice().toPlainString());
+            ps.setString(4, config.getDefaultCurrency());
+            ps.executeUpdate();
         }
     }
 

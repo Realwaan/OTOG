@@ -6,6 +6,7 @@ import com.intellij.uiDesigner.core.Spacer;
 import com.otog.database.DatabaseManager;
 import com.otog.exception.WalletException;
 import com.otog.model.CashInOutTransaction;
+import com.otog.model.InvestMoneyTransaction;
 import com.otog.model.PaymentMethod;
 import com.otog.model.PaymentMethodStatus;
 import com.otog.model.SendMoneyTransaction;
@@ -106,6 +107,7 @@ public class Main extends JFrame {
     private OverviewPanel overviewPanel;
     private CashInOutPanel cashInOutPanel;
     private SendMoneyPanel sendMoneyPanel;
+    private InvestmentPanel investmentPanel;
     private AdminControlsPanel adminControlsPanel;
     private final StatementFileService statementFileService = new StatementFileService();
 
@@ -157,6 +159,16 @@ public class Main extends JFrame {
     private JButton btnSendBackToOverview;
     private JLabel lblSendFeedback;
 
+    private JComboBox<String> cmbInvestOperation;
+    private JTextField txtInvestUnits;
+    private JTextField txtInvestAmount;
+    private JPasswordField txtInvestPin;
+    private JLabel lblInvestPreviewSummary;
+    private JButton btnPreviewInvest;
+    private JButton btnSubmitInvest;
+    private JButton btnInvestBackToOverview;
+    private JLabel lblInvestFeedback;
+
     private Timer sessionMonitorTimer;
     private volatile DashboardState currentState = DashboardState.LOADING;
     private volatile boolean lastLoadExecutedOffEdt;
@@ -187,7 +199,8 @@ public class Main extends JFrame {
                 : new AuthServiceImpl(initializedDatabaseManager);
         WalletOperations guardedWalletOps = ProtectedWalletOperationsProxy.wrap(
                 new WalletService(initializedDatabaseManager, effectiveAuth));
-        return new Main(guardedWalletOps, effectiveAuth, null, null, initializedDatabaseManager);
+        InvestmentService invService = guardedWalletOps instanceof InvestmentService inv ? inv : null;
+        return new Main(guardedWalletOps, effectiveAuth, null, invService, initializedDatabaseManager);
     }
 
     public Main(WalletOperations walletService) {
@@ -279,7 +292,9 @@ public class Main extends JFrame {
             registerTab("Loans", buildServiceReadyNotice("Loans module active"));
         }
         if (investmentService != null) {
-            registerTab("Investments", buildServiceReadyNotice("Investments module active"));
+            investmentPanel = new InvestmentPanel();
+            wireInvestmentPanel();
+            registerTab("Investments", investmentPanel);
         }
 
         // CAP-09: Admin Controls tab — only visible to administrators
@@ -432,6 +447,36 @@ public class Main extends JFrame {
         txtSendPin.addActionListener(e -> handleInteractiveSendMoneySubmit());
     }
 
+    private void wireInvestmentPanel() {
+        cmbInvestOperation = investmentPanel.getOperationComboBox();
+        txtInvestUnits = investmentPanel.getUnitsField();
+        txtInvestAmount = investmentPanel.getAmountField();
+        txtInvestPin = investmentPanel.getPinField();
+        lblInvestPreviewSummary = investmentPanel.getPreviewSummaryLabel();
+        btnPreviewInvest = investmentPanel.getPreviewButton();
+        btnSubmitInvest = investmentPanel.getSubmitButton();
+        btnInvestBackToOverview = investmentPanel.getBackToOverviewButton();
+        lblInvestFeedback = investmentPanel.getFeedbackLabel();
+
+        cmbInvestOperation.addActionListener(e -> {
+            boolean isBuy = "BUY".equals(cmbInvestOperation.getSelectedItem());
+            txtInvestAmount.setEnabled(isBuy);
+            if (!isBuy) {
+                txtInvestAmount.setText("");
+            }
+            lblInvestPreviewSummary.setForeground(UiTheme.color(UiTheme.ColorRole.INFO));
+            lblInvestPreviewSummary.setText(isBuy
+                    ? "Enter units or PHP amount, then click Preview Units & Cost."
+                    : "Enter units to redeem, then click Preview Units & Cost.");
+        });
+
+        btnInvestBackToOverview.addActionListener(e -> navigateToTab("Overview"));
+        btnPreviewInvest.addActionListener(e -> handleInteractiveInvestPreview());
+        btnSubmitInvest.addActionListener(e -> handleInteractiveInvestSubmit());
+        txtInvestUnits.addActionListener(e -> handleInteractiveInvestPreview());
+        txtInvestAmount.addActionListener(e -> handleInteractiveInvestPreview());
+    }
+
     private void onTabSelectionChanged() {
         SessionManager.getInstance().touchActivity();
         int selected = tabs.getSelectedIndex();
@@ -554,7 +599,16 @@ public class Main extends JFrame {
                 int unreadNotifications = user != null
                         ? walletService.getUnreadNotificationCount(user.getUserId())
                         : 0;
-                return new DashboardSnapshot(user, wallet, transactions, paymentMethods, hasPin, unreadNotifications);
+                InvestmentService.SimulatedProduct investProduct = null;
+                InvestmentService.InvestmentHolding investHolding = null;
+                List<InvestMoneyTransaction> investActivities = Collections.emptyList();
+                if (investmentService != null && wallet != null) {
+                    investProduct = investmentService.getSeededProduct();
+                    investHolding = investmentService.getHolding(wallet.getWalletId());
+                    investActivities = investmentService.getInvestmentsByWalletId(wallet.getWalletId());
+                }
+                return new DashboardSnapshot(user, wallet, transactions, paymentMethods, hasPin,
+                        unreadNotifications, investProduct, investHolding, investActivities);
             }
 
             @Override
@@ -570,6 +624,10 @@ public class Main extends JFrame {
                     updateNotificationsBadge(snapshot.unreadNotifications);
                     populatePaymentMethodsCombo(snapshot.paymentMethods);
                     populateTransactionsTable(snapshot.wallet.getWalletId(), snapshot.transactions);
+                    if (investmentPanel != null) {
+                        investmentPanel.updateProductAndHoldings(snapshot.investProduct, snapshot.investHolding);
+                        investmentPanel.updateActivityTable(snapshot.investActivities);
+                    }
                     boolean filtered = activeHistoryFilter != null && !activeHistoryFilter.isEmpty();
                     if (snapshot.transactions.isEmpty()) {
                         currentState = DashboardState.EMPTY;
@@ -1168,6 +1226,271 @@ public class Main extends JFrame {
         };
         worker.execute();
         return future;
+    }
+
+    public CompletableFuture<InvestmentService.InvestmentPreview> previewInvestmentAsync(
+            String operation, String unitsText, String amountText) {
+        CompletableFuture<InvestmentService.InvestmentPreview> future = new CompletableFuture<>();
+        if (investmentService == null) {
+            future.completeExceptionally(new IllegalStateException("InvestmentService is not enabled."));
+            return future;
+        }
+        String op = operation != null ? operation.trim().toUpperCase(Locale.ROOT) : "BUY";
+
+        runOnEdt(() -> {
+            if (btnPreviewInvest != null) {
+                btnPreviewInvest.setEnabled(false);
+            }
+            if (lblInvestPreviewSummary != null) {
+                lblInvestPreviewSummary.setForeground(UiTheme.color(UiTheme.ColorRole.INFO));
+                lblInvestPreviewSummary.setText("Calculating preview...");
+            }
+        });
+
+        new SwingWorker<InvestmentService.InvestmentPreview, Void>() {
+            @Override
+            protected InvestmentService.InvestmentPreview doInBackground() {
+                SessionManager session = SessionManager.getInstance();
+                session.requireAuthentication();
+                Wallet wallet = session.getCurrentWallet();
+                if (wallet == null) {
+                    wallet = session.refreshWallet(walletService);
+                }
+                BigDecimal units = parseOptionalDecimal(unitsText);
+                BigDecimal amount = parseOptionalDecimal(amountText);
+                if ("REDEEM".equals(op)) {
+                    return investmentService.previewRedeem(wallet.getWalletId(), units);
+                }
+                return investmentService.previewBuy(wallet.getWalletId(), units, amount);
+            }
+
+            @Override
+            protected void done() {
+                if (btnPreviewInvest != null) {
+                    btnPreviewInvest.setEnabled(true);
+                }
+                try {
+                    InvestmentService.InvestmentPreview preview = get();
+                    if (txtInvestUnits != null) {
+                        txtInvestUnits.setText(preview.getUnits().toPlainString());
+                    }
+                    if (txtInvestAmount != null && "BUY".equals(op)) {
+                        txtInvestAmount.setText(preview.getTotalAmount().toPlainString());
+                    }
+                    if (lblInvestPreviewSummary != null) {
+                        lblInvestPreviewSummary.setForeground(UiTheme.color(UiTheme.ColorRole.PRIMARY));
+                        lblInvestPreviewSummary.setText(preview.getOperation() + " " + preview.getUnits().toPlainString()
+                                + " units @ " + MoneyUtil.format(preview.getSimulatedUnitPrice(), preview.getCurrency())
+                                + " [SIMULATED] = " + MoneyUtil.format(preview.getTotalAmount(), preview.getCurrency())
+                                + " (Projected holdings: " + preview.getProjectedHoldingUnits().toPlainString() + " units)");
+                    }
+                    if (lblInvestFeedback != null) {
+                        lblInvestFeedback.setForeground(UiTheme.color(UiTheme.ColorRole.INFO));
+                        lblInvestFeedback.setText("Preview ready — review units and cost, then click Confirm Investment.");
+                    }
+                    future.complete(preview);
+                } catch (Exception ex) {
+                    Throwable cause = unwrapCause(ex);
+                    String message = extractErrorMessage(cause);
+                    if (lblInvestPreviewSummary != null) {
+                        lblInvestPreviewSummary.setForeground(UiTheme.color(UiTheme.ColorRole.ERROR));
+                        lblInvestPreviewSummary.setText("Preview failed: " + message);
+                    }
+                    if (lblInvestFeedback != null) {
+                        lblInvestFeedback.setForeground(UiTheme.color(UiTheme.ColorRole.ERROR));
+                        lblInvestFeedback.setText("Preview failed: " + message);
+                    }
+                    future.completeExceptionally(cause);
+                }
+            }
+        }.execute();
+        return future;
+    }
+
+    public CompletableFuture<InvestMoneyTransaction> submitInvestmentAsync(
+            String operation, String unitsText, String amountText, String rawPin) {
+        CompletableFuture<InvestMoneyTransaction> future = new CompletableFuture<>();
+        if (investmentService == null) {
+            future.completeExceptionally(new IllegalStateException("InvestmentService is not enabled."));
+            return future;
+        }
+        String op = operation != null ? operation.trim().toUpperCase(Locale.ROOT) : "BUY";
+        String opLabel = "REDEEM".equals(op) ? "Investment Redemption" : "Investment Purchase";
+
+        runOnEdt(() -> {
+            if (btnSubmitInvest != null) {
+                btnSubmitInvest.setEnabled(false);
+            }
+            if (btnPreviewInvest != null) {
+                btnPreviewInvest.setEnabled(false);
+            }
+            if (lblInvestFeedback != null) {
+                lblInvestFeedback.setForeground(UiTheme.color(UiTheme.ColorRole.INFO));
+                lblInvestFeedback.setText("Processing " + opLabel + "...");
+            }
+            lblStatus.setText("Processing " + opLabel + "...");
+        });
+
+        new SwingWorker<InvestMoneyTransaction, Void>() {
+            @Override
+            protected InvestMoneyTransaction doInBackground() {
+                lastPaymentExecutedOffEdt = !SwingUtilities.isEventDispatchThread();
+                SessionManager session = SessionManager.getInstance();
+                session.requireAuthentication();
+                User user = session.getCurrentUser();
+                Wallet wallet = session.getCurrentWallet();
+                if (wallet == null) {
+                    wallet = session.refreshWallet(walletService);
+                }
+                BigDecimal units = parseOptionalDecimal(unitsText);
+                BigDecimal amount = parseOptionalDecimal(amountText);
+                String ref = IdGenerator.nextReferenceNumber();
+                String cleanPin = rawPin != null ? rawPin.trim() : "";
+
+                if (!cleanPin.isEmpty()) {
+                    if (authService != null && user != null) {
+                        verifyPinOrThrow(user.getUserId(), cleanPin);
+                        return "REDEEM".equals(op)
+                                ? investmentService.redeemInvestment(ref, wallet.getWalletId(), units)
+                                : investmentService.buyInvestment(ref, wallet.getWalletId(), units, amount);
+                    }
+                    return "REDEEM".equals(op)
+                            ? investmentService.redeemInvestmentWithPin(ref, wallet.getWalletId(), units, cleanPin)
+                            : investmentService.buyInvestmentWithPin(ref, wallet.getWalletId(), units, amount, cleanPin);
+                }
+                return "REDEEM".equals(op)
+                        ? investmentService.redeemInvestment(ref, wallet.getWalletId(), units)
+                        : investmentService.buyInvestment(ref, wallet.getWalletId(), units, amount);
+            }
+
+            @Override
+            protected void done() {
+                if (btnSubmitInvest != null) {
+                    btnSubmitInvest.setEnabled(true);
+                }
+                if (btnPreviewInvest != null) {
+                    btnPreviewInvest.setEnabled(true);
+                }
+                try {
+                    InvestMoneyTransaction txn = get();
+                    if (txtInvestUnits != null) {
+                        txtInvestUnits.setText("");
+                    }
+                    if (txtInvestAmount != null) {
+                        txtInvestAmount.setText("");
+                    }
+                    if (lblInvestFeedback != null) {
+                        lblInvestFeedback.setForeground(UiTheme.color(UiTheme.ColorRole.SUCCESS));
+                        lblInvestFeedback.setText(opLabel + " completed: "
+                                + (txn.getUnits() != null ? txn.getUnits().toPlainString() : "-")
+                                + " units (" + MoneyUtil.format(txn.getAmount(), txn.getCurrency())
+                                + ", Ref: " + txn.getReferenceNumber() + ")");
+                    }
+                    lblStatus.setText(opLabel + " completed (Ref: " + txn.getReferenceNumber() + ")");
+                    refreshDashboardAsync().whenComplete((v, err) -> future.complete(txn));
+                } catch (Exception ex) {
+                    Throwable cause = unwrapCause(ex);
+                    String message = extractErrorMessage(cause);
+                    if (lblInvestFeedback != null) {
+                        lblInvestFeedback.setForeground(UiTheme.color(UiTheme.ColorRole.ERROR));
+                        lblInvestFeedback.setText(opLabel + " failed: " + message);
+                    }
+                    lblStatus.setText(opLabel + " failed: " + message);
+                    checkSessionTerminatedOnError(message);
+                    future.completeExceptionally(cause);
+                }
+            }
+        }.execute();
+        return future;
+    }
+
+    private void handleInteractiveInvestPreview() {
+        if (!ensureActiveSessionForInteraction() || investmentService == null) {
+            return;
+        }
+        String op = (String) cmbInvestOperation.getSelectedItem();
+        String unitsText = txtInvestUnits.getText() != null ? txtInvestUnits.getText().trim() : "";
+        String amountText = txtInvestAmount.getText() != null ? txtInvestAmount.getText().trim() : "";
+        previewInvestmentAsync(op, unitsText, amountText);
+    }
+
+    private void handleInteractiveInvestSubmit() {
+        if (!ensureActiveSessionForInteraction() || investmentService == null) {
+            return;
+        }
+        String op = (String) cmbInvestOperation.getSelectedItem();
+        String unitsText = txtInvestUnits.getText() != null ? txtInvestUnits.getText().trim() : "";
+        String amountText = txtInvestAmount.getText() != null ? txtInvestAmount.getText().trim() : "";
+        String pin = new String(txtInvestPin.getPassword()).trim();
+
+        if (authService != null && !cachedHasPin) {
+            txtInvestPin.setText("");
+            promptPinSetupIfMissing("A Transaction PIN is required before buying or redeeming simulated investments.");
+            return;
+        }
+        if (authService != null && pin.isEmpty()) {
+            OtogConfig config = OtogConfig.getInstance();
+            String msg = "Please enter your " + config.getPinMinLength() + "-" + config.getPinMaxLength()
+                    + " digit Transaction PIN to authorize investment order.";
+            lblInvestFeedback.setForeground(UiTheme.color(UiTheme.ColorRole.ERROR));
+            lblInvestFeedback.setText("Investment failed: " + msg);
+            showDialogMessage(this, "PIN Required", msg, JOptionPane.WARNING_MESSAGE);
+            txtInvestPin.requestFocusInWindow();
+            return;
+        }
+        txtInvestPin.setText("");
+
+        previewInvestmentAsync(op, unitsText, amountText).whenComplete((preview, previewErr) -> runOnEdt(() -> {
+            if (previewErr != null) {
+                Throwable cause = unwrapCause(previewErr);
+                showDialogMessage(this, "Investment Preview Failed", extractErrorMessage(cause),
+                        JOptionPane.ERROR_MESSAGE);
+                return;
+            }
+            JTextArea area = new JTextArea(preview.toConfirmationText());
+            area.setEditable(false);
+            area.setFont(UiTheme.font(UiTheme.FontRole.MONO));
+            area.setMargin(new Insets(6, 8, 6, 8));
+            int choice = showConfirmDialog(
+                    this,
+                    "Confirm Investment Order",
+                    new JScrollPane(area),
+                    JOptionPane.OK_CANCEL_OPTION,
+                    JOptionPane.QUESTION_MESSAGE
+            );
+            if (choice != JOptionPane.OK_OPTION) {
+                lblInvestFeedback.setForeground(UiTheme.color(UiTheme.ColorRole.MUTED));
+                lblInvestFeedback.setText("Investment order cancelled.");
+                return;
+            }
+            submitInvestmentAsync(op, preview.getUnits().toPlainString(),
+                    preview.getTotalAmount().toPlainString(), pin).whenComplete((txn, err) -> runOnEdt(() -> {
+                if (err != null && !logoutHandled) {
+                    Throwable cause = unwrapCause(err);
+                    showDialogMessage(this, "Investment Failed", extractErrorMessage(cause),
+                            JOptionPane.ERROR_MESSAGE);
+                } else if (txn != null) {
+                    showDialogMessage(this,
+                            "Investment Complete",
+                            "Order executed!\nProduct: " + txn.getProduct()
+                                    + "\nUnits: " + txn.getUnits().toPlainString()
+                                    + "\nAmount: " + MoneyUtil.format(txn.getAmount(), txn.getCurrency())
+                                    + "\nReference: " + txn.getReferenceNumber(),
+                            JOptionPane.INFORMATION_MESSAGE);
+                }
+            }));
+        }));
+    }
+
+    private static BigDecimal parseOptionalDecimal(String text) {
+        if (text == null || text.trim().isEmpty()) {
+            return null;
+        }
+        try {
+            return new BigDecimal(text.trim().replace(",", ""));
+        } catch (NumberFormatException ex) {
+            throw new IllegalArgumentException("Invalid numeric value: " + text.trim());
+        }
     }
 
     private void verifyPinOrThrow(String userId, String rawPin) {
@@ -2147,6 +2470,42 @@ public class Main extends JFrame {
         return sendMoneyPanel;
     }
 
+    public InvestmentPanel getInvestmentPanel() {
+        return investmentPanel;
+    }
+
+    public JComboBox<String> getInvestOperationComboBox() {
+        return cmbInvestOperation;
+    }
+
+    public JTextField getInvestUnitsField() {
+        return txtInvestUnits;
+    }
+
+    public JTextField getInvestAmountField() {
+        return txtInvestAmount;
+    }
+
+    public JPasswordField getInvestPinField() {
+        return txtInvestPin;
+    }
+
+    public JLabel getInvestPreviewSummaryLabel() {
+        return lblInvestPreviewSummary;
+    }
+
+    public JButton getPreviewInvestButton() {
+        return btnPreviewInvest;
+    }
+
+    public JButton getSubmitInvestButton() {
+        return btnSubmitInvest;
+    }
+
+    public JLabel getInvestFeedbackLabel() {
+        return lblInvestFeedback;
+    }
+
     public AdminControlsPanel getAdminControlsPanel() {
         return adminControlsPanel;
     }
@@ -2320,16 +2679,25 @@ public class Main extends JFrame {
         private final List<PaymentMethod> paymentMethods;
         private final boolean hasPin;
         private final int unreadNotifications;
+        private final InvestmentService.SimulatedProduct investProduct;
+        private final InvestmentService.InvestmentHolding investHolding;
+        private final List<InvestMoneyTransaction> investActivities;
 
         private DashboardSnapshot(User user, Wallet wallet, List<Transaction> transactions,
                                   List<PaymentMethod> paymentMethods, boolean hasPin,
-                                  int unreadNotifications) {
+                                  int unreadNotifications,
+                                  InvestmentService.SimulatedProduct investProduct,
+                                  InvestmentService.InvestmentHolding investHolding,
+                                  List<InvestMoneyTransaction> investActivities) {
             this.user = user;
             this.wallet = wallet;
             this.transactions = transactions;
             this.paymentMethods = paymentMethods;
             this.hasPin = hasPin;
             this.unreadNotifications = unreadNotifications;
+            this.investProduct = investProduct;
+            this.investHolding = investHolding;
+            this.investActivities = investActivities;
         }
     }
 }
