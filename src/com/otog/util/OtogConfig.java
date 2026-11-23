@@ -298,6 +298,15 @@ public final class OtogConfig {
         return getBigDecimal("send.default.fee.percent", "0.00");
     }
 
+    public BigDecimal getBillDefaultFlatFee() {
+        return getBigDecimal("bills.default.fee.flat", "0.00")
+                .setScale(MoneyUtil.DEFAULT_SCALE, MoneyUtil.DEFAULT_ROUNDING);
+    }
+
+    public BigDecimal getBillDefaultPercentFee() {
+        return getBigDecimal("bills.default.fee.percent", "0.00");
+    }
+
     public int getMinRecipientLength() {
         return Math.max(1, getInt("send.min.recipient.length", 10));
     }
@@ -318,6 +327,16 @@ public final class OtogConfig {
 
     public List<String> getCashChannels() {
         return getStringList("cash.channels", Arrays.asList("GCash", "Maya", "BDO", "BPI", "7-Eleven OTC"));
+    }
+
+    public List<String> getSeededBillers() {
+        return getStringList("bills.seeded", Arrays.asList(
+                "Meralco (Electricity)",
+                "Manila Water (Water)",
+                "Maynilad (Water)",
+                "PLDT (Telecom & Internet)",
+                "Globe Telecom (Mobile & Broadband)"
+        ));
     }
 
     public List<DemoBankAccount> getDemoPaymentMethods() {

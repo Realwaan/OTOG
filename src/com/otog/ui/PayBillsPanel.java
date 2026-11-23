@@ -5,14 +5,17 @@ import com.intellij.uiDesigner.core.GridLayoutManager;
 import com.intellij.uiDesigner.core.Spacer;
 import com.otog.exception.DuplicateTransactionException;
 import com.otog.exception.InsufficientFundsException;
-import com.otog.exception.OtogException;
+import com.otog.exception.WalletException;
 import com.otog.model.CompositeFeePolicy;
 import com.otog.model.FeeComponent;
+import com.otog.model.ReceiptBuilder;
 import com.otog.model.Transaction;
+import com.otog.model.TransactionStatus;
 import com.otog.model.Wallet;
 import com.otog.service.AuthService;
 import com.otog.service.SessionManager;
 import com.otog.service.WalletOperations;
+import com.otog.service.WalletService;
 import com.otog.util.IdGenerator;
 import com.otog.util.MoneyUtil;
 import com.otog.util.OtogConfig;
@@ -24,6 +27,8 @@ import javax.swing.event.DocumentListener;
 import java.awt.*;
 import java.math.BigDecimal;
 import java.util.List;
+import java.util.concurrent.CompletableFuture;
+import java.util.function.Consumer;
 
 /**
  * Bound IntelliJ Swing form panel for the Pay Bills flow.
@@ -55,7 +60,9 @@ public class PayBillsPanel extends JPanel {
 
     private WalletOperations walletService;
     private AuthService authService;
-    private FeeComponent feePolicy = CompositeFeePolicy.fromConfig();
+    private FeeComponent feePolicy = CompositeFeePolicy.forBillPayment();
+    private Runnable onBackToOverview;
+    private Consumer<Transaction> onPaymentSuccess;
 
     public PayBillsPanel() {
         this(null, null);
@@ -68,8 +75,21 @@ public class PayBillsPanel extends JPanel {
         if (pnlRoot == null) {
             $$$setupUI$$$();
         }
+        populateBillersIfEmpty();
         add(pnlRoot, BorderLayout.CENTER);
         initInteractions();
+    }
+
+    private void populateBillersIfEmpty() {
+        if (cmbBiller != null && cmbBiller.getItemCount() == 0) {
+            List<String> billers = OtogConfig.getInstance().getSeededBillers();
+            if (billers == null || billers.isEmpty()) {
+                billers = SEEDED_BILLERS;
+            }
+            for (String b : billers) {
+                cmbBiller.addItem(b);
+            }
+        }
     }
 
     public void setWalletService(WalletOperations walletService) {
@@ -81,8 +101,16 @@ public class PayBillsPanel extends JPanel {
     }
 
     public void setFeePolicy(FeeComponent feePolicy) {
-        this.feePolicy = feePolicy != null ? feePolicy : CompositeFeePolicy.fromConfig();
+        this.feePolicy = feePolicy != null ? feePolicy : CompositeFeePolicy.forBillPayment();
         updateFeePreview();
+    }
+
+    public void setOnBackToOverview(Runnable onBackToOverview) {
+        this.onBackToOverview = onBackToOverview;
+    }
+
+    public void setOnPaymentSuccess(Consumer<Transaction> onPaymentSuccess) {
+        this.onPaymentSuccess = onPaymentSuccess;
     }
 
     private void initInteractions() {
@@ -103,10 +131,15 @@ public class PayBillsPanel extends JPanel {
             }
         });
 
-        btnSubmitBillPayment.addActionListener(e -> executePayment());
-        txtBillReference.addActionListener(e -> executePayment());
-        txtBillAmount.addActionListener(e -> executePayment());
-        txtBillPin.addActionListener(e -> executePayment());
+        btnSubmitBillPayment.addActionListener(e -> submitPaymentAsync());
+        txtBillReference.addActionListener(e -> submitPaymentAsync());
+        txtBillAmount.addActionListener(e -> submitPaymentAsync());
+        txtBillPin.addActionListener(e -> submitPaymentAsync());
+        btnBillBackToOverview.addActionListener(e -> {
+            if (onBackToOverview != null) {
+                onBackToOverview.run();
+            }
+        });
     }
 
     public BigDecimal calculateFee(BigDecimal amount) {
@@ -120,8 +153,9 @@ public class PayBillsPanel extends JPanel {
         String text = txtBillAmount.getText() != null ? txtBillAmount.getText().trim() : "";
         OtogConfig config = OtogConfig.getInstance();
         if (text.isEmpty()) {
-            lblFeePreview.setText("PHP 0.00");
-            lblTotalPreview.setText("PHP 0.00");
+            String zeroFormatted = MoneyUtil.format(MoneyUtil.ZERO, config.getDefaultCurrency());
+            lblFeePreview.setText(zeroFormatted);
+            lblTotalPreview.setText(zeroFormatted);
             return;
         }
         try {
@@ -142,13 +176,90 @@ public class PayBillsPanel extends JPanel {
     }
 
     public void validateReference(String ref) {
-        if (ref == null || ref.trim().isEmpty()) {
-            throw new IllegalArgumentException("Account / reference number must not be empty.");
+        WalletService.validateBillerReference(ref);
+    }
+
+    public CompletableFuture<Transaction> submitPaymentAsync() {
+        CompletableFuture<Transaction> future = new CompletableFuture<>();
+        if (!btnSubmitBillPayment.isEnabled()) {
+            future.complete(null);
+            return future;
         }
-        String clean = ref.trim();
-        if (clean.length() < 6) {
-            throw new IllegalArgumentException("Account / reference number must be at least 6 characters.");
+
+        String biller = (String) cmbBiller.getSelectedItem();
+        String ref = txtBillReference.getText() != null ? txtBillReference.getText().trim() : "";
+        String amountText = txtBillAmount.getText() != null ? txtBillAmount.getText().trim() : "";
+        String pin = new String(txtBillPin.getPassword()).trim();
+
+        try {
+            if (biller == null || biller.trim().isEmpty()) {
+                throw new IllegalArgumentException("Please select a biller.");
+            }
+            validateReference(ref);
+            if (amountText.isEmpty()) {
+                throw new IllegalArgumentException("Please enter a bill payment amount.");
+            }
+            BigDecimal parsedAmount = MoneyUtil.validatePositiveAmount(MoneyUtil.parse(amountText));
+            BigDecimal fee = calculateFee(parsedAmount);
+
+            OtogConfig config = OtogConfig.getInstance();
+            if (pin.isEmpty()) {
+                throw new IllegalArgumentException("Please enter your " + config.getPinMinLength() + "-"
+                        + config.getPinMaxLength() + " digit Transaction PIN.");
+            }
+
+            if (!GraphicsEnvironment.isHeadless()) {
+                BigDecimal total = parsedAmount.add(fee).setScale(MoneyUtil.DEFAULT_SCALE, MoneyUtil.DEFAULT_ROUNDING);
+                int choice = JOptionPane.showConfirmDialog(
+                        this,
+                        "Biller: " + biller + "\n"
+                                + "Account / Ref: " + ReceiptBuilder.maskIdentifier(ref) + "\n"
+                                + "Amount: " + MoneyUtil.format(parsedAmount, config.getDefaultCurrency()) + "\n"
+                                + "Fee: " + MoneyUtil.format(fee, config.getDefaultCurrency()) + "\n"
+                                + "Total: " + MoneyUtil.format(total, config.getDefaultCurrency()),
+                        "Confirm Bill Payment",
+                        JOptionPane.OK_CANCEL_OPTION,
+                        JOptionPane.QUESTION_MESSAGE
+                );
+                if (choice != JOptionPane.OK_OPTION) {
+                    lblBillFeedback.setForeground(UiTheme.color(UiTheme.ColorRole.MUTED));
+                    lblBillFeedback.setText("Bill payment cancelled.");
+                    future.complete(null);
+                    return future;
+                }
+            }
+        } catch (RuntimeException ex) {
+            txtBillPin.setText("");
+            lblBillFeedback.setForeground(UiTheme.color(UiTheme.ColorRole.ERROR));
+            lblBillFeedback.setText("Payment validation failed: " + ex.getMessage());
+            future.completeExceptionally(ex);
+            return future;
         }
+
+        btnSubmitBillPayment.setEnabled(false);
+        lblBillFeedback.setForeground(UiTheme.color(UiTheme.ColorRole.INFO));
+        lblBillFeedback.setText("Processing bill payment...");
+
+        SwingWorker<Transaction, Void> worker = new SwingWorker<>() {
+            @Override
+            protected Transaction doInBackground() {
+                return executePayment();
+            }
+
+            @Override
+            protected void done() {
+                btnSubmitBillPayment.setEnabled(true);
+                try {
+                    Transaction txn = get();
+                    future.complete(txn);
+                } catch (Exception ex) {
+                    Throwable cause = ex.getCause() != null ? ex.getCause() : ex;
+                    future.completeExceptionally(cause);
+                }
+            }
+        };
+        worker.execute();
+        return future;
     }
 
     public Transaction executePayment() {
@@ -183,43 +294,79 @@ public class PayBillsPanel extends JPanel {
             SessionManager session = SessionManager.getInstance();
             Wallet wallet = session.getCurrentWallet();
             if (wallet == null) {
+                wallet = session.refreshWallet(walletService);
+            }
+            if (wallet == null) {
                 throw new IllegalStateException("Active wallet session required to pay bills.");
             }
 
             String reqReference = IdGenerator.nextReferenceNumber();
-            Transaction txn = walletService.payBillWithPin(
-                    reqReference,
-                    wallet.getWalletId(),
-                    biller,
-                    ref,
-                    parsedAmount,
-                    fee,
-                    "Bill Payment to " + biller + " [" + ref + "]",
-                    pin
-            );
+            String desc = "Bill Payment to " + biller + " [" + ReceiptBuilder.maskIdentifier(ref) + "]";
+            Transaction txn;
+
+            if (authService != null) {
+                if (!authService.verifyPin(wallet.getUserId(), pin)) {
+                    txtBillPin.setText("");
+                    if (session.isLockedOutByPin()) {
+                        throw new WalletException("Session locked after excessive failed PIN attempts.");
+                    }
+                    throw new WalletException("Invalid transaction PIN. Outgoing payment blocked.");
+                }
+                txn = walletService.payBill(
+                        reqReference,
+                        wallet.getWalletId(),
+                        biller,
+                        ref,
+                        parsedAmount,
+                        fee,
+                        desc
+                );
+            } else {
+                txn = walletService.payBillWithPin(
+                        reqReference,
+                        wallet.getWalletId(),
+                        biller,
+                        ref,
+                        parsedAmount,
+                        fee,
+                        desc,
+                        pin
+                );
+            }
 
             txtBillPin.setText("");
-            if (txn.getStatus() == com.otog.model.TransactionStatus.COMPLETED) {
+            txtBillReference.setText("");
+            txtBillAmount.setText("");
+            session.refreshWallet(walletService);
+
+            if (txn.getStatus() == TransactionStatus.COMPLETED) {
                 lblBillFeedback.setForeground(UiTheme.color(UiTheme.ColorRole.SUCCESS));
                 lblBillFeedback.setText("Bill payment successful! Ref: " + txn.getReferenceNumber()
                         + " Total: " + MoneyUtil.format(txn.getTotalAmount(), txn.getCurrency()));
-            } else if (txn.getStatus() == com.otog.model.TransactionStatus.FAILED) {
+            } else if (txn.getStatus() == TransactionStatus.FAILED) {
                 lblBillFeedback.setForeground(UiTheme.color(UiTheme.ColorRole.ERROR));
                 lblBillFeedback.setText("Bill payment failed. Reserved funds released back to wallet.");
             } else {
                 lblBillFeedback.setForeground(UiTheme.color(UiTheme.ColorRole.WARNING));
                 lblBillFeedback.setText("Bill payment pending provider settlement. Ref: " + txn.getReferenceNumber());
             }
+
+            if (onPaymentSuccess != null) {
+                onPaymentSuccess.accept(txn);
+            }
             return txn;
         } catch (DuplicateTransactionException ex) {
+            txtBillPin.setText("");
             lblBillFeedback.setForeground(UiTheme.color(UiTheme.ColorRole.ERROR));
             lblBillFeedback.setText("Payment failed: Duplicate transaction detected (" + ex.getMessage() + ")");
             throw ex;
         } catch (InsufficientFundsException ex) {
+            txtBillPin.setText("");
             lblBillFeedback.setForeground(UiTheme.color(UiTheme.ColorRole.ERROR));
             lblBillFeedback.setText("Payment failed: Insufficient wallet balance.");
             throw ex;
         } catch (RuntimeException ex) {
+            txtBillPin.setText("");
             lblBillFeedback.setForeground(UiTheme.color(UiTheme.ColorRole.ERROR));
             lblBillFeedback.setText("Payment validation failed: " + ex.getMessage());
             throw ex;
@@ -284,12 +431,17 @@ public class PayBillsPanel extends JPanel {
                 GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_CAN_GROW,
                 null, null, null, 0, false));
 
-        cmbBiller = new JComboBox<>(SEEDED_BILLERS.toArray(String[]::new));
+        List<String> billers = config.getSeededBillers();
+        if (billers == null || billers.isEmpty()) {
+            billers = SEEDED_BILLERS;
+        }
+        cmbBiller = new JComboBox<>(billers.toArray(String[]::new));
         txtBillReference = new JTextField(22);
         txtBillAmount = new JTextField(22);
-        lblFeePreview = new JLabel("PHP 0.00");
+        String zeroFormatted = MoneyUtil.format(MoneyUtil.ZERO, config.getDefaultCurrency());
+        lblFeePreview = new JLabel(zeroFormatted);
         lblFeePreview.setFont(UiTheme.font(UiTheme.FontRole.LABEL));
-        lblTotalPreview = new JLabel("PHP 0.00");
+        lblTotalPreview = new JLabel(zeroFormatted);
         lblTotalPreview.setFont(UiTheme.font(UiTheme.FontRole.LABEL));
         txtBillPin = new JPasswordField(22);
         txtBillPin.setToolTipText("Enter your " + config.getPinMinLength() + "-" + config.getPinMaxLength()

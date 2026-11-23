@@ -18,6 +18,10 @@ public interface PaymentProviderFactory {
         return CompositeFeePolicy.fromConfig();
     }
 
+    default FeeComponent createBillPaymentFeePolicy() {
+        return CompositeFeePolicy.forBillPayment();
+    }
+
     // Default alias methods
     default BankAdapter createAdapter() {
         return createBankAdapter();

@@ -34,8 +34,7 @@ temp/
 receipt-*.txt
 otog-statement*.txt
 
-# Test sources & test execution artifacts
-test/
+# Test execution artifacts
 test-output/
 test-results/
 *.test

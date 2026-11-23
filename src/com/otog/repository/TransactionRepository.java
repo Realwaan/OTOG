@@ -39,15 +39,17 @@ public class TransactionRepository {
 
     public Transaction save(Transaction txn, Connection conn) throws SQLException {
         String channel = null;
+        String billerReference = null;
         if (txn instanceof CashInOutTransaction cio) {
             channel = cio.getChannel();
         } else if (txn instanceof BillPaymentTransaction bpt) {
             channel = bpt.getBillerName();
+            billerReference = bpt.getBillerReference();
         }
         String sql = "INSERT INTO transactions (transaction_id, reference_number, source_wallet_id, " +
                 "target_wallet_id, amount, fee, total_amount, currency, type, status, description, " +
-                "created_at, completed_at, provider_reference, provider_status, channel) " +
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
+                "created_at, completed_at, provider_reference, provider_status, channel, biller_reference) " +
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
         try (PreparedStatement ps = conn.prepareStatement(sql)) {
             ps.setString(1, txn.getTransactionId());
             ps.setString(2, txn.getReferenceNumber());
@@ -65,6 +67,7 @@ public class TransactionRepository {
             ps.setString(14, txn.getProviderReference());
             ps.setString(15, txn.getProviderStatus());
             ps.setString(16, channel);
+            ps.setString(17, billerReference);
             ps.executeUpdate();
             return txn;
         }
@@ -100,7 +103,7 @@ public class TransactionRepository {
     public Optional<Transaction> findById(String transactionId, Connection conn) throws SQLException {
         String sql = "SELECT transaction_id, reference_number, source_wallet_id, target_wallet_id, " +
                 "amount, fee, total_amount, currency, type, status, description, created_at, completed_at, " +
-                "provider_reference, provider_status, channel " +
+                "provider_reference, provider_status, channel, biller_reference " +
                 "FROM transactions WHERE transaction_id = ?";
         try (PreparedStatement ps = conn.prepareStatement(sql)) {
             ps.setString(1, transactionId);
@@ -124,7 +127,7 @@ public class TransactionRepository {
     public Optional<Transaction> findByReferenceNumber(String refNum, Connection conn) throws SQLException {
         String sql = "SELECT transaction_id, reference_number, source_wallet_id, target_wallet_id, " +
                 "amount, fee, total_amount, currency, type, status, description, created_at, completed_at, " +
-                "provider_reference, provider_status, channel " +
+                "provider_reference, provider_status, channel, biller_reference " +
                 "FROM transactions WHERE reference_number = ?";
         try (PreparedStatement ps = conn.prepareStatement(sql)) {
             ps.setString(1, refNum);
@@ -166,7 +169,7 @@ public class TransactionRepository {
     public List<Transaction> findByWalletId(String walletId, Connection conn) throws SQLException {
         String sql = "SELECT transaction_id, reference_number, source_wallet_id, target_wallet_id, " +
                 "amount, fee, total_amount, currency, type, status, description, created_at, completed_at, " +
-                "provider_reference, provider_status, channel " +
+                "provider_reference, provider_status, channel, biller_reference " +
                 "FROM transactions WHERE source_wallet_id = ? OR target_wallet_id = ? ORDER BY created_at DESC";
         List<Transaction> list = new ArrayList<>();
         try (PreparedStatement ps = conn.prepareStatement(sql)) {
@@ -196,7 +199,7 @@ public class TransactionRepository {
     public List<Transaction> findRecentByWalletId(String walletId, int limit, Connection conn) throws SQLException {
         String sql = "SELECT transaction_id, reference_number, source_wallet_id, target_wallet_id, " +
                 "amount, fee, total_amount, currency, type, status, description, created_at, completed_at, " +
-                "provider_reference, provider_status, channel " +
+                "provider_reference, provider_status, channel, biller_reference " +
                 "FROM transactions WHERE source_wallet_id = ? OR target_wallet_id = ? " +
                 "ORDER BY created_at DESC, transaction_id DESC, reference_number ASC LIMIT ?";
         List<Transaction> list = new ArrayList<>();
@@ -231,7 +234,7 @@ public class TransactionRepository {
         StringBuilder sql = new StringBuilder(
                 "SELECT transaction_id, reference_number, source_wallet_id, target_wallet_id, " +
                         "amount, fee, total_amount, currency, type, status, description, created_at, completed_at, " +
-                        "provider_reference, provider_status, channel " +
+                        "provider_reference, provider_status, channel, biller_reference " +
                         "FROM transactions WHERE (source_wallet_id = ? OR target_wallet_id = ?)"
         );
         List<Object> params = new ArrayList<>();
@@ -256,8 +259,11 @@ public class TransactionRepository {
         }
         if (effective.getKeyword() != null) {
             sql.append(" AND (LOWER(reference_number) LIKE ? OR LOWER(COALESCE(provider_reference, '')) LIKE ? " +
-                    "OR LOWER(COALESCE(description, '')) LIKE ?)");
+                    "OR LOWER(COALESCE(description, '')) LIKE ? OR LOWER(COALESCE(biller_reference, '')) LIKE ? " +
+                    "OR LOWER(COALESCE(channel, '')) LIKE ?)");
             String likePattern = "%" + effective.getKeyword().toLowerCase(java.util.Locale.ROOT) + "%";
+            params.add(likePattern);
+            params.add(likePattern);
             params.add(likePattern);
             params.add(likePattern);
             params.add(likePattern);
@@ -299,7 +305,7 @@ public class TransactionRepository {
     public List<Transaction> findAll(Connection conn) throws SQLException {
         String sql = "SELECT transaction_id, reference_number, source_wallet_id, target_wallet_id, " +
                 "amount, fee, total_amount, currency, type, status, description, created_at, completed_at, " +
-                "provider_reference, provider_status, channel " +
+                "provider_reference, provider_status, channel, biller_reference " +
                 "FROM transactions ORDER BY created_at DESC";
         List<Transaction> list = new ArrayList<>();
         try (Statement st = conn.createStatement();
@@ -322,8 +328,15 @@ public class TransactionRepository {
             smt.setNote(rs.getString("description"));
         } else if (t instanceof BillPaymentTransaction bpt) {
             bpt.setBillerName(rs.getString("channel"));
-            String desc = rs.getString("description");
-            bpt.setBillerReference(extractBillerReference(desc));
+            String billerRef = null;
+            try {
+                billerRef = rs.getString("biller_reference");
+            } catch (SQLException ignored) {
+            }
+            if (billerRef == null || billerRef.trim().isEmpty()) {
+                billerRef = extractBillerReference(rs.getString("description"));
+            }
+            bpt.setBillerReference(billerRef != null ? billerRef.trim() : null);
         }
         t.setTransactionId(rs.getString("transaction_id"));
         t.setReferenceNumber(rs.getString("reference_number"));

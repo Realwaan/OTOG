@@ -35,6 +35,20 @@ public non-sealed class CompositeFeePolicy implements FeeComponent {
         return policy;
     }
 
+    public static CompositeFeePolicy forBillPayment() {
+        OtogConfig config = OtogConfig.getInstance();
+        CompositeFeePolicy policy = new CompositeFeePolicy("Configured Bill Payment Fee Policy");
+        BigDecimal flat = config.getBillDefaultFlatFee();
+        BigDecimal percent = config.getBillDefaultPercentFee();
+        if (flat.compareTo(BigDecimal.ZERO) > 0) {
+            policy.add(new FlatFee("Configured Flat Fee", flat));
+        }
+        if (percent.compareTo(BigDecimal.ZERO) > 0) {
+            policy.add(new PercentageFee("Configured Percentage Fee", percent));
+        }
+        return policy;
+    }
+
     public CompositeFeePolicy add(FeeComponent component) {
         if (component != null) {
             components.add(component);

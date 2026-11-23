@@ -46,6 +46,8 @@ public interface NotificationService {
 
     void notifyCashOperationCommitted(Transaction txn, String ownerUserId, String channel);
 
+    void notifyBillPaymentCommitted(Transaction txn, String ownerUserId, String billerName, String billerReference);
+
     void notifyTransactionEvent(Transaction txn, String ownerUserId, NotificationType type,
                                 String title, String message);
 }

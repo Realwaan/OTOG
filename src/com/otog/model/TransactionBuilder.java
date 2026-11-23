@@ -330,10 +330,11 @@ public class TransactionBuilder {
         }
 
         String effectiveBiller = (billerName != null && !billerName.trim().isEmpty()) ? billerName.trim() : "Biller";
+        String effectiveBillerRef = (billerReference != null && !billerReference.trim().isEmpty()) ? billerReference.trim() : null;
         BigDecimal effectiveFee = (fee != null) ? fee : MoneyUtil.ZERO;
         String effectiveDesc = (note != null && !note.trim().isEmpty())
                 ? note.trim()
-                : "Bill Payment to " + effectiveBiller + (billerReference != null ? " [" + billerReference + "]" : "");
+                : "Bill Payment to " + effectiveBiller + (effectiveBillerRef != null ? " [" + effectiveBillerRef + "]" : "");
 
         BillPaymentTransaction txn = new BillPaymentTransaction(
                 resolveTransactionId(),
@@ -342,7 +343,7 @@ public class TransactionBuilder {
                 amount,
                 effectiveFee,
                 effectiveBiller,
-                billerReference,
+                effectiveBillerRef,
                 effectiveDesc
         );
         applyCommonOptionalFields(txn, TransactionType.BILL_PAYMENT);

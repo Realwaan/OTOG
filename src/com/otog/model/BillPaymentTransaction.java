@@ -44,7 +44,7 @@ public class BillPaymentTransaction extends Transaction {
     @Override
     protected void appendSubtypeReceiptLines(ReceiptBuilder builder) {
         builder.optionalLine("Biller", billerName)
-                .optionalLine("Account / Ref", billerReference);
+                .maskedLine("Account / Ref", billerReference);
     }
 
     @Override

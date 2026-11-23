@@ -5,6 +5,7 @@ import com.intellij.uiDesigner.core.GridLayoutManager;
 import com.intellij.uiDesigner.core.Spacer;
 import com.otog.database.DatabaseManager;
 import com.otog.exception.WalletException;
+import com.otog.model.BillPaymentTransaction;
 import com.otog.model.CashInOutTransaction;
 import com.otog.model.PaymentMethod;
 import com.otog.model.PaymentMethodStatus;
@@ -112,6 +113,7 @@ public class Main extends JFrame {
     private JButton btnNavCashIn;
     private JButton btnNavCashOut;
     private JButton btnNavSendMoney;
+    private JButton btnNavPayBills;
     private JButton btnNavPinSettings;
     private JButton btnExportStatement;
     private JButton btnLoadStatement;
@@ -136,6 +138,8 @@ public class Main extends JFrame {
     private JButton btnCheckStatus;
     private JButton btnRepeatDraft;
     private JLabel lblActivityFeedback;
+
+    private PayBillsPanel payBillsPanel;
 
     private JComboBox<String> cmbCashOperation;
     private JComboBox<String> cmbPaymentMethod;
@@ -265,14 +269,17 @@ public class Main extends JFrame {
         overviewPanel = new OverviewPanel();
         cashInOutPanel = new CashInOutPanel(walletService.getCurrentProviderMode());
         sendMoneyPanel = new SendMoneyPanel();
+        payBillsPanel = new PayBillsPanel(walletService, authService);
 
         wireOverviewPanel();
         wireCashInOutPanel();
         wireSendMoneyPanel();
+        wirePayBillsPanel();
 
         registerTab("Overview", overviewPanel);
         registerTab("Cash In / Out", cashInOutPanel);
         registerTab("Send Money", sendMoneyPanel);
+        registerTab("Pay Bills", payBillsPanel);
 
         // Hide unfinished modules unless an implementation is explicitly provided
         if (loanService != null) {
@@ -305,6 +312,7 @@ public class Main extends JFrame {
         btnNavCashIn = overviewPanel.getNavCashInButton();
         btnNavCashOut = overviewPanel.getNavCashOutButton();
         btnNavSendMoney = overviewPanel.getNavSendMoneyButton();
+        btnNavPayBills = overviewPanel.getNavPayBillsButton();
         btnNavPinSettings = overviewPanel.getNavPinSettingsButton();
         btnExportStatement = overviewPanel.getExportStatementButton();
         btnLoadStatement = overviewPanel.getLoadStatementButton();
@@ -346,6 +354,15 @@ public class Main extends JFrame {
             navigateToTab("Send Money");
             txtRecipient.requestFocusInWindow();
         });
+
+        if (btnNavPayBills != null) {
+            btnNavPayBills.addActionListener(e -> {
+                navigateToTab("Pay Bills");
+                if (payBillsPanel != null) {
+                    payBillsPanel.getBillReferenceField().requestFocusInWindow();
+                }
+            });
+        }
 
         btnNavPinSettings.setEnabled(authService != null);
         btnNavPinSettings.addActionListener(e -> openPinSettingsDialog());
@@ -430,6 +447,22 @@ public class Main extends JFrame {
         txtSendAmount.addActionListener(e -> handleInteractiveSendMoneySubmit());
         txtSendNote.addActionListener(e -> handleInteractiveSendMoneySubmit());
         txtSendPin.addActionListener(e -> handleInteractiveSendMoneySubmit());
+    }
+
+    private void wirePayBillsPanel() {
+        if (payBillsPanel == null) {
+            return;
+        }
+        payBillsPanel.setOnBackToOverview(() -> navigateToTab("Overview"));
+        payBillsPanel.setOnPaymentSuccess(txn -> {
+            lastPaymentExecutedOffEdt = !SwingUtilities.isEventDispatchThread();
+            lblStatus.setText("Bill payment completed: " + txn.getReferenceNumber());
+            refreshDashboardAsync();
+        });
+    }
+
+    public PayBillsPanel getPayBillsPanel() {
+        return payBillsPanel;
     }
 
     private void onTabSelectionChanged() {
@@ -1501,14 +1534,17 @@ public class Main extends JFrame {
         Transaction selected = getSelectedTransactionForReceipt();
         if (btnCheckStatus != null) {
             boolean isCashTxn = selected != null
-                    && (selected.getType() == TransactionType.CASH_IN || selected.getType() == TransactionType.CASH_OUT);
+                    && (selected.getType() == TransactionType.CASH_IN
+                    || selected.getType() == TransactionType.CASH_OUT
+                    || selected.getType() == TransactionType.BILL_PAYMENT);
             btnCheckStatus.setEnabled(isCashTxn);
         }
         if (btnRepeatDraft != null) {
             boolean canRepeat = selected != null
                     && (selected.getType() == TransactionType.SEND_MONEY
                     || selected.getType() == TransactionType.CASH_IN
-                    || selected.getType() == TransactionType.CASH_OUT);
+                    || selected.getType() == TransactionType.CASH_OUT
+                    || selected.getType() == TransactionType.BILL_PAYMENT);
             btnRepeatDraft.setEnabled(canRepeat);
         }
     }
@@ -1564,8 +1600,10 @@ public class Main extends JFrame {
                     JOptionPane.INFORMATION_MESSAGE);
             return;
         }
-        if (txn.getType() != TransactionType.CASH_IN && txn.getType() != TransactionType.CASH_OUT) {
-            String msg = "Status lookup is only available for Cash In / Cash Out transactions.";
+        if (txn.getType() != TransactionType.CASH_IN
+                && txn.getType() != TransactionType.CASH_OUT
+                && txn.getType() != TransactionType.BILL_PAYMENT) {
+            String msg = "Status lookup is only available for Cash In / Cash Out and Bill Payment transactions.";
             if (lblActivityFeedback != null) {
                 lblActivityFeedback.setForeground(UiTheme.color(UiTheme.ColorRole.WARNING));
                 lblActivityFeedback.setText(msg);
@@ -1768,6 +1806,24 @@ public class Main extends JFrame {
                     + "). Review details and submit when ready.");
             lblStatus.setText("Repeat " + op + " draft prepared: " + draft.getReferenceNumber());
             navigateToTab("Cash In / Out");
+        } else if (draft instanceof BillPaymentTransaction || draft.getType() == TransactionType.BILL_PAYMENT) {
+            BillPaymentTransaction bpt = (draft instanceof BillPaymentTransaction b) ? b : null;
+            if (payBillsPanel != null) {
+                if (bpt != null && bpt.getBillerName() != null) {
+                    payBillsPanel.getBillerComboBox().setSelectedItem(bpt.getBillerName());
+                }
+                String refVal = bpt != null ? bpt.getBillerReference() : null;
+                if (refVal != null) {
+                    payBillsPanel.getBillReferenceField().setText(refVal);
+                }
+                payBillsPanel.getBillAmountField().setText(amountStr);
+                payBillsPanel.getBillPinField().setText("");
+                payBillsPanel.getBillFeedbackLabel().setForeground(UiTheme.color(UiTheme.ColorRole.INFO));
+                payBillsPanel.getBillFeedbackLabel().setText("Loaded repeat draft (New Ref: " + draft.getReferenceNumber()
+                        + "). Review details and enter PIN to pay.");
+            }
+            lblStatus.setText("Repeat Bill Payment draft prepared: " + draft.getReferenceNumber());
+            navigateToTab("Pay Bills");
         }
     }
 
