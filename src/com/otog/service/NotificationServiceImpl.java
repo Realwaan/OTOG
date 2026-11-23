@@ -2,6 +2,7 @@ package com.otog.service;
 
 import com.otog.database.DatabaseManager;
 import com.otog.exception.EntityNotFoundException;
+import com.otog.model.InvestMoneyTransaction;
 import com.otog.model.Notification;
 import com.otog.model.NotificationType;
 import com.otog.model.ReceiptBuilder;
@@ -201,6 +202,28 @@ public class NotificationServiceImpl implements NotificationService {
                     : "Cash Out of " + amountText + " to " + channelLabel + " is pending settlement (funds reserved). Ref: " + ref;
         }
 
+        notifyTransactionEvent(txn, ownerUserId, notifType, title, message);
+    }
+
+    @Override
+    public void notifyInvestmentCommitted(InvestMoneyTransaction txn, String ownerUserId) {
+        if (txn == null || ownerUserId == null || ownerUserId.trim().isEmpty()) {
+            return;
+        }
+        boolean isRedeem = txn.getType() == TransactionType.INVESTMENT_REDEEM;
+        NotificationType notifType = isRedeem
+                ? NotificationType.INVESTMENT_REDEEMED
+                : NotificationType.INVESTMENT_PURCHASED;
+        String title = isRedeem ? "Investment Redeemed" : "Investment Purchased";
+        String amountText = MoneyUtil.format(txn.getAmount(), txn.getCurrency());
+        String unitsText = txn.getUnits() != null ? txn.getUnits().toPlainString() : "0";
+        String productName = (txn.getProduct() != null && !txn.getProduct().trim().isEmpty())
+                ? txn.getProduct().trim()
+                : "Simulated Fund";
+        String ref = txn.getReferenceNumber() != null ? txn.getReferenceNumber() : txn.getTransactionId();
+        String message = isRedeem
+                ? "Redeemed " + unitsText + " units of " + productName + " for " + amountText + ". Ref: " + ref
+                : "Purchased " + unitsText + " units of " + productName + " for " + amountText + ". Ref: " + ref;
         notifyTransactionEvent(txn, ownerUserId, notifType, title, message);
     }
 

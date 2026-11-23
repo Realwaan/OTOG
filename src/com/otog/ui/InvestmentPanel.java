@@ -54,7 +54,44 @@ public class InvestmentPanel extends JPanel {
         if (pnlRoot == null) {
             $$$setupUI$$$();
         }
+        ensureInteractiveComponentsInitialized();
         add(pnlRoot, BorderLayout.CENTER);
+    }
+
+    private void ensureInteractiveComponentsInitialized() {
+        OtogConfig config = OtogConfig.getInstance();
+        String defaultCurrency = config.getDefaultCurrency();
+        if (cmbInvestOperation != null && cmbInvestOperation.getItemCount() == 0) {
+            cmbInvestOperation.addItem("BUY");
+            cmbInvestOperation.addItem("REDEEM");
+        }
+        if (activityTableModel == null) {
+            activityTableModel = new DefaultTableModel(
+                    new Object[]{"Date", "Reference", "Type", "Product", "Units", "Amount", "Status", "Description"}, 0) {
+                @Override
+                public boolean isCellEditable(int row, int column) {
+                    return false;
+                }
+            };
+        }
+        if (tblInvestmentActivity != null) {
+            if (tblInvestmentActivity.getModel() != activityTableModel) {
+                tblInvestmentActivity.setModel(activityTableModel);
+            }
+            tblInvestmentActivity.setRowHeight(config.getTableRowHeight());
+            tblInvestmentActivity.setSelectionMode(ListSelectionModel.SINGLE_SELECTION);
+            tblInvestmentActivity.getTableHeader().setReorderingAllowed(false);
+        }
+        if (lblSimulatedPrice != null) {
+            lblSimulatedPrice.setText(MoneyUtil.format(
+                    config.getInvestmentSimulatedUnitPrice(), defaultCurrency) + " / unit [SIMULATED FIXED PRICE]");
+        }
+        if (lblHoldingsValue != null) {
+            lblHoldingsValue.setText(MoneyUtil.format(BigDecimal.ZERO, defaultCurrency));
+        }
+        if (lblPreviewSummary != null) {
+            lblPreviewSummary.setText("Enter units or " + defaultCurrency + " amount, then click Preview Units & Cost.");
+        }
     }
 
     public JPanel getRootPanel() {
@@ -207,7 +244,7 @@ public class InvestmentPanel extends JPanel {
         txtInvestPin = new JPasswordField(18);
         txtInvestPin.setToolTipText("Enter your Transaction PIN when PIN authorization is enabled");
 
-        lblPreviewSummary = new JLabel("Enter units or PHP amount, then click Preview Units & Cost.");
+        lblPreviewSummary = new JLabel("Enter units or " + config.getDefaultCurrency() + " amount, then click Preview Units & Cost.");
         lblPreviewSummary.setFont(UiTheme.font(UiTheme.FontRole.LABEL));
         lblPreviewSummary.setForeground(UiTheme.color(UiTheme.ColorRole.INFO));
 

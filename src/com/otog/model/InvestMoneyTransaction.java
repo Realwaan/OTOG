@@ -81,8 +81,10 @@ public class InvestMoneyTransaction extends Transaction {
     @Override
     protected void appendSubtypeReceiptLines(ReceiptBuilder builder) {
         builder.optionalLine("Product", product)
-                .optionalLine("Units", units != null ? units.toPlainString() : null)
-                .optionalLine("Est. Returns", MoneyUtil.format(getReturns(), getCurrency()));
+                .optionalLine("Units", units != null ? units.toPlainString() : null);
+        if (getType() != TransactionType.INVESTMENT_REDEEM) {
+            builder.optionalLine("Est. Returns", MoneyUtil.format(getReturns(), getCurrency()));
+        }
     }
 
     @Override

@@ -173,7 +173,8 @@ public class TransactionRepository {
         String sql = "SELECT transaction_id, reference_number, source_wallet_id, target_wallet_id, " +
                 "amount, fee, total_amount, currency, type, status, description, created_at, completed_at, " +
                 "provider_reference, provider_status, channel, product, units " +
-                "FROM transactions WHERE source_wallet_id = ? OR target_wallet_id = ? ORDER BY created_at DESC";
+                "FROM transactions WHERE source_wallet_id = ? OR target_wallet_id = ? " +
+                "ORDER BY created_at DESC, transaction_id DESC, reference_number ASC";
         List<Transaction> list = new ArrayList<>();
         try (PreparedStatement ps = conn.prepareStatement(sql)) {
             ps.setString(1, walletId);
@@ -327,19 +328,13 @@ public class TransactionRepository {
             smt.setRecipientNumber(rs.getString("target_wallet_id"));
             smt.setNote(rs.getString("description"));
         } else if (t instanceof InvestMoneyTransaction imt) {
-            try {
-                String product = rs.getString("product");
-                if (product != null && !product.isBlank()) {
-                    imt.setProduct(product);
-                }
-            } catch (SQLException ignored) {
+            String product = rs.getString("product");
+            if (product != null && !product.isBlank()) {
+                imt.setProduct(product);
             }
-            try {
-                String unitsStr = rs.getString("units");
-                if (unitsStr != null && !unitsStr.isBlank()) {
-                    imt.setUnits(new BigDecimal(unitsStr));
-                }
-            } catch (SQLException ignored) {
+            String unitsStr = rs.getString("units");
+            if (unitsStr != null && !unitsStr.isBlank()) {
+                imt.setUnits(new BigDecimal(unitsStr));
             }
         }
         t.setTransactionId(rs.getString("transaction_id"));

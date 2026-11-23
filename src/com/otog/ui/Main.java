@@ -35,6 +35,8 @@ import com.otog.util.OtogConfig;
 import com.otog.util.UiTheme;
 
 import javax.swing.*;
+import javax.swing.event.DocumentEvent;
+import javax.swing.event.DocumentListener;
 import javax.swing.filechooser.FileNameExtensionFilter;
 import javax.swing.table.DefaultTableModel;
 import java.awt.*;
@@ -114,6 +116,7 @@ public class Main extends JFrame {
     private JButton btnNavCashIn;
     private JButton btnNavCashOut;
     private JButton btnNavSendMoney;
+    private JButton btnNavInvest;
     private JButton btnNavPinSettings;
     private JButton btnExportStatement;
     private JButton btnLoadStatement;
@@ -168,6 +171,7 @@ public class Main extends JFrame {
     private JButton btnSubmitInvest;
     private JButton btnInvestBackToOverview;
     private JLabel lblInvestFeedback;
+    private boolean updatingInvestmentInputs;
 
     private Timer sessionMonitorTimer;
     private volatile DashboardState currentState = DashboardState.LOADING;
@@ -199,7 +203,7 @@ public class Main extends JFrame {
                 : new AuthServiceImpl(initializedDatabaseManager);
         WalletOperations guardedWalletOps = ProtectedWalletOperationsProxy.wrap(
                 new WalletService(initializedDatabaseManager, effectiveAuth));
-        InvestmentService invService = guardedWalletOps instanceof InvestmentService inv ? inv : null;
+        InvestmentService invService = ProtectedWalletOperationsProxy.asInvestmentServiceOrNull(guardedWalletOps);
         return new Main(guardedWalletOps, effectiveAuth, null, invService, initializedDatabaseManager);
     }
 
@@ -320,6 +324,7 @@ public class Main extends JFrame {
         btnNavCashIn = overviewPanel.getNavCashInButton();
         btnNavCashOut = overviewPanel.getNavCashOutButton();
         btnNavSendMoney = overviewPanel.getNavSendMoneyButton();
+        btnNavInvest = overviewPanel.getNavInvestButton();
         btnNavPinSettings = overviewPanel.getNavPinSettingsButton();
         btnExportStatement = overviewPanel.getExportStatementButton();
         btnLoadStatement = overviewPanel.getLoadStatementButton();
@@ -361,6 +366,15 @@ public class Main extends JFrame {
             navigateToTab("Send Money");
             txtRecipient.requestFocusInWindow();
         });
+
+        if (btnNavInvest != null) {
+            btnNavInvest.setVisible(investmentService != null);
+            btnNavInvest.addActionListener(e -> {
+                if (navigateToTab("Investments") && txtInvestUnits != null) {
+                    txtInvestUnits.requestFocusInWindow();
+                }
+            });
+        }
 
         btnNavPinSettings.setEnabled(authService != null);
         btnNavPinSettings.addActionListener(e -> openPinSettingsDialog());
@@ -462,12 +476,73 @@ public class Main extends JFrame {
             boolean isBuy = "BUY".equals(cmbInvestOperation.getSelectedItem());
             txtInvestAmount.setEnabled(isBuy);
             if (!isBuy) {
-                txtInvestAmount.setText("");
+                setInvestmentInputTexts(txtInvestUnits.getText(), "");
             }
-            lblInvestPreviewSummary.setForeground(UiTheme.color(UiTheme.ColorRole.INFO));
-            lblInvestPreviewSummary.setText(isBuy
-                    ? "Enter units or PHP amount, then click Preview Units & Cost."
-                    : "Enter units to redeem, then click Preview Units & Cost.");
+            resetInvestPreviewSummary(isBuy);
+        });
+
+        txtInvestUnits.getDocument().addDocumentListener(new DocumentListener() {
+            private void onUnitsEdited() {
+                if (updatingInvestmentInputs) {
+                    return;
+                }
+                if (txtInvestUnits.getText() != null && !txtInvestUnits.getText().isEmpty()
+                        && txtInvestAmount.getText() != null && !txtInvestAmount.getText().isEmpty()) {
+                    updatingInvestmentInputs = true;
+                    try {
+                        txtInvestAmount.setText("");
+                    } finally {
+                        updatingInvestmentInputs = false;
+                    }
+                }
+            }
+
+            @Override
+            public void insertUpdate(DocumentEvent e) {
+                onUnitsEdited();
+            }
+
+            @Override
+            public void removeUpdate(DocumentEvent e) {
+                onUnitsEdited();
+            }
+
+            @Override
+            public void changedUpdate(DocumentEvent e) {
+                onUnitsEdited();
+            }
+        });
+
+        txtInvestAmount.getDocument().addDocumentListener(new DocumentListener() {
+            private void onAmountEdited() {
+                if (updatingInvestmentInputs) {
+                    return;
+                }
+                if (txtInvestAmount.getText() != null && !txtInvestAmount.getText().isEmpty()
+                        && txtInvestUnits.getText() != null && !txtInvestUnits.getText().isEmpty()) {
+                    updatingInvestmentInputs = true;
+                    try {
+                        txtInvestUnits.setText("");
+                    } finally {
+                        updatingInvestmentInputs = false;
+                    }
+                }
+            }
+
+            @Override
+            public void insertUpdate(DocumentEvent e) {
+                onAmountEdited();
+            }
+
+            @Override
+            public void removeUpdate(DocumentEvent e) {
+                onAmountEdited();
+            }
+
+            @Override
+            public void changedUpdate(DocumentEvent e) {
+                onAmountEdited();
+            }
         });
 
         btnInvestBackToOverview.addActionListener(e -> navigateToTab("Overview"));
@@ -475,6 +550,32 @@ public class Main extends JFrame {
         btnSubmitInvest.addActionListener(e -> handleInteractiveInvestSubmit());
         txtInvestUnits.addActionListener(e -> handleInteractiveInvestPreview());
         txtInvestAmount.addActionListener(e -> handleInteractiveInvestPreview());
+        txtInvestPin.addActionListener(e -> handleInteractiveInvestSubmit());
+    }
+
+    private void setInvestmentInputTexts(String units, String amount) {
+        updatingInvestmentInputs = true;
+        try {
+            if (txtInvestUnits != null && units != null) {
+                txtInvestUnits.setText(units);
+            }
+            if (txtInvestAmount != null && amount != null) {
+                txtInvestAmount.setText(amount);
+            }
+        } finally {
+            updatingInvestmentInputs = false;
+        }
+    }
+
+    private void resetInvestPreviewSummary(boolean isBuy) {
+        if (lblInvestPreviewSummary == null) {
+            return;
+        }
+        String defaultCurrency = OtogConfig.getInstance().getDefaultCurrency();
+        lblInvestPreviewSummary.setForeground(UiTheme.color(UiTheme.ColorRole.INFO));
+        lblInvestPreviewSummary.setText(isBuy
+                ? "Enter units or " + defaultCurrency + " amount, then click Preview Units & Cost."
+                : "Enter units to redeem, then click Preview Units & Cost.");
     }
 
     private void onTabSelectionChanged() {
@@ -545,7 +646,7 @@ public class Main extends JFrame {
         }
         boolean pinVerified = SessionManager.getInstance().isPinVerified();
         if (!hasPin) {
-            lblPinStatus.setText("Transaction PIN: Not Set (required for Cash Out & Send Money)");
+            lblPinStatus.setText("Transaction PIN: Not Set (required for Cash Out, Send Money & Investments)");
             lblPinStatus.setForeground(UiTheme.color(UiTheme.ColorRole.WARNING));
             if (btnPinSettings != null) {
                 btnPinSettings.setText("Set PIN");
@@ -1235,7 +1336,7 @@ public class Main extends JFrame {
             future.completeExceptionally(new IllegalStateException("InvestmentService is not enabled."));
             return future;
         }
-        String op = operation != null ? operation.trim().toUpperCase(Locale.ROOT) : "BUY";
+        String rawOp = operation != null ? operation.trim().toUpperCase(Locale.ROOT) : "";
 
         runOnEdt(() -> {
             if (btnPreviewInvest != null) {
@@ -1250,6 +1351,7 @@ public class Main extends JFrame {
         new SwingWorker<InvestmentService.InvestmentPreview, Void>() {
             @Override
             protected InvestmentService.InvestmentPreview doInBackground() {
+                String op = requireValidInvestmentOperation(rawOp);
                 SessionManager session = SessionManager.getInstance();
                 session.requireAuthentication();
                 Wallet wallet = session.getCurrentWallet();
@@ -1271,12 +1373,10 @@ public class Main extends JFrame {
                 }
                 try {
                     InvestmentService.InvestmentPreview preview = get();
-                    if (txtInvestUnits != null) {
-                        txtInvestUnits.setText(preview.getUnits().toPlainString());
-                    }
-                    if (txtInvestAmount != null && "BUY".equals(op)) {
-                        txtInvestAmount.setText(preview.getTotalAmount().toPlainString());
-                    }
+                    setInvestmentInputTexts(
+                            preview.getUnits().toPlainString(),
+                            "BUY".equals(preview.getOperation()) ? preview.getTotalAmount().toPlainString() : null
+                    );
                     if (lblInvestPreviewSummary != null) {
                         lblInvestPreviewSummary.setForeground(UiTheme.color(UiTheme.ColorRole.PRIMARY));
                         lblInvestPreviewSummary.setText(preview.getOperation() + " " + preview.getUnits().toPlainString()
@@ -1300,6 +1400,7 @@ public class Main extends JFrame {
                         lblInvestFeedback.setForeground(UiTheme.color(UiTheme.ColorRole.ERROR));
                         lblInvestFeedback.setText("Preview failed: " + message);
                     }
+                    checkSessionTerminatedOnError(message);
                     future.completeExceptionally(cause);
                 }
             }
@@ -1309,13 +1410,18 @@ public class Main extends JFrame {
 
     public CompletableFuture<InvestMoneyTransaction> submitInvestmentAsync(
             String operation, String unitsText, String amountText, String rawPin) {
+        return executeInvestmentAsync(null, operation, unitsText, amountText, rawPin);
+    }
+
+    private CompletableFuture<InvestMoneyTransaction> executeInvestmentAsync(
+            String explicitReference, String operation, String unitsText, String amountText, String rawPin) {
         CompletableFuture<InvestMoneyTransaction> future = new CompletableFuture<>();
         if (investmentService == null) {
             future.completeExceptionally(new IllegalStateException("InvestmentService is not enabled."));
             return future;
         }
-        String op = operation != null ? operation.trim().toUpperCase(Locale.ROOT) : "BUY";
-        String opLabel = "REDEEM".equals(op) ? "Investment Redemption" : "Investment Purchase";
+        String rawOp = operation != null ? operation.trim().toUpperCase(Locale.ROOT) : "";
+        String opLabel = "REDEEM".equals(rawOp) ? "Investment Redemption" : "Investment Purchase";
 
         runOnEdt(() -> {
             if (btnSubmitInvest != null) {
@@ -1335,6 +1441,7 @@ public class Main extends JFrame {
             @Override
             protected InvestMoneyTransaction doInBackground() {
                 lastPaymentExecutedOffEdt = !SwingUtilities.isEventDispatchThread();
+                String op = requireValidInvestmentOperation(rawOp);
                 SessionManager session = SessionManager.getInstance();
                 session.requireAuthentication();
                 User user = session.getCurrentUser();
@@ -1344,7 +1451,9 @@ public class Main extends JFrame {
                 }
                 BigDecimal units = parseOptionalDecimal(unitsText);
                 BigDecimal amount = parseOptionalDecimal(amountText);
-                String ref = IdGenerator.nextReferenceNumber();
+                String ref = (explicitReference != null && !explicitReference.trim().isEmpty())
+                        ? explicitReference.trim()
+                        : IdGenerator.nextReferenceNumber();
                 String cleanPin = rawPin != null ? rawPin.trim() : "";
 
                 if (!cleanPin.isEmpty()) {
@@ -1373,12 +1482,9 @@ public class Main extends JFrame {
                 }
                 try {
                     InvestMoneyTransaction txn = get();
-                    if (txtInvestUnits != null) {
-                        txtInvestUnits.setText("");
-                    }
-                    if (txtInvestAmount != null) {
-                        txtInvestAmount.setText("");
-                    }
+                    setInvestmentInputTexts("", "");
+                    boolean isBuySelected = cmbInvestOperation == null || "BUY".equals(cmbInvestOperation.getSelectedItem());
+                    resetInvestPreviewSummary(isBuySelected);
                     if (lblInvestFeedback != null) {
                         lblInvestFeedback.setForeground(UiTheme.color(UiTheme.ColorRole.SUCCESS));
                         lblInvestFeedback.setText(opLabel + " completed: "
@@ -1404,6 +1510,13 @@ public class Main extends JFrame {
         return future;
     }
 
+    private static String requireValidInvestmentOperation(String rawOp) {
+        if ("BUY".equals(rawOp) || "REDEEM".equals(rawOp)) {
+            return rawOp;
+        }
+        throw new IllegalArgumentException("Unsupported investment operation: " + rawOp);
+    }
+
     private void handleInteractiveInvestPreview() {
         if (!ensureActiveSessionForInteraction() || investmentService == null) {
             return;
@@ -1423,6 +1536,32 @@ public class Main extends JFrame {
         String amountText = txtInvestAmount.getText() != null ? txtInvestAmount.getText().trim() : "";
         String pin = new String(txtInvestPin.getPassword()).trim();
 
+        // Validate operation and order inputs before prompting for PIN
+        try {
+            String validOp = requireValidInvestmentOperation(op != null ? op.trim().toUpperCase(Locale.ROOT) : "");
+            BigDecimal parsedUnits = parseOptionalDecimal(unitsText);
+            BigDecimal parsedAmount = parseOptionalDecimal(amountText);
+            if ("REDEEM".equals(validOp)) {
+                if (parsedUnits == null || parsedUnits.compareTo(BigDecimal.ZERO) <= 0) {
+                    throw new IllegalArgumentException("Please enter a positive number of units to redeem.");
+                }
+            } else {
+                if ((parsedUnits == null || parsedUnits.compareTo(BigDecimal.ZERO) <= 0)
+                        && (parsedAmount == null || parsedAmount.compareTo(BigDecimal.ZERO) <= 0)) {
+                    throw new IllegalArgumentException("Please enter positive units or a positive "
+                            + OtogConfig.getInstance().getDefaultCurrency() + " amount to invest.");
+                }
+            }
+        } catch (RuntimeException ex) {
+            String msg = extractErrorMessage(ex);
+            lblInvestFeedback.setForeground(UiTheme.color(UiTheme.ColorRole.ERROR));
+            lblInvestFeedback.setText("Investment failed: " + msg);
+            lblStatus.setText("Investment validation failed: " + msg);
+            showDialogMessage(this, "Invalid Investment Input", msg, JOptionPane.ERROR_MESSAGE);
+            txtInvestUnits.requestFocusInWindow();
+            return;
+        }
+
         if (authService != null && !cachedHasPin) {
             txtInvestPin.setText("");
             promptPinSetupIfMissing("A Transaction PIN is required before buying or redeeming simulated investments.");
@@ -1440,8 +1579,21 @@ public class Main extends JFrame {
         }
         txtInvestPin.setText("");
 
+        if (btnSubmitInvest != null) {
+            btnSubmitInvest.setEnabled(false);
+        }
+        if (btnPreviewInvest != null) {
+            btnPreviewInvest.setEnabled(false);
+        }
+
         previewInvestmentAsync(op, unitsText, amountText).whenComplete((preview, previewErr) -> runOnEdt(() -> {
             if (previewErr != null) {
+                if (btnSubmitInvest != null) {
+                    btnSubmitInvest.setEnabled(true);
+                }
+                if (btnPreviewInvest != null) {
+                    btnPreviewInvest.setEnabled(true);
+                }
                 Throwable cause = unwrapCause(previewErr);
                 showDialogMessage(this, "Investment Preview Failed", extractErrorMessage(cause),
                         JOptionPane.ERROR_MESSAGE);
@@ -1459,12 +1611,23 @@ public class Main extends JFrame {
                     JOptionPane.QUESTION_MESSAGE
             );
             if (choice != JOptionPane.OK_OPTION) {
+                if (btnSubmitInvest != null) {
+                    btnSubmitInvest.setEnabled(true);
+                }
+                if (btnPreviewInvest != null) {
+                    btnPreviewInvest.setEnabled(true);
+                }
                 lblInvestFeedback.setForeground(UiTheme.color(UiTheme.ColorRole.MUTED));
                 lblInvestFeedback.setText("Investment order cancelled.");
                 return;
             }
-            submitInvestmentAsync(op, preview.getUnits().toPlainString(),
-                    preview.getTotalAmount().toPlainString(), pin).whenComplete((txn, err) -> runOnEdt(() -> {
+            executeInvestmentAsync(
+                    preview.getReferenceNumber(),
+                    op,
+                    preview.getUnits().toPlainString(),
+                    "BUY".equals(preview.getOperation()) ? preview.getTotalAmount().toPlainString() : null,
+                    pin
+            ).whenComplete((txn, err) -> runOnEdt(() -> {
                 if (err != null && !logoutHandled) {
                     Throwable cause = unwrapCause(err);
                     showDialogMessage(this, "Investment Failed", extractErrorMessage(cause),
@@ -1828,10 +1991,15 @@ public class Main extends JFrame {
             btnCheckStatus.setEnabled(isCashTxn);
         }
         if (btnRepeatDraft != null) {
+            boolean isInvestRepeat = investmentService != null
+                    && selected != null
+                    && (selected.getType() == TransactionType.INVESTMENT_BUY
+                    || selected.getType() == TransactionType.INVESTMENT_REDEEM);
             boolean canRepeat = selected != null
                     && (selected.getType() == TransactionType.SEND_MONEY
                     || selected.getType() == TransactionType.CASH_IN
-                    || selected.getType() == TransactionType.CASH_OUT);
+                    || selected.getType() == TransactionType.CASH_OUT
+                    || isInvestRepeat);
             btnRepeatDraft.setEnabled(canRepeat);
         }
     }
@@ -2091,6 +2259,22 @@ public class Main extends JFrame {
                     + "). Review details and submit when ready.");
             lblStatus.setText("Repeat " + op + " draft prepared: " + draft.getReferenceNumber());
             navigateToTab("Cash In / Out");
+        } else if ((draft instanceof InvestMoneyTransaction
+                || draft.getType() == TransactionType.INVESTMENT_BUY
+                || draft.getType() == TransactionType.INVESTMENT_REDEEM)
+                && investmentPanel != null) {
+            String op = draft.getType() == TransactionType.INVESTMENT_REDEEM ? "REDEEM" : "BUY";
+            cmbInvestOperation.setSelectedItem(op);
+            String unitsStr = (draft instanceof InvestMoneyTransaction imt && imt.getUnits() != null)
+                    ? imt.getUnits().toPlainString()
+                    : "";
+            setInvestmentInputTexts(unitsStr, "");
+            txtInvestPin.setText("");
+            lblInvestFeedback.setForeground(UiTheme.color(UiTheme.ColorRole.INFO));
+            lblInvestFeedback.setText("Loaded repeat draft (New Ref: " + draft.getReferenceNumber()
+                    + "). Review units and click Preview or Confirm.");
+            lblStatus.setText("Repeat investment " + op + " draft prepared: " + draft.getReferenceNumber());
+            navigateToTab("Investments");
         }
     }
 
@@ -2344,6 +2528,10 @@ public class Main extends JFrame {
 
     public JButton getSendMoneyQuickNavButton() {
         return btnNavSendMoney;
+    }
+
+    public JButton getInvestQuickNavButton() {
+        return btnNavInvest;
     }
 
     public JButton getPinSettingsButton() {

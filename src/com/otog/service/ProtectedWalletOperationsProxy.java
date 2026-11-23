@@ -1,5 +1,6 @@
 package com.otog.service;
 
+import com.otog.exception.EntityNotFoundException;
 import com.otog.exception.WalletException;
 import com.otog.model.InvestMoneyTransaction;
 import com.otog.model.Notification;
@@ -36,6 +37,24 @@ public class ProtectedWalletOperationsProxy implements WalletOperations, Investm
 
     public WalletOperations getDelegate() {
         return delegate;
+    }
+
+    public boolean supportsInvestments() {
+        WalletOperations current = delegate;
+        while (current instanceof ProtectedWalletOperationsProxy nested) {
+            current = nested.getDelegate();
+        }
+        return current instanceof InvestmentService;
+    }
+
+    public static InvestmentService asInvestmentServiceOrNull(WalletOperations ops) {
+        if (ops == null) {
+            return null;
+        }
+        if (ops instanceof ProtectedWalletOperationsProxy proxy) {
+            return proxy.supportsInvestments() ? proxy : null;
+        }
+        return ops instanceof InvestmentService inv ? inv : null;
     }
 
     @Override
@@ -322,7 +341,42 @@ public class ProtectedWalletOperationsProxy implements WalletOperations, Investm
 
     @Override
     public BigDecimal calculateReturns(String investmentTransactionId) {
-        requireActiveUser();
+        User caller = requireActiveUser();
+        if (investmentTransactionId == null || investmentTransactionId.trim().isEmpty()) {
+            throw new IllegalArgumentException("Investment transaction ID must not be null or empty");
+        }
+        if (!caller.isAdmin()) {
+            String key = investmentTransactionId.trim();
+            WalletOperations root = delegate;
+            while (root instanceof ProtectedWalletOperationsProxy nested) {
+                root = nested.getDelegate();
+            }
+            if (root instanceof WalletService ws) {
+                Transaction txn = ws.getTransactionRepository().findById(key)
+                        .or(() -> ws.getTransactionRepository().findByReferenceNumber(key))
+                        .orElseThrow(() -> new EntityNotFoundException("Investment transaction", key));
+                String ownerWalletId = txn.getSourceWalletId() != null
+                        ? txn.getSourceWalletId()
+                        : txn.getTargetWalletId();
+                if (ownerWalletId == null) {
+                    throw new SecurityException("Access denied: Unable to verify ownership for transaction " + key);
+                }
+                requireWalletOwnershipOrAdmin(caller, ownerWalletId);
+            } else {
+                Wallet callerWallet = delegate.getWalletByUserId(caller.getUserId());
+                boolean owned = false;
+                for (InvestMoneyTransaction imt : requireInvestmentDelegate().getInvestmentsByWalletId(callerWallet.getWalletId())) {
+                    if (key.equals(imt.getTransactionId()) || key.equals(imt.getReferenceNumber())) {
+                        owned = true;
+                        break;
+                    }
+                }
+                if (!owned) {
+                    throw new SecurityException("Access denied: Investment transaction " + key
+                            + " does not belong to active user.");
+                }
+            }
+        }
         return requireInvestmentDelegate().calculateReturns(investmentTransactionId);
     }
 

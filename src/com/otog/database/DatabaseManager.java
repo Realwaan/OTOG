@@ -212,12 +212,13 @@ public class DatabaseManager implements AutoCloseable {
 
                 "CREATE TABLE IF NOT EXISTS investment_holdings (" +
                         "wallet_id TEXT NOT NULL, " +
-                        "product TEXT NOT NULL, " +
+                        "product_code TEXT NOT NULL, " +
                         "units TEXT NOT NULL, " +
                         "total_invested TEXT NOT NULL DEFAULT '0.00', " +
                         "updated_at TEXT NOT NULL, " +
-                        "PRIMARY KEY (wallet_id, product), " +
-                        "FOREIGN KEY (wallet_id) REFERENCES wallets(wallet_id) ON DELETE RESTRICT);"
+                        "PRIMARY KEY (wallet_id, product_code), " +
+                        "FOREIGN KEY (wallet_id) REFERENCES wallets(wallet_id) ON DELETE RESTRICT, " +
+                        "FOREIGN KEY (product_code) REFERENCES investment_products(product_code) ON DELETE RESTRICT);"
         };
 
         try (Connection conn = getConnection();
@@ -228,6 +229,7 @@ public class DatabaseManager implements AutoCloseable {
             ensureCredentialPinColumns(conn);
             ensureTransactionColumns(conn);
             seedSimulatedInvestmentProduct(conn);
+            ensureInvestmentHoldingsSchema(conn);
             seedDefaultAdmin(conn);
             seedDemoPaymentMethods(conn);
         } catch (SQLException e) {
@@ -317,6 +319,52 @@ public class DatabaseManager implements AutoCloseable {
             ps.setString(3, config.getInvestmentSimulatedUnitPrice().toPlainString());
             ps.setString(4, config.getDefaultCurrency());
             ps.executeUpdate();
+        }
+    }
+
+    private void ensureInvestmentHoldingsSchema(Connection conn) throws SQLException {
+        boolean hasProductCode = false;
+        boolean hasLegacyProduct = false;
+        try (Statement stmt = conn.createStatement();
+             ResultSet rs = stmt.executeQuery("PRAGMA table_info(investment_holdings)")) {
+            while (rs.next()) {
+                String col = rs.getString("name");
+                if ("product_code".equalsIgnoreCase(col)) {
+                    hasProductCode = true;
+                } else if ("product".equalsIgnoreCase(col)) {
+                    hasLegacyProduct = true;
+                }
+            }
+        }
+        if (hasProductCode || !hasLegacyProduct) {
+            return;
+        }
+
+        String defaultProductCode = OtogConfig.getInstance().getInvestmentProductCode();
+        try (Statement stmt = conn.createStatement()) {
+            stmt.execute("ALTER TABLE investment_holdings RENAME TO investment_holdings_legacy");
+            stmt.execute("CREATE TABLE investment_holdings (" +
+                    "wallet_id TEXT NOT NULL, " +
+                    "product_code TEXT NOT NULL, " +
+                    "units TEXT NOT NULL, " +
+                    "total_invested TEXT NOT NULL DEFAULT '0.00', " +
+                    "updated_at TEXT NOT NULL, " +
+                    "PRIMARY KEY (wallet_id, product_code), " +
+                    "FOREIGN KEY (wallet_id) REFERENCES wallets(wallet_id) ON DELETE RESTRICT, " +
+                    "FOREIGN KEY (product_code) REFERENCES investment_products(product_code) ON DELETE RESTRICT)");
+        }
+        String migrateSql = "INSERT OR REPLACE INTO investment_holdings " +
+                "(wallet_id, product_code, units, total_invested, updated_at) " +
+                "SELECT l.wallet_id, COALESCE((" +
+                "SELECT p.product_code FROM investment_products p " +
+                "WHERE LOWER(p.product_code) = LOWER(l.product) OR LOWER(p.product_name) = LOWER(l.product) LIMIT 1" +
+                "), ?), l.units, l.total_invested, l.updated_at FROM investment_holdings_legacy l";
+        try (PreparedStatement ps = conn.prepareStatement(migrateSql)) {
+            ps.setString(1, defaultProductCode);
+            ps.executeUpdate();
+        }
+        try (Statement stmt = conn.createStatement()) {
+            stmt.execute("DROP TABLE investment_holdings_legacy");
         }
     }
 

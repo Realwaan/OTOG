@@ -29,7 +29,6 @@ public final class OtogConfig {
     public static final String DEFAULT_INVESTMENT_PRODUCT_CODE = "OTOG-SIM-FUND";
     public static final String DEFAULT_INVESTMENT_PRODUCT_NAME = "OTOG Simulated Balanced Fund";
     public static final BigDecimal DEFAULT_INVESTMENT_SIMULATED_UNIT_PRICE = new BigDecimal("100.00");
-    public static final BigDecimal DEFAULT_INVESTMENT_SIMULATED_ANNUAL_RETURN_RATE = new BigDecimal("0.0450");
     private static final String SYSPROP_PREFIX = "otog.";
 
     private static volatile OtogConfig instance;
@@ -126,6 +125,14 @@ public final class OtogConfig {
 
     public void clearOverrides() {
         overrides.clear();
+    }
+
+    public boolean hasOverrideOrSysProp(String key) {
+        if (key == null || key.trim().isEmpty()) {
+            return false;
+        }
+        String trimmedKey = key.trim();
+        return overrides.containsKey(trimmedKey) || System.getProperty(SYSPROP_PREFIX + trimmedKey) != null;
     }
 
     public String getString(String key, String defaultValue) {
