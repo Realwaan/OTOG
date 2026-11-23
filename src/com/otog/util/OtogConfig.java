@@ -57,6 +57,20 @@ public final class OtogConfig {
                                   BigDecimal initialBalance) {
     }
 
+    /**
+     * Immutable record describing the default merchant account seed configuration.
+     */
+    public record MerchantSeedConfig(boolean enabled,
+                                     String userId,
+                                     String walletId,
+                                     String username,
+                                     String mobile,
+                                     String email,
+                                     String password,
+                                     String pin,
+                                     BigDecimal initialBalance) {
+    }
+
     private OtogConfig() {
         reload();
     }
@@ -380,6 +394,21 @@ public final class OtogConfig {
                 getString("admin.password", "password"),
                 getString("admin.pin", "123456"),
                 getBigDecimal("admin.initial.balance", "1000.00")
+                        .setScale(MoneyUtil.DEFAULT_SCALE, MoneyUtil.DEFAULT_ROUNDING)
+        );
+    }
+
+    public MerchantSeedConfig getMerchantSeedConfig() {
+        return new MerchantSeedConfig(
+                getBoolean("merchant.seed.enabled", true),
+                getString("merchant.user.id", "USR-MERCHANT-01"),
+                getString("merchant.wallet.id", "WLT-MERCHANT-01"),
+                getString("merchant.username", "OTOG Merchant Store"),
+                getString("merchant.mobile", "09178888888"),
+                getString("merchant.email", "merchant@otog.ph"),
+                getString("merchant.password", "Merchant123!"),
+                getString("merchant.pin", "8888"),
+                getBigDecimal("merchant.initial.balance", "0.00")
                         .setScale(MoneyUtil.DEFAULT_SCALE, MoneyUtil.DEFAULT_ROUNDING)
         );
     }

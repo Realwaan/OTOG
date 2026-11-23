@@ -264,6 +264,14 @@ public class ProtectedWalletOperationsProxy implements WalletOperations {
         return delegate.createSendMoneyService(authService);
     }
 
+    @Override
+    public MerchantQrService createMerchantQrService(AuthService authService) {
+        if (delegate instanceof WalletService ws) {
+            return new MerchantQrService(this, ws.getUserRepository(), authService);
+        }
+        return delegate.createMerchantQrService(authService);
+    }
+
     private static User requireActiveUser() {
         SessionManager session = SessionManager.getInstance();
         session.requireAuthentication();
