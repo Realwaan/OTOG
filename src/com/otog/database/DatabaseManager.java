@@ -133,6 +133,8 @@ public class DatabaseManager implements AutoCloseable {
                         "provider_reference TEXT, " +
                         "provider_status TEXT, " +
                         "channel TEXT, " +
+                        "product TEXT, " +
+                        "units TEXT, " +
                         "biller_reference TEXT, " +
                         "FOREIGN KEY (source_wallet_id) REFERENCES wallets(wallet_id), " +
                         "FOREIGN KEY (target_wallet_id) REFERENCES wallets(wallet_id));",
@@ -200,7 +202,24 @@ public class DatabaseManager implements AutoCloseable {
                         "FOREIGN KEY (transaction_id) REFERENCES transactions(transaction_id) ON DELETE SET NULL);",
                 "CREATE INDEX IF NOT EXISTS idx_notif_user ON notifications(user_id);",
                 "CREATE INDEX IF NOT EXISTS idx_notif_user_read ON notifications(user_id, is_read);",
-                "CREATE INDEX IF NOT EXISTS idx_notif_txn ON notifications(transaction_id);"
+                "CREATE INDEX IF NOT EXISTS idx_notif_txn ON notifications(transaction_id);",
+
+                "CREATE TABLE IF NOT EXISTS investment_products (" +
+                        "product_code TEXT PRIMARY KEY, " +
+                        "product_name TEXT NOT NULL, " +
+                        "simulated_unit_price TEXT NOT NULL, " +
+                        "currency TEXT NOT NULL DEFAULT 'PHP', " +
+                        "is_simulated INTEGER NOT NULL DEFAULT 1);",
+
+                "CREATE TABLE IF NOT EXISTS investment_holdings (" +
+                        "wallet_id TEXT NOT NULL, " +
+                        "product_code TEXT NOT NULL, " +
+                        "units TEXT NOT NULL, " +
+                        "total_invested TEXT NOT NULL DEFAULT '0.00', " +
+                        "updated_at TEXT NOT NULL, " +
+                        "PRIMARY KEY (wallet_id, product_code), " +
+                        "FOREIGN KEY (wallet_id) REFERENCES wallets(wallet_id) ON DELETE RESTRICT, " +
+                        "FOREIGN KEY (product_code) REFERENCES investment_products(product_code) ON DELETE RESTRICT);"
         };
 
         try (Connection conn = getConnection();
@@ -210,6 +229,8 @@ public class DatabaseManager implements AutoCloseable {
             }
             ensureCredentialPinColumns(conn);
             ensureTransactionColumns(conn);
+            seedSimulatedInvestmentProduct(conn);
+            ensureInvestmentHoldingsSchema(conn);
             seedDefaultAdmin(conn);
             seedDemoPaymentMethods(conn);
         } catch (SQLException e) {
@@ -251,6 +272,8 @@ public class DatabaseManager implements AutoCloseable {
         boolean hasProviderRef = false;
         boolean hasProviderStatus = false;
         boolean hasChannel = false;
+        boolean hasProduct = false;
+        boolean hasUnits = false;
         boolean hasBillerRef = false;
         try (Statement stmt = conn.createStatement();
              ResultSet rs = stmt.executeQuery("PRAGMA table_info(transactions)")) {
@@ -262,6 +285,10 @@ public class DatabaseManager implements AutoCloseable {
                     hasProviderStatus = true;
                 } else if ("channel".equalsIgnoreCase(col)) {
                     hasChannel = true;
+                } else if ("product".equalsIgnoreCase(col)) {
+                    hasProduct = true;
+                } else if ("units".equalsIgnoreCase(col)) {
+                    hasUnits = true;
                 } else if ("biller_reference".equalsIgnoreCase(col)) {
                     hasBillerRef = true;
                 }
@@ -277,9 +304,74 @@ public class DatabaseManager implements AutoCloseable {
             if (!hasChannel) {
                 stmt.execute("ALTER TABLE transactions ADD COLUMN channel TEXT");
             }
+            if (!hasProduct) {
+                stmt.execute("ALTER TABLE transactions ADD COLUMN product TEXT");
+            }
+            if (!hasUnits) {
+                stmt.execute("ALTER TABLE transactions ADD COLUMN units TEXT");
+            }
             if (!hasBillerRef) {
                 stmt.execute("ALTER TABLE transactions ADD COLUMN biller_reference TEXT");
             }
+        }
+    }
+
+    private void seedSimulatedInvestmentProduct(Connection conn) throws SQLException {
+        OtogConfig config = OtogConfig.getInstance();
+        String sql = "INSERT OR IGNORE INTO investment_products " +
+                "(product_code, product_name, simulated_unit_price, currency, is_simulated) VALUES (?, ?, ?, ?, 1)";
+        try (PreparedStatement ps = conn.prepareStatement(sql)) {
+            ps.setString(1, config.getInvestmentProductCode());
+            ps.setString(2, config.getInvestmentProductName());
+            ps.setString(3, config.getInvestmentSimulatedUnitPrice().toPlainString());
+            ps.setString(4, config.getDefaultCurrency());
+            ps.executeUpdate();
+        }
+    }
+
+    private void ensureInvestmentHoldingsSchema(Connection conn) throws SQLException {
+        boolean hasProductCode = false;
+        boolean hasLegacyProduct = false;
+        try (Statement stmt = conn.createStatement();
+             ResultSet rs = stmt.executeQuery("PRAGMA table_info(investment_holdings)")) {
+            while (rs.next()) {
+                String col = rs.getString("name");
+                if ("product_code".equalsIgnoreCase(col)) {
+                    hasProductCode = true;
+                } else if ("product".equalsIgnoreCase(col)) {
+                    hasLegacyProduct = true;
+                }
+            }
+        }
+        if (hasProductCode || !hasLegacyProduct) {
+            return;
+        }
+
+        String defaultProductCode = OtogConfig.getInstance().getInvestmentProductCode();
+        try (Statement stmt = conn.createStatement()) {
+            stmt.execute("ALTER TABLE investment_holdings RENAME TO investment_holdings_legacy");
+            stmt.execute("CREATE TABLE investment_holdings (" +
+                    "wallet_id TEXT NOT NULL, " +
+                    "product_code TEXT NOT NULL, " +
+                    "units TEXT NOT NULL, " +
+                    "total_invested TEXT NOT NULL DEFAULT '0.00', " +
+                    "updated_at TEXT NOT NULL, " +
+                    "PRIMARY KEY (wallet_id, product_code), " +
+                    "FOREIGN KEY (wallet_id) REFERENCES wallets(wallet_id) ON DELETE RESTRICT, " +
+                    "FOREIGN KEY (product_code) REFERENCES investment_products(product_code) ON DELETE RESTRICT)");
+        }
+        String migrateSql = "INSERT OR REPLACE INTO investment_holdings " +
+                "(wallet_id, product_code, units, total_invested, updated_at) " +
+                "SELECT l.wallet_id, COALESCE((" +
+                "SELECT p.product_code FROM investment_products p " +
+                "WHERE LOWER(p.product_code) = LOWER(l.product) OR LOWER(p.product_name) = LOWER(l.product) LIMIT 1" +
+                "), ?), l.units, l.total_invested, l.updated_at FROM investment_holdings_legacy l";
+        try (PreparedStatement ps = conn.prepareStatement(migrateSql)) {
+            ps.setString(1, defaultProductCode);
+            ps.executeUpdate();
+        }
+        try (Statement stmt = conn.createStatement()) {
+            stmt.execute("DROP TABLE investment_holdings_legacy");
         }
     }
 

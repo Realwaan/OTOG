@@ -14,6 +14,7 @@ import com.otog.service.StatementFileService;
 import com.otog.service.WalletService;
 import com.otog.ui.AdminControlsPanel;
 import com.otog.ui.CashInOutPanel;
+import com.otog.ui.InvestmentPanel;
 import com.otog.ui.Main;
 import com.otog.ui.NotificationInboxDialog;
 import com.otog.ui.OverviewPanel;
@@ -72,17 +73,18 @@ public class SwingFormsAndFileHandlingTest {
 
     @Test
     void testAllSwingFormFilesExistAndBindToMatchingClasses() throws Exception {
-        Map<String, String> expectedForms = Map.of(
-                "UserLogin.form", "UserLogin",
-                "com/otog/ui/RegisterDialog.form", "com.otog.ui.RegisterDialog",
-                "com/otog/ui/PinSettingsDialog.form", "com.otog.ui.PinSettingsDialog",
-                "com/otog/ui/Main.form", "com.otog.ui.Main",
-                "com/otog/ui/OverviewPanel.form", "com.otog.ui.OverviewPanel",
-                "com/otog/ui/CashInOutPanel.form", "com.otog.ui.CashInOutPanel",
-                "com/otog/ui/SendMoneyPanel.form", "com.otog.ui.SendMoneyPanel",
-                "com/otog/ui/PayBillsPanel.form", "com.otog.ui.PayBillsPanel",
-                "com/otog/ui/AdminControlsPanel.form", "com.otog.ui.AdminControlsPanel",
-                "com/otog/ui/NotificationInboxDialog.form", "com.otog.ui.NotificationInboxDialog"
+        Map<String, String> expectedForms = Map.ofEntries(
+                Map.entry("UserLogin.form", "UserLogin"),
+                Map.entry("com/otog/ui/RegisterDialog.form", "com.otog.ui.RegisterDialog"),
+                Map.entry("com/otog/ui/PinSettingsDialog.form", "com.otog.ui.PinSettingsDialog"),
+                Map.entry("com/otog/ui/Main.form", "com.otog.ui.Main"),
+                Map.entry("com/otog/ui/OverviewPanel.form", "com.otog.ui.OverviewPanel"),
+                Map.entry("com/otog/ui/CashInOutPanel.form", "com.otog.ui.CashInOutPanel"),
+                Map.entry("com/otog/ui/SendMoneyPanel.form", "com.otog.ui.SendMoneyPanel"),
+                Map.entry("com/otog/ui/PayBillsPanel.form", "com.otog.ui.PayBillsPanel"),
+                Map.entry("com/otog/ui/InvestmentPanel.form", "com.otog.ui.InvestmentPanel"),
+                Map.entry("com/otog/ui/AdminControlsPanel.form", "com.otog.ui.AdminControlsPanel"),
+                Map.entry("com/otog/ui/NotificationInboxDialog.form", "com.otog.ui.NotificationInboxDialog")
         );
 
         for (Map.Entry<String, String> entry : expectedForms.entrySet()) {
@@ -143,6 +145,13 @@ public class SwingFormsAndFileHandlingTest {
         SendMoneyPanel sendPanel = new SendMoneyPanel();
         assertNotNull(sendPanel.$$$getRootComponent$$$());
         assertInstanceOf(GridLayoutManager.class, sendPanel.getRootPanel().getLayout());
+
+        InvestmentPanel investmentPanel = new InvestmentPanel();
+        assertNotNull(investmentPanel.$$$getRootComponent$$$());
+        assertInstanceOf(GridLayoutManager.class, investmentPanel.getRootPanel().getLayout());
+        assertNotNull(investmentPanel.getPreviewButton());
+        assertNotNull(investmentPanel.getSubmitButton());
+        assertNotNull(investmentPanel.getActivityTable());
 
         com.otog.ui.PayBillsPanel payBillsPanel = new com.otog.ui.PayBillsPanel();
         assertNotNull(payBillsPanel.$$$getRootComponent$$$());

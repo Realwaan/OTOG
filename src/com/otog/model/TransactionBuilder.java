@@ -299,6 +299,9 @@ public class TransactionBuilder {
 
         String effectiveProduct = (product != null && !product.trim().isEmpty()) ? product.trim() : "OTOG Fund";
         BigDecimal effectiveFee = (fee != null) ? fee : MoneyUtil.ZERO;
+        TransactionType invType = (type == TransactionType.INVESTMENT_REDEEM)
+                ? TransactionType.INVESTMENT_REDEEM
+                : TransactionType.INVESTMENT_BUY;
         InvestMoneyTransaction txn = new InvestMoneyTransaction(
                 resolveTransactionId(),
                 referenceNumber.trim(),
@@ -306,14 +309,12 @@ public class TransactionBuilder {
                 amount,
                 effectiveFee,
                 effectiveProduct,
-                units != null ? units : BigDecimal.ONE
+                units != null ? units : BigDecimal.ONE,
+                invType
         );
         if (note != null) {
             txn.setDescription(note);
         }
-        TransactionType invType = (type == TransactionType.INVESTMENT_REDEEM)
-                ? TransactionType.INVESTMENT_REDEEM
-                : TransactionType.INVESTMENT_BUY;
         applyCommonOptionalFields(txn, invType);
         return txn;
     }
