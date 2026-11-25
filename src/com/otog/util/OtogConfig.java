@@ -74,6 +74,28 @@ public final class OtogConfig {
                                      BigDecimal initialBalance) {
     }
 
+    /**
+     * Immutable record describing a deterministic demo user account seed entry.
+     */
+    public record DemoUserSeedConfig(String userId,
+                                     String walletId,
+                                     String username,
+                                     String mobile,
+                                     String email,
+                                     String password,
+                                     String pin,
+                                     String role,
+                                     BigDecimal initialBalance) {
+    }
+
+    /**
+     * Immutable record describing a seeded demo biller sample account reference.
+     */
+    public record DemoBillerAccount(String billerName,
+                                    String accountReference,
+                                    BigDecimal sampleAmount) {
+    }
+
     private OtogConfig() {
         reload();
     }
@@ -440,6 +462,97 @@ public final class OtogConfig {
                 getBigDecimal("merchant.initial.balance", "0.00")
                         .setScale(MoneyUtil.DEFAULT_SCALE, MoneyUtil.DEFAULT_ROUNDING)
         );
+    }
+
+    public boolean isDemoUsersSeedEnabled() {
+        return getBoolean("demo.users.seed.enabled", true);
+    }
+
+    public List<DemoUserSeedConfig> getDemoUserSeeds() {
+        if (!isDemoUsersSeedEnabled()) {
+            return Collections.emptyList();
+        }
+        String raw = getString("demo.users", "");
+        List<DemoUserSeedConfig> parsed = new ArrayList<>();
+        if (raw != null && !raw.isEmpty()) {
+            String[] entries = raw.split(";");
+            for (String entry : entries) {
+                String trimmed = entry.trim();
+                if (trimmed.isEmpty()) {
+                    continue;
+                }
+                String[] parts = trimmed.split("\\|", -1);
+                if (parts.length >= 9) {
+                    BigDecimal balance;
+                    try {
+                        balance = new BigDecimal(parts[8].trim())
+                                .setScale(MoneyUtil.DEFAULT_SCALE, MoneyUtil.DEFAULT_ROUNDING);
+                    } catch (NumberFormatException ex) {
+                        balance = MoneyUtil.ZERO;
+                    }
+                    String role = parts[7].trim().isEmpty() ? "USER" : parts[7].trim().toUpperCase();
+                    parsed.add(new DemoUserSeedConfig(
+                            parts[0].trim(),
+                            parts[1].trim(),
+                            parts[2].trim(),
+                            parts[3].trim(),
+                            parts[4].trim(),
+                            parts[5].trim(),
+                            parts[6].trim(),
+                            role,
+                            balance
+                    ));
+                }
+            }
+        }
+        if (parsed.isEmpty()) {
+            parsed.add(new DemoUserSeedConfig(
+                    "USR-DEMO-01", "WLT-DEMO-01", "Demo Sender", "09000000101",
+                    "demo.sender@otog.ph", "DemoPass123!", "1234", "USER",
+                    new BigDecimal("5000.00").setScale(MoneyUtil.DEFAULT_SCALE, MoneyUtil.DEFAULT_ROUNDING)));
+            parsed.add(new DemoUserSeedConfig(
+                    "USR-DEMO-02", "WLT-DEMO-02", "Demo Recipient", "09000000102",
+                    "demo.recipient@otog.ph", "DemoPass123!", "5678", "USER",
+                    new BigDecimal("1500.00").setScale(MoneyUtil.DEFAULT_SCALE, MoneyUtil.DEFAULT_ROUNDING)));
+        }
+        return Collections.unmodifiableList(parsed);
+    }
+
+    public List<DemoBillerAccount> getDemoBillerAccounts() {
+        String raw = getString("bills.demo.accounts", "");
+        List<DemoBillerAccount> parsed = new ArrayList<>();
+        if (raw != null && !raw.isEmpty()) {
+            String[] entries = raw.split(";");
+            for (String entry : entries) {
+                String trimmed = entry.trim();
+                if (trimmed.isEmpty()) {
+                    continue;
+                }
+                String[] parts = trimmed.split("\\|", -1);
+                if (parts.length >= 3) {
+                    BigDecimal sampleAmt;
+                    try {
+                        sampleAmt = new BigDecimal(parts[2].trim())
+                                .setScale(MoneyUtil.DEFAULT_SCALE, MoneyUtil.DEFAULT_ROUNDING);
+                    } catch (NumberFormatException ex) {
+                        sampleAmt = new BigDecimal("500.00");
+                    }
+                    parsed.add(new DemoBillerAccount(
+                            parts[0].trim(),
+                            parts[1].trim(),
+                            sampleAmt
+                    ));
+                }
+            }
+        }
+        if (parsed.isEmpty()) {
+            parsed.add(new DemoBillerAccount("Meralco (Electricity)", "MERALCO-10023456", new BigDecimal("1250.00")));
+            parsed.add(new DemoBillerAccount("Manila Water (Water)", "MWATER-20034567", new BigDecimal("485.50")));
+            parsed.add(new DemoBillerAccount("Maynilad (Water)", "MAYNILAD-30045678", new BigDecimal("520.00")));
+            parsed.add(new DemoBillerAccount("PLDT (Telecom & Internet)", "PLDT-40056789", new BigDecimal("1699.00")));
+            parsed.add(new DemoBillerAccount("Globe Telecom (Mobile & Broadband)", "GLOBE-50067890", new BigDecimal("999.00")));
+        }
+        return Collections.unmodifiableList(parsed);
     }
 
     // --- UI Dimensions & Theme ---

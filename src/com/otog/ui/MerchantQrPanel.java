@@ -927,10 +927,11 @@ public class MerchantQrPanel extends JPanel {
         // Enforce CAP-09: standard USER accounts must never inspect merchant sales history
         if (currentUser == null || (currentUser.getRole() != UserRole.MERCHANT && !currentUser.isAdmin())) {
             SecurityException denied = new SecurityException(
-                    "Access denied: Merchant sales history is restricted to merchant or admin accounts.");
+                    "Access denied: Sign in as a Merchant or Administrator to inspect received merchant sales.");
             runOnEdt(() -> {
                 loadedMerchantSales = Collections.emptyList();
                 salesTableModel.setRowCount(0);
+                btnViewMerchantReceipt.setEnabled(false);
                 lblMerchantFeedback.setText(denied.getMessage());
                 lblMerchantFeedback.setForeground(UiTheme.color(UiTheme.ColorRole.ERROR));
             });

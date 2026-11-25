@@ -758,6 +758,22 @@ public class UserLogin extends JFrame {
                 app.dispose();
                 return;
             }
+            if ("--seed-demo".equals(arg)) {
+                try (DatabaseManager db = new DatabaseManager()) {
+                    com.otog.service.DemoDataSeeder.DemoSeedSummary summary =
+                            com.otog.service.DemoDataSeeder.ensureSeeded(db);
+                    System.out.println(com.otog.service.DemoDataSeeder.formatDemoGuide(summary));
+                }
+                return;
+            }
+            if ("--reset-demo".equals(arg)) {
+                java.nio.file.Path dbPath = java.nio.file.Paths.get(OtogConfig.getInstance().getDefaultDbPath());
+                com.otog.service.DemoDataSeeder.DemoSeedSummary summary =
+                        com.otog.service.DemoDataSeeder.resetAndSeed(dbPath);
+                System.out.println("Demo database reset cleanly.");
+                System.out.println(com.otog.service.DemoDataSeeder.formatDemoGuide(summary));
+                return;
+            }
         }
 
         // Bootstrap the SQLite schema on the main thread, never on the EDT.

@@ -1,6 +1,6 @@
 # One Team One Goal (OTOG) — E-Wallet System
 
-An **E-Wallet Desktop Application** built in **Java (Swing + SQLite)** that lets users manage digital wallets, deposit and withdraw funds, send money to other users, view filtered history and receipts, receive transaction notifications, export/import wallet statements, and govern accounts through role-based admin controls.
+An **E-Wallet Desktop Application** built in **Java (Swing + SQLite)** that lets users manage digital wallets, deposit and withdraw funds, send money to other users, pay bills, pay merchants via QR codes, trade simulated investments, view filtered history and receipts, receive transaction notifications, export/import wallet statements, and govern accounts through role-based admin controls.
 
 Developed in compliance with **CSIT227 — Object-Oriented Programming**.
 
@@ -138,19 +138,21 @@ OTOG/
 ├── Class Diagram/
 │   └── ewallet_cd.png            # UML class diagram
 ├── config/
-│   └── otog.properties           # Externalized runtime settings
+│   └── otog.properties           # Externalized runtime settings & deterministic demo seeds
+├── docs/
+│   └── CAP-14-FEATURE-FREEZE.md  # Integration checkpoint, demo catalog & feature freeze policy
 ├── lib/                          # SQLite JDBC, JUnit 5, IntelliJ forms_rt
 ├── src/
-│   ├── UserLogin.java / .form    # Application entry point (Login & 2FA)
+│   ├── UserLogin.java / .form    # Application entry point (Login, 2FA & CLI --verify/--seed-demo/--reset-demo)
 │   └── com/otog/
 │       ├── database/             # SQLite connection & ACID transaction helper
 │       ├── exception/            # Custom domain exceptions
-│       ├── model/                # Entities, transaction subtypes, fees, receipts & enums
+│       ├── model/                # Entities, transaction subtypes, QR payload, fees, receipts & enums
 │       ├── repository/           # SQLite JDBC data access classes
-│       ├── service/              # Core services, proxies, adapters & file I/O
+│       ├── service/              # Core services, proxies, adapters, QR, demo seeder & file I/O
 │       ├── ui/                   # Bound IntelliJ Swing .form dashboard & dialogs
 │       └── util/                 # Config, theme, currency, password & ID helpers
-└── test/com/otog/                # JUnit 5 automated test suites
+└── test/com/otog/                # JUnit 5 unit & cross-feature integration test suites
 ```
 
 ---
@@ -160,7 +162,7 @@ OTOG/
 ### Core OOP Principles
 - **Encapsulation**: Domain entities protect balances, credentials, and statuses behind validated methods (`MoneyUtil`, `Wallet.debit`/`credit`, `AdminAction.sanitizeDetails`).
 - **Abstraction**: Swing screens depend only on service interfaces (`WalletOperations`, `AuthService`, `AdminService`, `LoanService`, `InvestmentService`) rather than concrete implementations.
-- **Inheritance**: `Transaction` is extended by `CashInOutTransaction`, `SendMoneyTransaction`, `LoanTransaction`, `InvestMoneyTransaction` (and `BillPaymentTransaction` in PR #14); domain errors extend `OtogException`.
+- **Inheritance**: `Transaction` is extended by `CashInOutTransaction`, `SendMoneyTransaction`, `BillPaymentTransaction`, `LoanTransaction`, and `InvestMoneyTransaction`; domain errors extend `OtogException`.
 - **Polymorphism**: `TransactionRepository` restores exact `Transaction` subclasses from SQLite via `TransactionFactory.createEmptyForType(...)`, and each subclass customizes receipt formatting (`appendSubtypeReceiptLines`) and draft cloning (`copyAsDraft`).
 
 ### GoF Design Patterns Applied (12 Patterns)
@@ -216,35 +218,28 @@ Managed automatically on startup by `DatabaseManager` with foreign keys enabled 
 | `payment_methods` | Linked bank accounts, e-wallets, and cards per user |
 | `transactions` | Full transaction records, unique reference numbers, amounts, fees, types, statuses, and provider details |
 | `ledger_entries` | Double-entry `DEBIT` and `CREDIT` rows recording balances before and after every movement of funds |
+| `investment_holdings` | Per-wallet simulated investment unit holdings and total invested principal |
 | `admin_actions` | Traceable log of administrative actions with reasons and secret-redacted details |
 | `notifications` | Post-commit user alerts with read status and unique deduplication keys |
 
-### Runtime Configuration (`config/otog.properties`)
+### Runtime Configuration (`config/otog.properties`) & Demo CLI
 All key settings — database path, transfer limits (`PHP 1.00` – `PHP 50,000.00`), default fees, OTP expiry/cooldown, lockout thresholds, session timeout (15 min), payment channels, demo accounts, window dimensions, and UI colors — are stored in [`config/otog.properties`](config/otog.properties) and loaded by `OtogConfig`. Any value can be overridden at launch using `-Dotog.<key>=<value>`.
+
+```bash
+# Verify deterministic demo data & print summary
+java --enable-native-access=ALL-UNNAMED -cp "out/production/OTOG:lib/*" UserLogin --seed-demo
+
+# Reset data/otog.db to a fresh deterministic demo baseline
+java --enable-native-access=ALL-UNNAMED -cp "out/production/OTOG:lib/*" UserLogin --reset-demo
+```
+
+See [CAP-14 Feature Freeze & Demo Guide](docs/CAP-14-FEATURE-FREEZE.md) for the frozen scope matrix, deferred modules, and deterministic demo credentials.
 
 ---
 
 ## Automated Testing
 
-The repository includes **15 JUnit 5 test suites** (**18 containers, 128/128 tests passing** on `main`) covering core domain rules, security, concurrency, design patterns, file I/O, and UI behavior:
-
-| Test Suite (`test/com/otog/`) | Tests | What It Verifies |
-| :--- | :---: | :--- |
-| `BaselineReproducibilityTest` | 3 | Swing login form initialization and 2FA screen transitions |
-| `UserWalletPersistenceTest` | 5 | Saving/loading users, wallets, payment methods, and polymorphic transactions |
-| `BigDecimalMoneyValidationTest` | 6 | Exact `BigDecimal` currency precision and rejection of invalid amounts |
-| `AtomicCommitAndRollbackTest` | 6 | Atomic commits, rollback on errors, insufficient funds, and duplicate rejection |
-| `ConcurrencyDoubleSpendTest` | 2 | Thread-safe wallet locking preventing concurrent double-spends |
-| `RestartPersistenceTest` | 1 | File-based SQLite durability across a full restart |
-| `RegistrationAndAuthTest` | 10 | Registration, mobile normalization, salted password login, and 5-attempt lockout |
-| `OtpPinSessionTest` | 7 | OTP expiry/cooldown/one-time use, PIN setup/lockout, and session timeout |
-| `DashboardAndNavigationTest` | 18 | Protected dashboard access, Back-button stack, async loading states, and role tabs |
-| `SendMoneyTest` | 27 | Recipient resolution, transfer limits, confirmation preview, PIN check, and transfers |
-| `CashInOutMockBankApiTest` | 18 | Cash-In/Out flows, mock bank responses, fund reservation/release, and status lookup |
-| `HistoryReceiptsNotificationsTest` | 5 | History filters, masked receipts, repeat drafts, and post-commit notification retries |
-| `AdminPermissionsAndAccountControlTest` | 8 | Role permissions, suspend/reactivate reasons, sanitized audits, and blocked balance edits |
-| `DesignPatternsAndConfigTest` | 7 | External configuration overrides and all 12 GoF design patterns |
-| `SwingFormsAndFileHandlingTest` | 5 | Bound `.form` UI wiring and `.txt`/`.csv` statement export and import |
+The repository includes **19 JUnit 5 test suites** covering core domain rules, security, concurrency, design patterns, file I/O, Pay Bills, Merchant QR, Simulated Investments, UI behavior, and cross-feature integration (`IntegrationCheckpointTest`).
 
 ---
 
