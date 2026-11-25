@@ -21,6 +21,7 @@
               <grid row="0" column="0" row-span="1" col-span="1" vsize-policy="0" hsize-policy="3" anchor="0" fill="1" indent="0" use-parent-layout="false"/>
             </constraints>
             <properties>
+              <font name="SansSerif" size="12" style="0"/>
               <text value="Cash In"/>
             </properties>
           </component>
@@ -29,6 +30,7 @@
               <grid row="0" column="1" row-span="1" col-span="1" vsize-policy="0" hsize-policy="3" anchor="0" fill="1" indent="0" use-parent-layout="false"/>
             </constraints>
             <properties>
+              <font name="SansSerif" size="12" style="0"/>
               <text value="Cash Out"/>
             </properties>
           </component>
@@ -37,6 +39,7 @@
               <grid row="0" column="2" row-span="1" col-span="1" vsize-policy="0" hsize-policy="3" anchor="0" fill="1" indent="0" use-parent-layout="false"/>
             </constraints>
             <properties>
+              <font name="SansSerif" size="12" style="0"/>
               <text value="Send Money"/>
             </properties>
           </component>
@@ -45,6 +48,7 @@
               <grid row="0" column="3" row-span="1" col-span="1" vsize-policy="0" hsize-policy="3" anchor="0" fill="1" indent="0" use-parent-layout="false"/>
             </constraints>
             <properties>
+              <font name="SansSerif" size="12" style="0"/>
               <text value="Pay Bills"/>
             </properties>
           </component>
@@ -53,6 +57,7 @@
               <grid row="0" column="4" row-span="1" col-span="1" vsize-policy="0" hsize-policy="3" anchor="0" fill="1" indent="0" use-parent-layout="false"/>
             </constraints>
             <properties>
+              <font name="SansSerif" size="12" style="0"/>
               <text value="Investments"/>
             </properties>
           </component>
@@ -61,6 +66,7 @@
               <grid row="0" column="5" row-span="1" col-span="1" vsize-policy="0" hsize-policy="3" anchor="0" fill="1" indent="0" use-parent-layout="false"/>
             </constraints>
             <properties>
+              <font name="SansSerif" size="12" style="0"/>
               <text value="Set / Change PIN"/>
             </properties>
           </component>
@@ -69,6 +75,7 @@
               <grid row="0" column="6" row-span="1" col-span="1" vsize-policy="0" hsize-policy="3" anchor="0" fill="1" indent="0" use-parent-layout="false"/>
             </constraints>
             <properties>
+              <font name="SansSerif" size="12" style="0"/>
               <text value="Export Statement"/>
             </properties>
           </component>
@@ -77,6 +84,7 @@
               <grid row="0" column="7" row-span="1" col-span="1" vsize-policy="0" hsize-policy="3" anchor="0" fill="1" indent="0" use-parent-layout="false"/>
             </constraints>
             <properties>
+              <font name="SansSerif" size="12" style="0"/>
               <text value="Load Statement"/>
             </properties>
           </component>
@@ -276,6 +284,7 @@
                           <component id="btnRetryId" class="javax.swing.JButton" binding="btnRetryLoad">
                             <constraints/>
                             <properties>
+                              <font name="SansSerif" size="12" style="0"/>
                               <text value="Retry"/>
                             </properties>
                           </component>
@@ -324,6 +333,7 @@
                             <constraints/>
                             <properties>
                               <enabled value="false"/>
+                              <font name="SansSerif" size="12" style="0"/>
                               <text value="Lookup Status"/>
                             </properties>
                           </component>
@@ -331,18 +341,21 @@
                             <constraints/>
                             <properties>
                               <enabled value="false"/>
+                              <font name="SansSerif" size="12" style="0"/>
                               <text value="Repeat Draft"/>
                             </properties>
                           </component>
                           <component id="btnReceiptId" class="javax.swing.JButton" binding="btnViewReceipt">
                             <constraints/>
                             <properties>
+                              <font name="SansSerif" size="12" style="0"/>
                               <text value="View Receipt"/>
                             </properties>
                           </component>
                           <component id="btnExportReceiptId" class="javax.swing.JButton" binding="btnExportReceipt">
                             <constraints/>
                             <properties>
+                              <font name="SansSerif" size="12" style="0"/>
                               <text value="Save Receipt File"/>
                             </properties>
                           </component>

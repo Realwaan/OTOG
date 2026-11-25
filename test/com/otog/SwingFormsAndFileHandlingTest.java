@@ -352,4 +352,89 @@ public class SwingFormsAndFileHandlingTest {
         assertEquals(new BigDecimal("125.00"), walletService.getWalletByUserId(recipient.getUserId()).getBalance());
         assertTrue(sendPanel.getSendFeedbackLabel().getText().contains("Transfer successful"));
     }
+
+    @Test
+    void testModularQaFixesFormParityFlyweightRendererRepeatDraftAndFeeForwarding() throws Exception {
+        // 1. Every .java file in src/com/otog/ui/ must have a matching .form file (0 structure warnings)
+        try (var stream = Files.list(Paths.get("src/com/otog/ui"))) {
+            List<Path> uiJavaFiles = stream
+                    .filter(p -> p.toString().endsWith(".java"))
+                    .toList();
+            assertFalse(uiJavaFiles.isEmpty());
+            for (Path javaFile : uiJavaFiles) {
+                String formPath = javaFile.toString().replaceAll("\\.java$", ".form");
+                assertTrue(Files.isRegularFile(Paths.get(formPath)),
+                        "Every class in com.otog.ui must have a matching .form file: missing " + formPath);
+            }
+        }
+
+        // 2. UiTheme.alignTableColumnsRight reuses shared Flyweight renderer instance
+        JTable t1 = new JTable(new Object[][]{{"10.00"}}, new Object[]{"Amount"});
+        JTable t2 = new JTable(new Object[][]{{"20.00"}}, new Object[]{"Amount"});
+        com.otog.util.UiTheme.alignTableColumnsRight(t1, 0);
+        com.otog.util.UiTheme.alignTableColumnsRight(t2, 0);
+        assertSame(t1.getColumnModel().getColumn(0).getCellRenderer(),
+                t2.getColumnModel().getColumn(0).getCellRenderer(),
+                "UiTheme.alignTableColumnsRight must share a cached Flyweight renderer");
+
+        // 3. CashInOutPanel.loadRepeatDraft resets cmbPaymentMethod to index 0 and re-enables cmbCashChannel
+        User user = authService.registerUser("Draft Tester", "09173334455", "draft@otog.ph", "SecretPass123");
+        Wallet userWallet = walletService.getWalletByUserId(user.getUserId());
+        SessionManager.getInstance().login(user, userWallet);
+        authService.setPin(user.getUserId(), "SecretPass123", "1234");
+        walletService.cashIn("REQ-QA17-SEED", userWallet.getWalletId(), null, new BigDecimal("500.00"), "Seed");
+
+        CashInOutPanel cashPanel = new CashInOutPanel(walletService, authService, BankResponseStatus.SUCCESS);
+        cashPanel.populatePaymentMethods(walletService.getPaymentMethodsByUserId(user.getUserId()));
+        assertTrue(cashPanel.getPaymentMethodComboBox().getSelectedIndex() > 0, "Default bank should be preselected");
+        assertFalse(cashPanel.getCashChannelComboBox().isEnabled(), "Channel combo disabled when bank selected");
+
+        com.otog.model.CashInOutTransaction channelDraft = new com.otog.model.CashInOutTransaction(
+                "TXN-DRAFT", "REF-DRAFT-1", userWallet.getWalletId(),
+                new BigDecimal("100.00"), BigDecimal.ZERO,
+                "CASH_IN", "GCash");
+        cashPanel.loadRepeatDraft(channelDraft);
+        assertEquals(0, cashPanel.getPaymentMethodComboBox().getSelectedIndex(),
+                "loadRepeatDraft with explicit channel must reset linked payment method to index 0");
+        assertTrue(cashPanel.getCashChannelComboBox().isEnabled(),
+                "loadRepeatDraft with explicit channel must re-enable channel dropdown");
+        assertEquals("GCash", cashPanel.getCashChannelComboBox().getSelectedItem());
+
+        // 4. SendMoneyPanel forwards configured CompositeFeePolicy fee instead of hardcoding zero
+        User receiver = authService.registerUser("Fee Receiver", "09173334466", "feerecv@otog.ph", "SecretPass123");
+        System.setProperty("otog.send.default.fee.flat", "5.00");
+        OtogConfig.getInstance().reload();
+        try {
+            SendMoneyPanel sendPanel = new SendMoneyPanel(walletService, authService);
+            Transaction feeTxn = sendPanel.submitSendMoneyAsync(
+                    receiver.getMobileNumber(), "100.00", "With configured fee", "1234")
+                    .get(5, TimeUnit.SECONDS);
+            assertEquals(0, new BigDecimal("5.00").compareTo(feeTxn.getFee()),
+                    "SendMoneyPanel must apply configured transfer fee");
+            assertEquals(0, new BigDecimal("395.00").compareTo(walletService.getBalance(userWallet.getWalletId())));
+        } finally {
+            System.clearProperty("otog.send.default.fee.flat");
+            OtogConfig.getInstance().reload();
+        }
+
+        // 5. OverviewPanel guards Clear Filters / Receipt / Lookup / Export Receipt with beforeInteractiveAction
+        OverviewPanel overviewPanel = new OverviewPanel(walletService, new StatementFileService());
+        java.util.concurrent.atomic.AtomicInteger sessionChecks = new java.util.concurrent.atomic.AtomicInteger();
+        java.util.concurrent.atomic.AtomicInteger refreshCalls = new java.util.concurrent.atomic.AtomicInteger();
+        overviewPanel.setBeforeInteractiveAction(() -> {
+            sessionChecks.incrementAndGet();
+            return false; // simulate expired session
+        });
+        overviewPanel.setOnRefreshRequested(() -> {
+            refreshCalls.incrementAndGet();
+            return java.util.concurrent.CompletableFuture.completedFuture(null);
+        });
+        SwingUtilities.invokeAndWait(() -> {
+            overviewPanel.getClearFiltersButton().doClick();
+            overviewPanel.getViewReceiptButton().doClick();
+            overviewPanel.getExportReceiptButton().doClick();
+        });
+        assertEquals(3, sessionChecks.get(), "All OverviewPanel interactive buttons must check active session");
+        assertEquals(0, refreshCalls.get(), "Expired session must block Clear Filters refresh");
+    }
 }

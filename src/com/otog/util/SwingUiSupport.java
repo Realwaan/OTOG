@@ -1,8 +1,4 @@
-package com.otog.ui;
-
-import com.otog.exception.WalletException;
-import com.otog.service.AuthService;
-import com.otog.service.SessionManager;
+package com.otog.util;
 
 import javax.swing.JOptionPane;
 import javax.swing.SwingUtilities;
@@ -11,10 +7,10 @@ import java.util.concurrent.CompletionException;
 import java.util.concurrent.ExecutionException;
 
 /**
- * Shared Swing EDT, exception unwrapping, dialog callback, and Transaction PIN
- * verification helpers reused across dashboard panels and top-level shell frames.
+ * Shared Swing EDT, exception unwrapping, and testable dialog callback helpers
+ * reused across modular dashboard panels and top-level shell frames.
  */
-public final class UiSupport {
+public final class SwingUiSupport {
 
     @FunctionalInterface
     public interface DialogMessageCallback {
@@ -22,14 +18,23 @@ public final class UiSupport {
     }
 
     @FunctionalInterface
+    public interface ComponentMessageCallback {
+        void show(Component parent, String title, Object message, int messageType);
+    }
+
+    @FunctionalInterface
     public interface ConfirmDialogCallback {
         int show(Component parent, String title, Object message, int optionType, int messageType);
     }
 
-    private UiSupport() {
+    private SwingUiSupport() {
     }
 
     public static DialogMessageCallback defaultMessageCallback() {
+        return (parent, title, msg, type) -> JOptionPane.showMessageDialog(parent, msg, title, type);
+    }
+
+    public static ComponentMessageCallback defaultComponentMessageCallback() {
         return (parent, title, msg, type) -> JOptionPane.showMessageDialog(parent, msg, title, type);
     }
 
@@ -63,19 +68,5 @@ public final class UiSupport {
         }
         String msg = ex.getMessage();
         return (msg != null && !msg.trim().isEmpty()) ? msg : ex.getClass().getSimpleName();
-    }
-
-    public static void verifyPinOrThrow(AuthService authService, String userId, String rawPin) {
-        try {
-            if (!authService.verifyPin(userId, rawPin)) {
-                SessionManager session = SessionManager.getInstance();
-                if (session.isLockedOutByPin()) {
-                    throw new WalletException("Session terminated after maximum failed PIN attempts.");
-                }
-                throw new WalletException("Invalid transaction PIN. Outgoing payment blocked.");
-            }
-        } catch (SecurityException ex) {
-            throw new WalletException(ex.getMessage(), ex);
-        }
     }
 }

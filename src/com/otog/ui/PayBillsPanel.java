@@ -21,6 +21,7 @@ import com.otog.service.WalletService;
 import com.otog.util.IdGenerator;
 import com.otog.util.MoneyUtil;
 import com.otog.util.OtogConfig;
+import com.otog.util.SwingUiSupport;
 import com.otog.util.UiTheme;
 
 import javax.swing.*;
@@ -108,14 +109,36 @@ public class PayBillsPanel extends JPanel {
     }
 
     private void populateBillersIfEmpty() {
-        if (cmbBiller != null && cmbBiller.getItemCount() == 0) {
-            List<String> billers = OtogConfig.getInstance().getSeededBillers();
-            if (billers == null || billers.isEmpty()) {
-                billers = SEEDED_BILLERS;
+        OtogConfig config = OtogConfig.getInstance();
+        if (cmbBiller != null) {
+            if (cmbBiller.getItemCount() == 0) {
+                List<String> billers = config.getSeededBillers();
+                if (billers == null || billers.isEmpty()) {
+                    billers = SEEDED_BILLERS;
+                }
+                for (String b : billers) {
+                    cmbBiller.addItem(b);
+                }
             }
-            for (String b : billers) {
-                cmbBiller.addItem(b);
-            }
+            UiTheme.styleInputField(cmbBiller);
+        }
+        UiTheme.styleInputField(txtBillReference);
+        UiTheme.styleInputField(txtBillAmount);
+        if (txtBillPin != null) {
+            txtBillPin.setToolTipText("Enter your " + config.getPinMinLength() + "-" + config.getPinMaxLength()
+                    + " digit Transaction PIN to authorize bill payment");
+            UiTheme.styleInputField(txtBillPin);
+        }
+        if (lblFeePreview != null) {
+            lblFeePreview.setFont(UiTheme.font(UiTheme.FontRole.LABEL_BOLD));
+        }
+        if (lblTotalPreview != null) {
+            lblTotalPreview.setFont(UiTheme.font(UiTheme.FontRole.LABEL_BOLD));
+        }
+        UiTheme.stylePrimaryButton(btnSubmitBillPayment);
+        UiTheme.styleSecondaryButton(btnBillBackToOverview);
+        if (lblBillFeedback != null) {
+            lblBillFeedback.setFont(UiTheme.font(UiTheme.FontRole.LABEL));
         }
     }
 
@@ -338,7 +361,7 @@ public class PayBillsPanel extends JPanel {
             request = validateInputs(biller, billerReference, amountText, pin);
         } catch (RuntimeException ex) {
             CompletableFuture<Transaction> future = new CompletableFuture<>();
-            UiSupport.runOnEdt(() -> {
+            SwingUiSupport.runOnEdt(() -> {
                 applyFailureUi(ex);
                 if (onPaymentError != null) {
                     onPaymentError.accept(ex);
@@ -355,7 +378,7 @@ public class PayBillsPanel extends JPanel {
             return CompletableFuture.completedFuture(null);
         }
         CompletableFuture<Transaction> future = new CompletableFuture<>();
-        UiSupport.runOnEdt(() -> {
+        SwingUiSupport.runOnEdt(() -> {
             btnSubmitBillPayment.setEnabled(false);
             txtBillPin.setText("");
             lblBillFeedback.setForeground(UiTheme.color(UiTheme.ColorRole.INFO));
@@ -378,7 +401,7 @@ public class PayBillsPanel extends JPanel {
                     applyPaymentOutcomeUi(request, txn);
                     future.complete(txn);
                 } catch (Exception ex) {
-                    Throwable cause = UiSupport.unwrapCause(ex);
+                    Throwable cause = SwingUiSupport.unwrapCause(ex);
                     applyFailureUi(cause);
                     if (onPaymentError != null) {
                         onPaymentError.accept(cause);
@@ -467,7 +490,7 @@ public class PayBillsPanel extends JPanel {
         Transaction txn;
 
         if (authService != null) {
-            UiSupport.verifyPinOrThrow(authService, wallet.getUserId(), request.pin());
+            AuthService.verifyPinOrThrow(authService, wallet.getUserId(), request.pin());
             txn = walletService.payBill(
                     reqReference,
                     wallet.getWalletId(),
@@ -531,7 +554,7 @@ public class PayBillsPanel extends JPanel {
         } else if (ex instanceof InsufficientFundsException) {
             lblBillFeedback.setText("Payment failed: Insufficient wallet balance.");
         } else {
-            String msg = UiSupport.extractErrorMessage(ex);
+            String msg = SwingUiSupport.extractErrorMessage(ex);
             lblBillFeedback.setText("Payment validation failed: " + msg);
         }
     }

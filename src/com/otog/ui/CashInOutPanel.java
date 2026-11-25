@@ -19,6 +19,7 @@ import com.otog.service.WalletOperations;
 import com.otog.util.IdGenerator;
 import com.otog.util.MoneyUtil;
 import com.otog.util.OtogConfig;
+import com.otog.util.SwingUiSupport;
 import com.otog.util.UiTheme;
 
 import javax.swing.*;
@@ -29,6 +30,7 @@ import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.BooleanSupplier;
 import java.util.function.Consumer;
 import java.util.function.Supplier;
@@ -42,6 +44,7 @@ public class CashInOutPanel extends JPanel {
 
     private final WalletOperations walletService;
     private final AuthService authService;
+    private final AtomicBoolean submitInFlight = new AtomicBoolean(false);
 
     private JPanel pnlRoot;
     private JPanel pnlForm;
@@ -65,8 +68,8 @@ public class CashInOutPanel extends JPanel {
     private BooleanSupplier pinConfiguredSupplier;
     private Runnable onPinNotSet;
     private BooleanSupplier isLogoutHandledSupplier;
-    private UiSupport.DialogMessageCallback dialogMessageCallback = UiSupport.defaultMessageCallback();
-    private UiSupport.ConfirmDialogCallback confirmDialogCallback = UiSupport.defaultConfirmCallback();
+    private SwingUiSupport.DialogMessageCallback dialogMessageCallback = SwingUiSupport.defaultMessageCallback();
+    private SwingUiSupport.ConfirmDialogCallback confirmDialogCallback = SwingUiSupport.defaultConfirmCallback();
     private Consumer<String> onStatusMessage;
     private Consumer<Boolean> offEdtObserver;
     private Supplier<CompletableFuture<Void>> onRefreshRequested;
@@ -85,11 +88,63 @@ public class CashInOutPanel extends JPanel {
         if (pnlRoot == null) {
             $$$setupUI$$$();
         }
-        if (initialProviderMode != null) {
-            cmbProviderMode.setSelectedItem(initialProviderMode.name());
-        }
+        ensureComponentsInitialized(initialProviderMode);
         add(pnlRoot, BorderLayout.CENTER);
         initInteractions();
+    }
+
+    /**
+     * Populates combo boxes and applies runtime styling outside {@code $$$setupUI$$$()} so
+     * IntelliJ GUI Designer bytecode instrumentation preserves runtime models and theme tokens.
+     */
+    private void ensureComponentsInitialized(BankResponseStatus initialProviderMode) {
+        OtogConfig config = OtogConfig.getInstance();
+        if (cmbCashOperation != null) {
+            if (cmbCashOperation.getItemCount() == 0) {
+                for (String op : config.getCashOperations()) {
+                    cmbCashOperation.addItem(op);
+                }
+            }
+            UiTheme.styleInputField(cmbCashOperation);
+        }
+        if (cmbPaymentMethod != null) {
+            if (cmbPaymentMethod.getItemCount() == 0) {
+                cmbPaymentMethod.addItem("Use Selected Channel");
+            }
+            UiTheme.styleInputField(cmbPaymentMethod);
+        }
+        if (cmbCashChannel != null) {
+            if (cmbCashChannel.getItemCount() == 0) {
+                for (String channel : config.getCashChannels()) {
+                    cmbCashChannel.addItem(channel);
+                }
+            }
+            UiTheme.styleInputField(cmbCashChannel);
+        }
+        if (cmbProviderMode != null) {
+            if (cmbProviderMode.getItemCount() == 0) {
+                for (BankResponseStatus status : BankResponseStatus.values()) {
+                    cmbProviderMode.addItem(status.name());
+                }
+            }
+            if (initialProviderMode != null) {
+                cmbProviderMode.setSelectedItem(initialProviderMode.name());
+            }
+            UiTheme.styleInputField(cmbProviderMode);
+        }
+        UiTheme.styleInputField(txtCashAmount);
+        UiTheme.styleInputField(txtCashNote);
+        if (txtCashPin != null) {
+            txtCashPin.setEnabled(false);
+            txtCashPin.setToolTipText("Required for Cash Out transactions ("
+                    + config.getPinMinLength() + "-" + config.getPinMaxLength() + " digit PIN)");
+            UiTheme.styleInputField(txtCashPin);
+        }
+        UiTheme.stylePrimaryButton(btnSubmitCashOp);
+        UiTheme.styleSecondaryButton(btnCashBackToOverview);
+        if (lblCashFeedback != null) {
+            lblCashFeedback.setFont(UiTheme.font(UiTheme.FontRole.LABEL));
+        }
     }
 
     public void setOnBackToOverview(Runnable onBackToOverview) {
@@ -112,16 +167,16 @@ public class CashInOutPanel extends JPanel {
         this.isLogoutHandledSupplier = isLogoutHandledSupplier;
     }
 
-    public void setDialogMessageCallback(UiSupport.DialogMessageCallback dialogMessageCallback) {
+    public void setDialogMessageCallback(SwingUiSupport.DialogMessageCallback dialogMessageCallback) {
         this.dialogMessageCallback = dialogMessageCallback != null
                 ? dialogMessageCallback
-                : UiSupport.defaultMessageCallback();
+                : SwingUiSupport.defaultMessageCallback();
     }
 
-    public void setConfirmDialogCallback(UiSupport.ConfirmDialogCallback confirmDialogCallback) {
+    public void setConfirmDialogCallback(SwingUiSupport.ConfirmDialogCallback confirmDialogCallback) {
         this.confirmDialogCallback = confirmDialogCallback != null
                 ? confirmDialogCallback
-                : UiSupport.defaultConfirmCallback();
+                : SwingUiSupport.defaultConfirmCallback();
     }
 
     public void setOnStatusMessage(Consumer<String> onStatusMessage) {
@@ -198,8 +253,15 @@ public class CashInOutPanel extends JPanel {
         }
         String op = draft.getType() == TransactionType.CASH_OUT ? "CASH_OUT" : "CASH_IN";
         cmbCashOperation.setSelectedItem(op);
-        if (draft instanceof CashInOutTransaction cio && cio.getChannel() != null) {
-            cmbCashChannel.setSelectedItem(cio.getChannel());
+        if (draft instanceof CashInOutTransaction cio && cio.getChannel() != null && !cio.getChannel().isBlank()) {
+            // Reset to "Use Selected Channel" and re-enable channel selector so the drafted channel is not ignored
+            if (cmbPaymentMethod != null && cmbPaymentMethod.getItemCount() > 0) {
+                cmbPaymentMethod.setSelectedIndex(0);
+            }
+            if (cmbCashChannel != null) {
+                cmbCashChannel.setEnabled(true);
+                cmbCashChannel.setSelectedItem(cio.getChannel());
+            }
         }
         txtCashAmount.setText(draft.getAmount() != null ? draft.getAmount().toPlainString() : "");
         txtCashNote.setText(draft.getDescription() != null ? draft.getDescription() : "");
@@ -260,15 +322,28 @@ public class CashInOutPanel extends JPanel {
                                                                     String amountText,
                                                                     String note,
                                                                     String rawPin) {
+        return submitCashOperationInternal(operationType, channel, paymentMethodId, amountText, note, rawPin, false);
+    }
+
+    private CompletableFuture<Transaction> submitCashOperationInternal(String operationType,
+                                                                       String channel,
+                                                                       String paymentMethodId,
+                                                                       String amountText,
+                                                                       String note,
+                                                                       String rawPin,
+                                                                       boolean releaseInFlightOnDone) {
         CompletableFuture<Transaction> future = new CompletableFuture<>();
         if (walletService == null) {
+            if (releaseInFlightOnDone) {
+                submitInFlight.set(false);
+            }
             future.completeExceptionally(new IllegalStateException("WalletOperations service is unavailable."));
             return future;
         }
         String op = operationType != null ? operationType.trim().toUpperCase() : "CASH_IN";
         String opLabel = "CASH_OUT".equals(op) ? "Cash Out" : "Cash In";
 
-        UiSupport.runOnEdt(() -> {
+        SwingUiSupport.runOnEdt(() -> {
             btnSubmitCashOp.setEnabled(false);
             showFeedback("Processing " + opLabel + "...", UiTheme.color(UiTheme.ColorRole.INFO));
             notifyStatus("Processing " + opLabel + "...");
@@ -310,7 +385,7 @@ public class CashInOutPanel extends JPanel {
                     String cleanPin = rawPin != null ? rawPin.trim() : "";
                     if (!cleanPin.isEmpty()) {
                         if (authService != null && user != null) {
-                            UiSupport.verifyPinOrThrow(authService, user.getUserId(), cleanPin);
+                            AuthService.verifyPinOrThrow(authService, user.getUserId(), cleanPin);
                             return walletService.cashOut(ref, wallet.getWalletId(), pmId, amount, MoneyUtil.ZERO, desc);
                         }
                         return walletService.cashOutWithPin(
@@ -323,6 +398,9 @@ public class CashInOutPanel extends JPanel {
 
             @Override
             protected void done() {
+                if (releaseInFlightOnDone) {
+                    submitInFlight.set(false);
+                }
                 btnSubmitCashOp.setEnabled(true);
                 try {
                     Transaction txn = get();
@@ -358,8 +436,8 @@ public class CashInOutPanel extends JPanel {
                         future.complete(txn);
                     }
                 } catch (Exception ex) {
-                    Throwable cause = UiSupport.unwrapCause(ex);
-                    String message = UiSupport.extractErrorMessage(cause);
+                    Throwable cause = SwingUiSupport.unwrapCause(ex);
+                    String message = SwingUiSupport.extractErrorMessage(cause);
                     showFeedback("Failed: " + message, UiTheme.color(UiTheme.ColorRole.ERROR));
                     notifyStatus(opLabel + " failed: " + message);
                     if (onOperationError != null) {
@@ -374,107 +452,118 @@ public class CashInOutPanel extends JPanel {
     }
 
     private void handleInteractiveSubmit() {
-        if (beforeInteractiveSubmit != null && !beforeInteractiveSubmit.getAsBoolean()) {
+        if (!submitInFlight.compareAndSet(false, true)) {
             return;
         }
-
-        String op = (String) cmbCashOperation.getSelectedItem();
-        String opLabel = "CASH_OUT".equals(op) ? "Cash Out" : "Cash In";
-        String selectedPmId = getSelectedPaymentMethodId();
-        String channel = (String) cmbCashChannel.getSelectedItem();
-        String amountText = txtCashAmount.getText() != null ? txtCashAmount.getText().trim() : "";
-        String note = txtCashNote.getText() != null ? txtCashNote.getText().trim() : "";
-        String pin = new String(txtCashPin.getPassword()).trim();
-
-        BigDecimal parsedAmount;
+        boolean dispatched = false;
         try {
-            if (amountText.isEmpty()) {
-                throw new IllegalArgumentException("Please enter a transaction amount.");
+            if (beforeInteractiveSubmit != null && !beforeInteractiveSubmit.getAsBoolean()) {
+                return;
             }
-            parsedAmount = MoneyUtil.validatePositiveAmount(MoneyUtil.parse(amountText));
-        } catch (RuntimeException ex) {
-            String msg = UiSupport.extractErrorMessage(ex);
-            showFeedback("Failed: " + msg, UiTheme.color(UiTheme.ColorRole.ERROR));
-            notifyStatus(opLabel + " validation failed: " + msg);
-            showMessage("Invalid Amount", msg, JOptionPane.ERROR_MESSAGE);
-            txtCashAmount.requestFocusInWindow();
-            return;
-        }
 
-        OtogConfig config = OtogConfig.getInstance();
-        if ("CASH_OUT".equals(op)) {
-            boolean pinSet = pinConfiguredSupplier == null || pinConfiguredSupplier.getAsBoolean();
-            if (authService != null && !pinSet) {
-                txtCashPin.setText("");
-                if (onPinNotSet != null) {
-                    onPinNotSet.run();
+            String op = (String) cmbCashOperation.getSelectedItem();
+            String opLabel = "CASH_OUT".equals(op) ? "Cash Out" : "Cash In";
+            String selectedPmId = getSelectedPaymentMethodId();
+            String channel = (String) cmbCashChannel.getSelectedItem();
+            String amountText = txtCashAmount.getText() != null ? txtCashAmount.getText().trim() : "";
+            String note = txtCashNote.getText() != null ? txtCashNote.getText().trim() : "";
+            String pin = new String(txtCashPin.getPassword()).trim();
+
+            BigDecimal parsedAmount;
+            try {
+                if (amountText.isEmpty()) {
+                    throw new IllegalArgumentException("Please enter a transaction amount.");
                 }
-                return;
-            }
-            if (pin.isEmpty()) {
-                String msg = "Please enter your " + config.getPinMinLength() + "-" + config.getPinMaxLength()
-                        + " digit Transaction PIN to authorize Cash Out.";
+                parsedAmount = MoneyUtil.validatePositiveAmount(MoneyUtil.parse(amountText));
+            } catch (RuntimeException ex) {
+                String msg = SwingUiSupport.extractErrorMessage(ex);
                 showFeedback("Failed: " + msg, UiTheme.color(UiTheme.ColorRole.ERROR));
-                showMessage("PIN Required", msg, JOptionPane.WARNING_MESSAGE);
-                txtCashPin.requestFocusInWindow();
+                notifyStatus(opLabel + " validation failed: " + msg);
+                showMessage("Invalid Amount", msg, JOptionPane.ERROR_MESSAGE);
+                txtCashAmount.requestFocusInWindow();
                 return;
             }
-        }
 
-        txtCashPin.setText("");
-        String methodSummary = selectedPmId != null
-                ? String.valueOf(cmbPaymentMethod.getSelectedItem())
-                : (channel != null ? channel : "OTOG Partner");
-        StringBuilder confirmMsg = new StringBuilder();
-        confirmMsg.append("Operation: ").append(opLabel).append("\n");
-        confirmMsg.append(selectedPmId != null ? "Account: " : "Channel: ").append(methodSummary).append("\n");
-        confirmMsg.append("Amount: ").append(MoneyUtil.format(parsedAmount, config.getDefaultCurrency()));
-        if (!note.isEmpty()) {
-            confirmMsg.append("\nNote: ").append(note);
-        }
-        int choice = confirmDialogCallback.show(
-                this,
-                "Confirm " + opLabel,
-                confirmMsg.toString(),
-                JOptionPane.OK_CANCEL_OPTION,
-                JOptionPane.QUESTION_MESSAGE
-        );
-        if (choice != JOptionPane.OK_OPTION) {
-            showFeedback(opLabel + " cancelled.", UiTheme.color(UiTheme.ColorRole.MUTED));
-            return;
-        }
-
-        submitCashOperationAsync(op, channel, selectedPmId, amountText, note, pin)
-                .whenComplete((txn, err) -> UiSupport.runOnEdt(() -> {
-                    boolean loggedOut = isLogoutHandledSupplier != null && isLogoutHandledSupplier.getAsBoolean();
-                    if (err != null) {
-                        if (!loggedOut) {
-                            Throwable cause = UiSupport.unwrapCause(err);
-                            showMessage(opLabel + " Failed", UiSupport.extractErrorMessage(cause),
-                                    JOptionPane.ERROR_MESSAGE);
-                        }
-                    } else if (txn != null) {
-                        if (txn.getStatus() == TransactionStatus.FAILED) {
-                            showMessage(opLabel + " Failed",
-                                    opLabel + " was rejected by provider.\nAmount: "
-                                            + MoneyUtil.format(txn.getAmount(), txn.getCurrency())
-                                            + "\nReference: " + txn.getReferenceNumber(),
-                                    JOptionPane.ERROR_MESSAGE);
-                        } else if (txn.getStatus() == TransactionStatus.PENDING) {
-                            showMessage(opLabel + " Pending",
-                                    opLabel + " is pending provider settlement.\nAmount: "
-                                            + MoneyUtil.format(txn.getAmount(), txn.getCurrency())
-                                            + "\nReference: " + txn.getReferenceNumber(),
-                                    JOptionPane.WARNING_MESSAGE);
-                        } else {
-                            showMessage(opLabel + " Complete",
-                                    opLabel + " successful!\nAmount: "
-                                            + MoneyUtil.format(txn.getAmount(), txn.getCurrency())
-                                            + "\nReference: " + txn.getReferenceNumber(),
-                                    JOptionPane.INFORMATION_MESSAGE);
-                        }
+            OtogConfig config = OtogConfig.getInstance();
+            if ("CASH_OUT".equals(op)) {
+                boolean pinSet = pinConfiguredSupplier == null || pinConfiguredSupplier.getAsBoolean();
+                if (authService != null && !pinSet) {
+                    txtCashPin.setText("");
+                    if (onPinNotSet != null) {
+                        onPinNotSet.run();
                     }
-                }));
+                    return;
+                }
+                if (pin.isEmpty()) {
+                    String msg = "Please enter your " + config.getPinMinLength() + "-" + config.getPinMaxLength()
+                            + " digit Transaction PIN to authorize Cash Out.";
+                    showFeedback("Failed: " + msg, UiTheme.color(UiTheme.ColorRole.ERROR));
+                    showMessage("PIN Required", msg, JOptionPane.WARNING_MESSAGE);
+                    txtCashPin.requestFocusInWindow();
+                    return;
+                }
+            }
+
+            txtCashPin.setText("");
+            String methodSummary = selectedPmId != null
+                    ? String.valueOf(cmbPaymentMethod.getSelectedItem())
+                    : (channel != null ? channel : "OTOG Partner");
+            StringBuilder confirmMsg = new StringBuilder();
+            confirmMsg.append("Operation: ").append(opLabel).append("\n");
+            confirmMsg.append(selectedPmId != null ? "Account: " : "Channel: ").append(methodSummary).append("\n");
+            confirmMsg.append("Amount: ").append(MoneyUtil.format(parsedAmount, config.getDefaultCurrency()));
+            if (!note.isEmpty()) {
+                confirmMsg.append("\nNote: ").append(note);
+            }
+            int choice = confirmDialogCallback.show(
+                    this,
+                    "Confirm " + opLabel,
+                    confirmMsg.toString(),
+                    JOptionPane.OK_CANCEL_OPTION,
+                    JOptionPane.QUESTION_MESSAGE
+            );
+            if (choice != JOptionPane.OK_OPTION) {
+                showFeedback(opLabel + " cancelled.", UiTheme.color(UiTheme.ColorRole.MUTED));
+                return;
+            }
+
+            dispatched = true;
+            submitCashOperationInternal(op, channel, selectedPmId, amountText, note, pin, true)
+                    .whenComplete((txn, err) -> SwingUiSupport.runOnEdt(() -> {
+                        boolean loggedOut = isLogoutHandledSupplier != null && isLogoutHandledSupplier.getAsBoolean();
+                        if (err != null) {
+                            if (!loggedOut) {
+                                Throwable cause = SwingUiSupport.unwrapCause(err);
+                                showMessage(opLabel + " Failed", SwingUiSupport.extractErrorMessage(cause),
+                                        JOptionPane.ERROR_MESSAGE);
+                            }
+                        } else if (txn != null) {
+                            if (txn.getStatus() == TransactionStatus.FAILED) {
+                                showMessage(opLabel + " Failed",
+                                        opLabel + " was rejected by provider.\nAmount: "
+                                                + MoneyUtil.format(txn.getAmount(), txn.getCurrency())
+                                                + "\nReference: " + txn.getReferenceNumber(),
+                                        JOptionPane.ERROR_MESSAGE);
+                            } else if (txn.getStatus() == TransactionStatus.PENDING) {
+                                showMessage(opLabel + " Pending",
+                                        opLabel + " is pending provider settlement.\nAmount: "
+                                                + MoneyUtil.format(txn.getAmount(), txn.getCurrency())
+                                                + "\nReference: " + txn.getReferenceNumber(),
+                                        JOptionPane.WARNING_MESSAGE);
+                            } else {
+                                showMessage(opLabel + " Complete",
+                                        opLabel + " successful!\nAmount: "
+                                                + MoneyUtil.format(txn.getAmount(), txn.getCurrency())
+                                                + "\nReference: " + txn.getReferenceNumber(),
+                                        JOptionPane.INFORMATION_MESSAGE);
+                            }
+                        }
+                    }));
+        } finally {
+            if (!dispatched) {
+                submitInFlight.set(false);
+            }
+        }
     }
 
     private void showMessage(String title, String message, int messageType) {
@@ -553,9 +642,6 @@ public class CashInOutPanel extends JPanel {
         txtCashAmount = new JTextField(20);
         txtCashNote = new JTextField(20);
         txtCashPin = new JPasswordField(20);
-        txtCashPin.setEnabled(false);
-        txtCashPin.setToolTipText("Required for Cash Out transactions ("
-                + config.getPinMinLength() + "-" + config.getPinMaxLength() + " digit PIN)");
 
         addRow(pnlForm, 0, "Operation:", cmbCashOperation);
         addRow(pnlForm, 1, "Linked Bank Account:", cmbPaymentMethod);
@@ -574,7 +660,6 @@ public class CashInOutPanel extends JPanel {
                 null, null, null, 0, false));
 
         btnSubmitCashOp = new JButton("Submit Cash Transaction");
-        UiTheme.stylePrimaryButton(btnSubmitCashOp);
         pnlActions.add(btnSubmitCashOp, new GridConstraints(0, 0, 1, 1,
                 GridConstraints.ANCHOR_CENTER, GridConstraints.FILL_HORIZONTAL,
                 GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_CAN_GROW,
@@ -582,7 +667,6 @@ public class CashInOutPanel extends JPanel {
                 null, null, null, 0, false));
 
         btnCashBackToOverview = new JButton("\u2190 Back to Overview");
-        UiTheme.styleSecondaryButton(btnCashBackToOverview);
         pnlActions.add(btnCashBackToOverview, new GridConstraints(0, 1, 1, 1,
                 GridConstraints.ANCHOR_CENTER, GridConstraints.FILL_HORIZONTAL,
                 GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_CAN_GROW,
@@ -595,7 +679,6 @@ public class CashInOutPanel extends JPanel {
                 null, null, null, 0, false));
 
         lblCashFeedback = new JLabel(" ");
-        lblCashFeedback.setFont(UiTheme.font(UiTheme.FontRole.LABEL));
         pnlForm.add(lblCashFeedback, new GridConstraints(8, 0, 1, 2,
                 GridConstraints.ANCHOR_WEST, GridConstraints.FILL_HORIZONTAL,
                 GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_CAN_GROW,
@@ -611,7 +694,6 @@ public class CashInOutPanel extends JPanel {
     private static void addRow(JPanel panel, int row, String labelText, JComponent field) {
         JLabel label = new JLabel(labelText);
         UiTheme.styleFormLabel(label);
-        UiTheme.styleInputField(field);
         panel.add(label, new GridConstraints(row, 0, 1, 1,
                 GridConstraints.ANCHOR_WEST, GridConstraints.FILL_NONE,
                 GridConstraints.SIZEPOLICY_FIXED, GridConstraints.SIZEPOLICY_FIXED,

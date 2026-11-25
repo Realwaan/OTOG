@@ -218,17 +218,23 @@ public final class UiTheme {
         }
     }
 
+    private static final DefaultTableCellRenderer RIGHT_ALIGNED_CELL_RENDERER = createRightAlignedRenderer();
+
+    private static DefaultTableCellRenderer createRightAlignedRenderer() {
+        DefaultTableCellRenderer renderer = new DefaultTableCellRenderer();
+        renderer.setHorizontalAlignment(SwingConstants.RIGHT);
+        return renderer;
+    }
+
     public static void alignTableColumnsRight(JTable table, int... columnIndices) {
         if (table == null || columnIndices == null || columnIndices.length == 0) {
             return;
         }
-        DefaultTableCellRenderer rightRenderer = new DefaultTableCellRenderer();
-        rightRenderer.setHorizontalAlignment(SwingConstants.RIGHT);
         TableColumnModel columnModel = table.getColumnModel();
         int columnCount = columnModel.getColumnCount();
         for (int index : columnIndices) {
             if (index >= 0 && index < columnCount) {
-                columnModel.getColumn(index).setCellRenderer(rightRenderer);
+                columnModel.getColumn(index).setCellRenderer(RIGHT_ALIGNED_CELL_RENDERER);
             }
         }
     }

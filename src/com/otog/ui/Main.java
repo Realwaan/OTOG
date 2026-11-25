@@ -27,13 +27,10 @@ import com.otog.service.WalletOperations;
 import com.otog.service.WalletService;
 import com.otog.util.MoneyUtil;
 import com.otog.util.OtogConfig;
+import com.otog.util.SwingUiSupport;
 import com.otog.util.UiTheme;
 
 import javax.swing.*;
-import javax.swing.event.DocumentEvent;
-import javax.swing.event.DocumentListener;
-import javax.swing.filechooser.FileNameExtensionFilter;
-import javax.swing.table.DefaultTableModel;
 import java.awt.*;
 import java.nio.file.Path;
 import java.util.ArrayDeque;
@@ -96,53 +93,9 @@ public class Main extends JFrame {
     private OverviewPanel overviewPanel;
     private CashInOutPanel cashInOutPanel;
     private SendMoneyPanel sendMoneyPanel;
+    private PayBillsPanel payBillsPanel;
     private InvestmentPanel investmentPanel;
     private AdminControlsPanel adminControlsPanel;
-    private final StatementFileService statementFileService = new StatementFileService();
-
-    private JButton btnNavCashIn;
-    private JButton btnNavCashOut;
-    private JButton btnNavSendMoney;
-    private JButton btnNavPayBills;
-    private JButton btnNavInvest;
-    private JButton btnNavPinSettings;
-    private JButton btnExportStatement;
-    private JButton btnLoadStatement;
-
-    private JComboBox<String> cmbFilterType;
-    private JComboBox<String> cmbFilterStatus;
-    private JTextField txtFilterFromDate;
-    private JTextField txtFilterToDate;
-    private JButton btnApplyFilters;
-    private JButton btnClearFilters;
-
-    private CardLayout activityCardLayout;
-    private JPanel activityCardPanel;
-    private JLabel lblLoadingState;
-    private JLabel lblEmptyState;
-    private JLabel lblErrorState;
-    private JButton btnRetryLoad;
-    private DefaultTableModel transactionsTableModel;
-    private JTable tblTransactions;
-    private JButton btnViewReceipt;
-    private JButton btnExportReceipt;
-    private JButton btnCheckStatus;
-    private JButton btnRepeatDraft;
-    private JLabel lblActivityFeedback;
-
-    private PayBillsPanel payBillsPanel;
-    private AdminControlsPanel adminControlsPanel;
-
-    private JComboBox<String> cmbInvestOperation;
-    private JTextField txtInvestUnits;
-    private JTextField txtInvestAmount;
-    private JPasswordField txtInvestPin;
-    private JLabel lblInvestPreviewSummary;
-    private JButton btnPreviewInvest;
-    private JButton btnSubmitInvest;
-    private JButton btnInvestBackToOverview;
-    private JLabel lblInvestFeedback;
-    private boolean updatingInvestmentInputs;
 
     private Timer sessionMonitorTimer;
     private volatile DashboardState currentState = DashboardState.LOADING;
@@ -223,6 +176,8 @@ public class Main extends JFrame {
         setMinimumSize(config.getUiDimension("ui.dashboard.min.width", "ui.dashboard.min.height", 840, 560));
         setLocationRelativeTo(null);
 
+        applyShellStyling();
+
         btnBack.setToolTipText("Return to the previously viewed tab");
         btnBack.setEnabled(false);
         btnBack.addActionListener(e -> navigateBack());
@@ -243,6 +198,46 @@ public class Main extends JFrame {
         buildTabsPanel();
         setContentPane(pnlRoot);
         applyInitialSessionSnapshot();
+    }
+
+    /**
+     * Applies shell typography, divider borders, and button styles outside {@code $$$setupUI$$$()}
+     * so IntelliJ GUI Designer bytecode instrumentation preserves consistent theming.
+     */
+    private void applyShellStyling() {
+        if (pnlHeader != null) {
+            pnlHeader.setBorder(UiTheme.bottomDividerBorder());
+        }
+        if (pnlFooter != null) {
+            pnlFooter.setBorder(UiTheme.topDividerBorder());
+        }
+        if (lblWelcome != null) {
+            lblWelcome.setFont(UiTheme.font(UiTheme.FontRole.BANNER));
+        }
+        if (lblWalletId != null) {
+            lblWalletId.setFont(UiTheme.font(UiTheme.FontRole.LABEL));
+            lblWalletId.setForeground(UiTheme.color(UiTheme.ColorRole.MUTED));
+        }
+        if (lblPinStatus != null) {
+            lblPinStatus.setFont(UiTheme.font(UiTheme.FontRole.SMALL));
+            lblPinStatus.setForeground(UiTheme.color(UiTheme.ColorRole.MUTED));
+        }
+        if (lblBalance != null) {
+            lblBalance.setFont(UiTheme.font(UiTheme.FontRole.BALANCE));
+            lblBalance.setForeground(UiTheme.color(UiTheme.ColorRole.SUCCESS));
+        }
+        if (lblStatus != null) {
+            lblStatus.setFont(UiTheme.font(UiTheme.FontRole.SMALL));
+            lblStatus.setForeground(UiTheme.color(UiTheme.ColorRole.MUTED));
+        }
+        if (tabs != null) {
+            tabs.setFont(UiTheme.font(UiTheme.FontRole.LABEL_BOLD));
+        }
+        UiTheme.styleSecondaryButton(btnBack);
+        UiTheme.styleSecondaryButton(btnRefresh);
+        UiTheme.styleSecondaryButton(btnNotifications);
+        UiTheme.styleSecondaryButton(btnPinSettings);
+        UiTheme.styleSecondaryButton(btnLogout);
     }
 
     private JTabbedPane buildTabsPanel() {
@@ -269,7 +264,7 @@ public class Main extends JFrame {
             registerTab("Loans", buildServiceReadyNotice("Loans module active"));
         }
         if (investmentService != null) {
-            investmentPanel = new InvestmentPanel();
+            investmentPanel = new InvestmentPanel(walletService, investmentService, authService);
             wireInvestmentPanel();
             registerTab("Investments", investmentPanel);
         }
@@ -294,38 +289,9 @@ public class Main extends JFrame {
     }
 
     private void wireOverviewPanel() {
-        btnNavCashIn = overviewPanel.getNavCashInButton();
-        btnNavCashOut = overviewPanel.getNavCashOutButton();
-        btnNavSendMoney = overviewPanel.getNavSendMoneyButton();
-        btnNavPayBills = overviewPanel.getNavPayBillsButton();
-        btnNavInvest = overviewPanel.getNavInvestButton();
-        btnNavPinSettings = overviewPanel.getNavPinSettingsButton();
-        btnExportStatement = overviewPanel.getExportStatementButton();
-        btnLoadStatement = overviewPanel.getLoadStatementButton();
-
-        cmbFilterType = overviewPanel.getFilterTypeComboBox();
-        cmbFilterStatus = overviewPanel.getFilterStatusComboBox();
-        txtFilterFromDate = overviewPanel.getFilterFromDateField();
-        txtFilterToDate = overviewPanel.getFilterToDateField();
-        btnApplyFilters = overviewPanel.getApplyFiltersButton();
-        btnClearFilters = overviewPanel.getClearFiltersButton();
-
-        activityCardLayout = overviewPanel.getActivityCardLayout();
-        activityCardPanel = overviewPanel.getActivityCardPanel();
-        lblLoadingState = overviewPanel.getLoadingStateLabel();
-        lblEmptyState = overviewPanel.getEmptyStateLabel();
-        lblErrorState = overviewPanel.getErrorStateLabel();
-        btnRetryLoad = overviewPanel.getRetryLoadButton();
-        transactionsTableModel = overviewPanel.getTransactionsTableModel();
-        tblTransactions = overviewPanel.getTransactionsTable();
-        btnCheckStatus = overviewPanel.getCheckStatusButton();
-        btnRepeatDraft = overviewPanel.getRepeatDraftButton();
-        btnViewReceipt = overviewPanel.getViewReceiptButton();
-        btnExportReceipt = overviewPanel.getExportReceiptButton();
-        lblActivityFeedback = overviewPanel.getActivityFeedbackLabel();
-
-        btnNavCashIn.addActionListener(e -> {
-            cmbCashOperation.setSelectedItem("CASH_IN");
+        overviewPanel.setPinSettingsEnabled(authService != null);
+        overviewPanel.setInvestmentsEnabled(investmentService != null);
+        overviewPanel.setOnQuickNavCashIn(() -> {
             navigateToTab("Cash In / Out");
             cashInOutPanel.prepareForOperation("CASH_IN");
         });
@@ -337,43 +303,15 @@ public class Main extends JFrame {
             navigateToTab("Send Money");
             sendMoneyPanel.focusRecipient();
         });
-
-        if (btnNavPayBills != null) {
-            btnNavPayBills.addActionListener(e -> {
-                navigateToTab("Pay Bills");
-                if (payBillsPanel != null) {
-                    payBillsPanel.getBillReferenceField().requestFocusInWindow();
-                }
-            });
-        }
-
-        if (btnNavInvest != null) {
-            btnNavInvest.setVisible(investmentService != null);
-            btnNavInvest.addActionListener(e -> {
-                if (navigateToTab("Investments") && txtInvestUnits != null) {
-                    txtInvestUnits.requestFocusInWindow();
-                }
-            });
-        }
-
-        btnNavPinSettings.setEnabled(authService != null);
-        btnNavPinSettings.addActionListener(e -> openPinSettingsDialog());
-
-        btnExportStatement.addActionListener(e -> handleInteractiveExportStatement());
-        btnLoadStatement.addActionListener(e -> handleInteractiveLoadStatement());
-
-        btnRetryLoad.addActionListener(e -> handleInteractiveRefresh());
-        tblTransactions.addMouseListener(new MouseAdapter() {
-            @Override
-            public void mouseClicked(MouseEvent e) {
-                if (e.getClickCount() == 2 && tblTransactions.getSelectedRow() >= 0) {
-                    showSelectedReceipt();
-                }
+        overviewPanel.setOnQuickNavPayBills(() -> {
+            navigateToTab("Pay Bills");
+            if (payBillsPanel != null) {
+                payBillsPanel.getBillReferenceField().requestFocusInWindow();
             }
         });
-        tblTransactions.getSelectionModel().addListSelectionListener(e -> {
-            if (!e.getValueIsAdjusting()) {
-                updateTableActionButtonsState();
+        overviewPanel.setOnQuickNavInvest(() -> {
+            if (navigateToTab("Investments") && investmentPanel != null) {
+                investmentPanel.focusUnits();
             }
         });
         overviewPanel.setOnQuickNavPinSettings(this::openPinSettingsDialog);
@@ -381,9 +319,11 @@ public class Main extends JFrame {
         overviewPanel.setOnRetryLoad(this::handleInteractiveRefresh);
         overviewPanel.setOnRefreshRequested(this::refreshDashboardAsync);
         overviewPanel.setOnStatusMessage(lblStatus::setText);
+        overviewPanel.setOnOperationError(this::checkSessionTerminatedOnError);
         overviewPanel.setOnStatusLookupFeedback((msg, color) -> cashInOutPanel.showFeedback(msg, color));
         overviewPanel.setOnRepeatDraftReady(this::applyRepeatDraftToUi);
         overviewPanel.setDialogMessageCallback(this::showDialogMessage);
+        overviewPanel.setComponentMessageCallback(this::showComponentDialogMessage);
     }
 
     private void wireCashInOutPanel() {
@@ -417,120 +357,21 @@ public class Main extends JFrame {
     }
 
     private void wireInvestmentPanel() {
-        cmbInvestOperation = investmentPanel.getOperationComboBox();
-        txtInvestUnits = investmentPanel.getUnitsField();
-        txtInvestAmount = investmentPanel.getAmountField();
-        txtInvestPin = investmentPanel.getPinField();
-        lblInvestPreviewSummary = investmentPanel.getPreviewSummaryLabel();
-        btnPreviewInvest = investmentPanel.getPreviewButton();
-        btnSubmitInvest = investmentPanel.getSubmitButton();
-        btnInvestBackToOverview = investmentPanel.getBackToOverviewButton();
-        lblInvestFeedback = investmentPanel.getFeedbackLabel();
-
-        cmbInvestOperation.addActionListener(e -> {
-            boolean isBuy = "BUY".equals(cmbInvestOperation.getSelectedItem());
-            txtInvestAmount.setEnabled(isBuy);
-            if (!isBuy) {
-                setInvestmentInputTexts(txtInvestUnits.getText(), "");
-            }
-            resetInvestPreviewSummary(isBuy);
-        });
-
-        txtInvestUnits.getDocument().addDocumentListener(new DocumentListener() {
-            private void onUnitsEdited() {
-                if (updatingInvestmentInputs) {
-                    return;
-                }
-                if (txtInvestUnits.getText() != null && !txtInvestUnits.getText().isEmpty()
-                        && txtInvestAmount.getText() != null && !txtInvestAmount.getText().isEmpty()) {
-                    updatingInvestmentInputs = true;
-                    try {
-                        txtInvestAmount.setText("");
-                    } finally {
-                        updatingInvestmentInputs = false;
-                    }
-                }
-            }
-
-            @Override
-            public void insertUpdate(DocumentEvent e) {
-                onUnitsEdited();
-            }
-
-            @Override
-            public void removeUpdate(DocumentEvent e) {
-                onUnitsEdited();
-            }
-
-            @Override
-            public void changedUpdate(DocumentEvent e) {
-                onUnitsEdited();
-            }
-        });
-
-        txtInvestAmount.getDocument().addDocumentListener(new DocumentListener() {
-            private void onAmountEdited() {
-                if (updatingInvestmentInputs) {
-                    return;
-                }
-                if (txtInvestAmount.getText() != null && !txtInvestAmount.getText().isEmpty()
-                        && txtInvestUnits.getText() != null && !txtInvestUnits.getText().isEmpty()) {
-                    updatingInvestmentInputs = true;
-                    try {
-                        txtInvestUnits.setText("");
-                    } finally {
-                        updatingInvestmentInputs = false;
-                    }
-                }
-            }
-
-            @Override
-            public void insertUpdate(DocumentEvent e) {
-                onAmountEdited();
-            }
-
-            @Override
-            public void removeUpdate(DocumentEvent e) {
-                onAmountEdited();
-            }
-
-            @Override
-            public void changedUpdate(DocumentEvent e) {
-                onAmountEdited();
-            }
-        });
-
-        btnInvestBackToOverview.addActionListener(e -> navigateToTab("Overview"));
-        btnPreviewInvest.addActionListener(e -> handleInteractiveInvestPreview());
-        btnSubmitInvest.addActionListener(e -> handleInteractiveInvestSubmit());
-        txtInvestUnits.addActionListener(e -> handleInteractiveInvestPreview());
-        txtInvestAmount.addActionListener(e -> handleInteractiveInvestPreview());
-        txtInvestPin.addActionListener(e -> handleInteractiveInvestSubmit());
-    }
-
-    private void setInvestmentInputTexts(String units, String amount) {
-        updatingInvestmentInputs = true;
-        try {
-            if (txtInvestUnits != null && units != null) {
-                txtInvestUnits.setText(units);
-            }
-            if (txtInvestAmount != null && amount != null) {
-                txtInvestAmount.setText(amount);
-            }
-        } finally {
-            updatingInvestmentInputs = false;
-        }
-    }
-
-    private void resetInvestPreviewSummary(boolean isBuy) {
-        if (lblInvestPreviewSummary == null) {
+        if (investmentPanel == null) {
             return;
         }
-        String defaultCurrency = OtogConfig.getInstance().getDefaultCurrency();
-        lblInvestPreviewSummary.setForeground(UiTheme.color(UiTheme.ColorRole.INFO));
-        lblInvestPreviewSummary.setText(isBuy
-                ? "Enter units or " + defaultCurrency + " amount, then click Preview Units & Cost."
-                : "Enter units to redeem, then click Preview Units & Cost.");
+        investmentPanel.setOnBackToOverview(() -> navigateToTab("Overview"));
+        investmentPanel.setBeforeInteractiveSubmit(this::ensureActiveSessionForInteraction);
+        investmentPanel.setPinConfiguredSupplier(() -> cachedHasPin);
+        investmentPanel.setOnPinNotSet(() ->
+                promptPinSetupIfMissing("A Transaction PIN is required before buying or redeeming simulated investments."));
+        investmentPanel.setIsLogoutHandledSupplier(() -> logoutHandled);
+        investmentPanel.setDialogMessageCallback(this::showDialogMessage);
+        investmentPanel.setConfirmDialogCallback(this::showConfirmDialog);
+        investmentPanel.setOnStatusMessage(lblStatus::setText);
+        investmentPanel.setOffEdtObserver(offEdt -> lastPaymentExecutedOffEdt = offEdt);
+        investmentPanel.setOnRefreshRequested(this::refreshDashboardAsync);
+        investmentPanel.setOnOperationError(this::checkSessionTerminatedOnError);
     }
 
     private void wirePayBillsPanel() {
@@ -556,7 +397,7 @@ public class Main extends JFrame {
                 lblStatus.setText(billStatusText);
                 lastPayBillsRefreshFuture = refreshDashboardAsync().whenComplete((v, err) -> {
                     if (currentState != DashboardState.ERROR) {
-                        UiSupport.runOnEdt(() -> lblStatus.setText(billStatusText));
+                        SwingUiSupport.runOnEdt(() -> lblStatus.setText(billStatusText));
                     }
                 });
             } else {
@@ -564,7 +405,7 @@ public class Main extends JFrame {
             }
         });
         payBillsPanel.setOnPaymentError(err -> {
-            String msg = UiSupport.extractErrorMessage(err);
+            String msg = SwingUiSupport.extractErrorMessage(err);
             lblStatus.setText("Bill payment failed: " + msg);
             checkSessionTerminatedOnError(msg);
         });
@@ -680,7 +521,7 @@ public class Main extends JFrame {
         }
         this.currentState = DashboardState.LOADING;
 
-        UiSupport.runOnEdt(() -> {
+        SwingUiSupport.runOnEdt(() -> {
             String loadingMessage = "Loading wallet balance and recent activity...";
             overviewPanel.showLoadingState(loadingMessage);
             lblStatus.setText(loadingMessage);
@@ -729,13 +570,14 @@ public class Main extends JFrame {
                     DashboardSnapshot snapshot = get();
                     updateHeaderFromSession(snapshot.user, snapshot.wallet, snapshot.hasPin);
                     updateNotificationsBadge(snapshot.unreadNotifications);
-                    populatePaymentMethodsCombo(snapshot.paymentMethods);
-                    populateTransactionsTable(snapshot.wallet.getWalletId(), snapshot.transactions);
+                    cashInOutPanel.populatePaymentMethods(snapshot.paymentMethods);
+                    overviewPanel.populateTransactions(snapshot.wallet.getWalletId(), snapshot.transactions);
                     if (investmentPanel != null) {
                         investmentPanel.updateProductAndHoldings(snapshot.investProduct, snapshot.investHolding);
                         investmentPanel.updateActivityTable(snapshot.investActivities);
                     }
-                    boolean filtered = activeHistoryFilter != null && !activeHistoryFilter.isEmpty();
+                    TransactionFilter activeFilter = overviewPanel.getActiveHistoryFilter();
+                    boolean filtered = activeFilter != null && !activeFilter.isEmpty();
                     if (snapshot.transactions.isEmpty()) {
                         currentState = DashboardState.EMPTY;
                         overviewPanel.showEmptyState(filtered);
@@ -750,8 +592,8 @@ public class Main extends JFrame {
                                 : "Ready \u2014 showing " + snapshot.transactions.size() + " recent transaction(s)");
                     }
                 } catch (Exception ex) {
-                    Throwable cause = UiSupport.unwrapCause(ex);
-                    String message = UiSupport.extractErrorMessage(cause);
+                    Throwable cause = SwingUiSupport.unwrapCause(ex);
+                    String message = SwingUiSupport.extractErrorMessage(cause);
                     currentState = DashboardState.ERROR;
                     overviewPanel.showErrorState(message);
                     lblStatus.setText("Error loading dashboard: " + message);
@@ -821,6 +663,26 @@ public class Main extends JFrame {
         return sendMoneyPanel.submitSendMoneyAsync(recipient, amountText, note, rawPin);
     }
 
+    public CompletableFuture<InvestmentService.InvestmentPreview> previewInvestmentAsync(
+            String operation, String unitsText, String amountText) {
+        if (investmentPanel == null) {
+            CompletableFuture<InvestmentService.InvestmentPreview> failed = new CompletableFuture<>();
+            failed.completeExceptionally(new IllegalStateException("InvestmentService is not enabled."));
+            return failed;
+        }
+        return investmentPanel.previewInvestmentAsync(operation, unitsText, amountText);
+    }
+
+    public CompletableFuture<InvestMoneyTransaction> submitInvestmentAsync(
+            String operation, String unitsText, String amountText, String rawPin) {
+        if (investmentPanel == null) {
+            CompletableFuture<InvestMoneyTransaction> failed = new CompletableFuture<>();
+            failed.completeExceptionally(new IllegalStateException("InvestmentService is not enabled."));
+            return failed;
+        }
+        return investmentPanel.submitInvestmentAsync(operation, unitsText, amountText, rawPin);
+    }
+
     public CompletableFuture<Transaction> submitStatusLookupAsync(String referenceNumber) {
         return overviewPanel.submitStatusLookupAsync(referenceNumber);
     }
@@ -874,7 +736,7 @@ public class Main extends JFrame {
         if (!ensureActiveSessionForInteraction()) {
             return;
         }
-        refreshDashboardAsync().whenComplete((v, err) -> UiSupport.runOnEdt(() -> {
+        refreshDashboardAsync().whenComplete((v, err) -> SwingUiSupport.runOnEdt(() -> {
             if (!logoutHandled && currentState == DashboardState.ERROR) {
                 JLabel errorLabel = overviewPanel.getErrorStateLabel();
                 String msg = errorLabel != null ? errorLabel.getText() : "Unable to load wallet data.";
@@ -893,495 +755,6 @@ public class Main extends JFrame {
         );
         if (choice == JOptionPane.YES_OPTION) {
             openPinSettingsDialog();
-        }
-    }
-
-    public CompletableFuture<Transaction> submitStatusLookupAsync(String referenceNumber) {
-        CompletableFuture<Transaction> future = new CompletableFuture<>();
-        runOnEdt(() -> {
-            if (btnCheckStatus != null) {
-                btnCheckStatus.setEnabled(false);
-            }
-            lblStatus.setText("Checking bank status for " + referenceNumber + "...");
-        });
-
-        SwingWorker<Transaction, Void> worker = new SwingWorker<>() {
-            @Override
-            protected Transaction doInBackground() {
-                SessionManager.getInstance().requireAuthentication();
-                return walletService.statusLookup(referenceNumber);
-            }
-
-            @Override
-            protected void done() {
-                updateTableActionButtonsState();
-                try {
-                    Transaction txn = get();
-                    String provRef = txn.getProviderReference() != null ? " | Bank Ref: " + txn.getProviderReference() : "";
-                    String provStatus = txn.getProviderStatus() != null ? " [" + txn.getProviderStatus() + "]" : "";
-                    Color color;
-                    String msg;
-                    if (txn.getStatus() == TransactionStatus.COMPLETED) {
-                        color = UiTheme.color(UiTheme.ColorRole.SUCCESS);
-                        msg = "Status lookup settled COMPLETED: "
-                                + txn.getReferenceNumber() + provRef + provStatus;
-                    } else if (txn.getStatus() == TransactionStatus.FAILED) {
-                        color = UiTheme.color(UiTheme.ColorRole.ERROR);
-                        msg = "Status lookup confirmed FAILED: "
-                                + txn.getReferenceNumber() + provRef + provStatus;
-                    } else {
-                        color = UiTheme.color(UiTheme.ColorRole.WARNING);
-                        msg = "Status lookup remains PENDING: "
-                                + txn.getReferenceNumber() + provRef + provStatus;
-                    }
-                    lblCashFeedback.setForeground(color);
-                    lblCashFeedback.setText(msg);
-                    if (lblActivityFeedback != null) {
-                        lblActivityFeedback.setForeground(color);
-                        lblActivityFeedback.setText(msg);
-                    }
-                    String syncStatusText = "Status sync: " + txn.getStatus() + provStatus;
-                    lblStatus.setText(syncStatusText);
-                    refreshDashboardAsync().whenComplete((v, err) -> {
-                        runOnEdt(() -> lblStatus.setText(syncStatusText));
-                        future.complete(txn);
-                    });
-                } catch (Exception ex) {
-                    Throwable cause = unwrapCause(ex);
-                    String message = (cause.getMessage() != null && !cause.getMessage().trim().isEmpty())
-                            ? cause.getMessage()
-                            : cause.getClass().getSimpleName();
-                    if (lblActivityFeedback != null) {
-                        lblActivityFeedback.setForeground(UiTheme.color(UiTheme.ColorRole.ERROR));
-                        lblActivityFeedback.setText("Status lookup failed: " + message);
-                    }
-                    lblStatus.setText("Status lookup failed: " + message);
-                    future.completeExceptionally(cause);
-                }
-            }
-        };
-        worker.execute();
-        return future;
-    }
-
-    public CompletableFuture<Transaction> submitSendMoneyAsync(String recipient, String amountText, String note) {
-        return submitSendMoneyAsync(recipient, amountText, note, null);
-    }
-
-    public CompletableFuture<Transaction> submitSendMoneyAsync(String recipient, String amountText,
-                                                              String note, String rawPin) {
-        return executeSendMoneyAsync(null, recipient, amountText, note, rawPin);
-    }
-
-    private CompletableFuture<Transaction> executeSendMoneyAsync(String explicitReference, String recipient,
-                                                               String amountText, String note, String rawPin) {
-        CompletableFuture<Transaction> future = new CompletableFuture<>();
-
-        runOnEdt(() -> {
-            btnSubmitSendMoney.setEnabled(false);
-            lblSendFeedback.setForeground(UiTheme.color(UiTheme.ColorRole.INFO));
-            lblSendFeedback.setText("Sending money...");
-            lblStatus.setText("Processing transfer...");
-        });
-
-        SwingWorker<Transaction, Void> worker = new SwingWorker<>() {
-            @Override
-            protected Transaction doInBackground() {
-                lastPaymentExecutedOffEdt = !SwingUtilities.isEventDispatchThread();
-                SessionManager session = SessionManager.getInstance();
-                session.requireAuthentication();
-                User user = session.getCurrentUser();
-                Wallet wallet = session.getCurrentWallet();
-                if (wallet == null) {
-                    wallet = session.refreshWallet(walletService);
-                }
-
-                if (recipient == null || recipient.trim().isEmpty()) {
-                    throw new IllegalArgumentException("Recipient identifier is required.");
-                }
-                BigDecimal amount = MoneyUtil.validatePositiveAmount(MoneyUtil.parse(amountText));
-                String ref = (explicitReference != null && !explicitReference.trim().isEmpty())
-                        ? explicitReference.trim()
-                        : IdGenerator.nextReferenceNumber();
-                String cleanPin = rawPin != null ? rawPin.trim() : "";
-                if (!cleanPin.isEmpty()) {
-                    if (authService != null && user != null) {
-                        verifyPinOrThrow(user.getUserId(), cleanPin);
-                        return walletService.sendMoneyToRecipient(
-                                ref, wallet.getWalletId(), recipient.trim(), amount, MoneyUtil.ZERO, note);
-                    }
-                    return walletService.sendMoneyToRecipientWithPin(
-                            ref, wallet.getWalletId(), recipient.trim(), amount, MoneyUtil.ZERO, note, cleanPin);
-                }
-                return walletService.sendMoneyToRecipient(
-                        ref, wallet.getWalletId(), recipient.trim(), amount, MoneyUtil.ZERO, note);
-            }
-
-            @Override
-            protected void done() {
-                btnSubmitSendMoney.setEnabled(true);
-                try {
-                    Transaction txn = get();
-                    txtSendAmount.setText("");
-                    txtSendNote.setText("");
-                    lblSendFeedback.setForeground(UiTheme.color(UiTheme.ColorRole.SUCCESS));
-                    lblSendFeedback.setText("Transfer successful: "
-                            + MoneyUtil.format(txn.getAmount(), txn.getCurrency())
-                            + " (Ref: " + txn.getReferenceNumber() + ")");
-                    refreshDashboardAsync().whenComplete((v, err) -> future.complete(txn));
-                } catch (Exception ex) {
-                    Throwable cause = unwrapCause(ex);
-                    String message = extractErrorMessage(cause);
-                    lblSendFeedback.setForeground(UiTheme.color(UiTheme.ColorRole.ERROR));
-                    lblSendFeedback.setText("Transfer failed: " + message);
-                    lblStatus.setText("Transfer failed: " + message);
-                    checkSessionTerminatedOnError(message);
-                    future.completeExceptionally(cause);
-                }
-            }
-        };
-        worker.execute();
-        return future;
-    }
-
-    public CompletableFuture<InvestmentService.InvestmentPreview> previewInvestmentAsync(
-            String operation, String unitsText, String amountText) {
-        CompletableFuture<InvestmentService.InvestmentPreview> future = new CompletableFuture<>();
-        if (investmentService == null) {
-            future.completeExceptionally(new IllegalStateException("InvestmentService is not enabled."));
-            return future;
-        }
-        String rawOp = operation != null ? operation.trim().toUpperCase(Locale.ROOT) : "";
-
-        runOnEdt(() -> {
-            if (btnPreviewInvest != null) {
-                btnPreviewInvest.setEnabled(false);
-            }
-            if (lblInvestPreviewSummary != null) {
-                lblInvestPreviewSummary.setForeground(UiTheme.color(UiTheme.ColorRole.INFO));
-                lblInvestPreviewSummary.setText("Calculating preview...");
-            }
-        });
-
-        new SwingWorker<InvestmentService.InvestmentPreview, Void>() {
-            @Override
-            protected InvestmentService.InvestmentPreview doInBackground() {
-                String op = requireValidInvestmentOperation(rawOp);
-                SessionManager session = SessionManager.getInstance();
-                session.requireAuthentication();
-                Wallet wallet = session.getCurrentWallet();
-                if (wallet == null) {
-                    wallet = session.refreshWallet(walletService);
-                }
-                BigDecimal units = parseOptionalDecimal(unitsText);
-                BigDecimal amount = parseOptionalDecimal(amountText);
-                if ("REDEEM".equals(op)) {
-                    return investmentService.previewRedeem(wallet.getWalletId(), units);
-                }
-                return investmentService.previewBuy(wallet.getWalletId(), units, amount);
-            }
-
-            @Override
-            protected void done() {
-                if (btnPreviewInvest != null) {
-                    btnPreviewInvest.setEnabled(true);
-                }
-                try {
-                    InvestmentService.InvestmentPreview preview = get();
-                    setInvestmentInputTexts(
-                            preview.getUnits().toPlainString(),
-                            "BUY".equals(preview.getOperation()) ? preview.getTotalAmount().toPlainString() : null
-                    );
-                    if (lblInvestPreviewSummary != null) {
-                        lblInvestPreviewSummary.setForeground(UiTheme.color(UiTheme.ColorRole.PRIMARY));
-                        lblInvestPreviewSummary.setText(preview.getOperation() + " " + preview.getUnits().toPlainString()
-                                + " units @ " + MoneyUtil.format(preview.getSimulatedUnitPrice(), preview.getCurrency())
-                                + " [SIMULATED] = " + MoneyUtil.format(preview.getTotalAmount(), preview.getCurrency())
-                                + " (Projected holdings: " + preview.getProjectedHoldingUnits().toPlainString() + " units)");
-                    }
-                    if (lblInvestFeedback != null) {
-                        lblInvestFeedback.setForeground(UiTheme.color(UiTheme.ColorRole.INFO));
-                        lblInvestFeedback.setText("Preview ready — review units and cost, then click Confirm Investment.");
-                    }
-                    future.complete(preview);
-                } catch (Exception ex) {
-                    Throwable cause = unwrapCause(ex);
-                    String message = extractErrorMessage(cause);
-                    if (lblInvestPreviewSummary != null) {
-                        lblInvestPreviewSummary.setForeground(UiTheme.color(UiTheme.ColorRole.ERROR));
-                        lblInvestPreviewSummary.setText("Preview failed: " + message);
-                    }
-                    if (lblInvestFeedback != null) {
-                        lblInvestFeedback.setForeground(UiTheme.color(UiTheme.ColorRole.ERROR));
-                        lblInvestFeedback.setText("Preview failed: " + message);
-                    }
-                    checkSessionTerminatedOnError(message);
-                    future.completeExceptionally(cause);
-                }
-            }
-        }.execute();
-        return future;
-    }
-
-    public CompletableFuture<InvestMoneyTransaction> submitInvestmentAsync(
-            String operation, String unitsText, String amountText, String rawPin) {
-        return executeInvestmentAsync(null, operation, unitsText, amountText, rawPin);
-    }
-
-    private CompletableFuture<InvestMoneyTransaction> executeInvestmentAsync(
-            String explicitReference, String operation, String unitsText, String amountText, String rawPin) {
-        CompletableFuture<InvestMoneyTransaction> future = new CompletableFuture<>();
-        if (investmentService == null) {
-            future.completeExceptionally(new IllegalStateException("InvestmentService is not enabled."));
-            return future;
-        }
-        String rawOp = operation != null ? operation.trim().toUpperCase(Locale.ROOT) : "";
-        String opLabel = "REDEEM".equals(rawOp) ? "Investment Redemption" : "Investment Purchase";
-
-        runOnEdt(() -> {
-            if (btnSubmitInvest != null) {
-                btnSubmitInvest.setEnabled(false);
-            }
-            if (btnPreviewInvest != null) {
-                btnPreviewInvest.setEnabled(false);
-            }
-            if (lblInvestFeedback != null) {
-                lblInvestFeedback.setForeground(UiTheme.color(UiTheme.ColorRole.INFO));
-                lblInvestFeedback.setText("Processing " + opLabel + "...");
-            }
-            lblStatus.setText("Processing " + opLabel + "...");
-        });
-
-        new SwingWorker<InvestMoneyTransaction, Void>() {
-            @Override
-            protected InvestMoneyTransaction doInBackground() {
-                lastPaymentExecutedOffEdt = !SwingUtilities.isEventDispatchThread();
-                String op = requireValidInvestmentOperation(rawOp);
-                SessionManager session = SessionManager.getInstance();
-                session.requireAuthentication();
-                User user = session.getCurrentUser();
-                Wallet wallet = session.getCurrentWallet();
-                if (wallet == null) {
-                    wallet = session.refreshWallet(walletService);
-                }
-                BigDecimal units = parseOptionalDecimal(unitsText);
-                BigDecimal amount = parseOptionalDecimal(amountText);
-                String ref = (explicitReference != null && !explicitReference.trim().isEmpty())
-                        ? explicitReference.trim()
-                        : IdGenerator.nextReferenceNumber();
-                String cleanPin = rawPin != null ? rawPin.trim() : "";
-
-                if (!cleanPin.isEmpty()) {
-                    if (authService != null && user != null) {
-                        verifyPinOrThrow(user.getUserId(), cleanPin);
-                        return "REDEEM".equals(op)
-                                ? investmentService.redeemInvestment(ref, wallet.getWalletId(), units)
-                                : investmentService.buyInvestment(ref, wallet.getWalletId(), units, amount);
-                    }
-                    return "REDEEM".equals(op)
-                            ? investmentService.redeemInvestmentWithPin(ref, wallet.getWalletId(), units, cleanPin)
-                            : investmentService.buyInvestmentWithPin(ref, wallet.getWalletId(), units, amount, cleanPin);
-                }
-                return "REDEEM".equals(op)
-                        ? investmentService.redeemInvestment(ref, wallet.getWalletId(), units)
-                        : investmentService.buyInvestment(ref, wallet.getWalletId(), units, amount);
-            }
-
-            @Override
-            protected void done() {
-                if (btnSubmitInvest != null) {
-                    btnSubmitInvest.setEnabled(true);
-                }
-                if (btnPreviewInvest != null) {
-                    btnPreviewInvest.setEnabled(true);
-                }
-                try {
-                    InvestMoneyTransaction txn = get();
-                    setInvestmentInputTexts("", "");
-                    boolean isBuySelected = cmbInvestOperation == null || "BUY".equals(cmbInvestOperation.getSelectedItem());
-                    resetInvestPreviewSummary(isBuySelected);
-                    if (lblInvestFeedback != null) {
-                        lblInvestFeedback.setForeground(UiTheme.color(UiTheme.ColorRole.SUCCESS));
-                        lblInvestFeedback.setText(opLabel + " completed: "
-                                + (txn.getUnits() != null ? txn.getUnits().toPlainString() : "-")
-                                + " units (" + MoneyUtil.format(txn.getAmount(), txn.getCurrency())
-                                + ", Ref: " + txn.getReferenceNumber() + ")");
-                    }
-                    lblStatus.setText(opLabel + " completed (Ref: " + txn.getReferenceNumber() + ")");
-                    refreshDashboardAsync().whenComplete((v, err) -> future.complete(txn));
-                } catch (Exception ex) {
-                    Throwable cause = unwrapCause(ex);
-                    String message = extractErrorMessage(cause);
-                    if (lblInvestFeedback != null) {
-                        lblInvestFeedback.setForeground(UiTheme.color(UiTheme.ColorRole.ERROR));
-                        lblInvestFeedback.setText(opLabel + " failed: " + message);
-                    }
-                    lblStatus.setText(opLabel + " failed: " + message);
-                    checkSessionTerminatedOnError(message);
-                    future.completeExceptionally(cause);
-                }
-            }
-        }.execute();
-        return future;
-    }
-
-    private static String requireValidInvestmentOperation(String rawOp) {
-        if ("BUY".equals(rawOp) || "REDEEM".equals(rawOp)) {
-            return rawOp;
-        }
-        throw new IllegalArgumentException("Unsupported investment operation: " + rawOp);
-    }
-
-    private void handleInteractiveInvestPreview() {
-        if (!ensureActiveSessionForInteraction() || investmentService == null) {
-            return;
-        }
-        String op = (String) cmbInvestOperation.getSelectedItem();
-        String unitsText = txtInvestUnits.getText() != null ? txtInvestUnits.getText().trim() : "";
-        String amountText = txtInvestAmount.getText() != null ? txtInvestAmount.getText().trim() : "";
-        previewInvestmentAsync(op, unitsText, amountText);
-    }
-
-    private void handleInteractiveInvestSubmit() {
-        if (!ensureActiveSessionForInteraction() || investmentService == null) {
-            return;
-        }
-        String op = (String) cmbInvestOperation.getSelectedItem();
-        String unitsText = txtInvestUnits.getText() != null ? txtInvestUnits.getText().trim() : "";
-        String amountText = txtInvestAmount.getText() != null ? txtInvestAmount.getText().trim() : "";
-        String pin = new String(txtInvestPin.getPassword()).trim();
-
-        // Validate operation and order inputs before prompting for PIN
-        try {
-            String validOp = requireValidInvestmentOperation(op != null ? op.trim().toUpperCase(Locale.ROOT) : "");
-            BigDecimal parsedUnits = parseOptionalDecimal(unitsText);
-            BigDecimal parsedAmount = parseOptionalDecimal(amountText);
-            if ("REDEEM".equals(validOp)) {
-                if (parsedUnits == null || parsedUnits.compareTo(BigDecimal.ZERO) <= 0) {
-                    throw new IllegalArgumentException("Please enter a positive number of units to redeem.");
-                }
-            } else {
-                if ((parsedUnits == null || parsedUnits.compareTo(BigDecimal.ZERO) <= 0)
-                        && (parsedAmount == null || parsedAmount.compareTo(BigDecimal.ZERO) <= 0)) {
-                    throw new IllegalArgumentException("Please enter positive units or a positive "
-                            + OtogConfig.getInstance().getDefaultCurrency() + " amount to invest.");
-                }
-            }
-        } catch (RuntimeException ex) {
-            String msg = extractErrorMessage(ex);
-            lblInvestFeedback.setForeground(UiTheme.color(UiTheme.ColorRole.ERROR));
-            lblInvestFeedback.setText("Investment failed: " + msg);
-            lblStatus.setText("Investment validation failed: " + msg);
-            showDialogMessage(this, "Invalid Investment Input", msg, JOptionPane.ERROR_MESSAGE);
-            txtInvestUnits.requestFocusInWindow();
-            return;
-        }
-
-        if (authService != null && !cachedHasPin) {
-            txtInvestPin.setText("");
-            promptPinSetupIfMissing("A Transaction PIN is required before buying or redeeming simulated investments.");
-            return;
-        }
-        if (authService != null && pin.isEmpty()) {
-            OtogConfig config = OtogConfig.getInstance();
-            String msg = "Please enter your " + config.getPinMinLength() + "-" + config.getPinMaxLength()
-                    + " digit Transaction PIN to authorize investment order.";
-            lblInvestFeedback.setForeground(UiTheme.color(UiTheme.ColorRole.ERROR));
-            lblInvestFeedback.setText("Investment failed: " + msg);
-            showDialogMessage(this, "PIN Required", msg, JOptionPane.WARNING_MESSAGE);
-            txtInvestPin.requestFocusInWindow();
-            return;
-        }
-        txtInvestPin.setText("");
-
-        if (btnSubmitInvest != null) {
-            btnSubmitInvest.setEnabled(false);
-        }
-        if (btnPreviewInvest != null) {
-            btnPreviewInvest.setEnabled(false);
-        }
-
-        previewInvestmentAsync(op, unitsText, amountText).whenComplete((preview, previewErr) -> runOnEdt(() -> {
-            if (previewErr != null) {
-                if (btnSubmitInvest != null) {
-                    btnSubmitInvest.setEnabled(true);
-                }
-                if (btnPreviewInvest != null) {
-                    btnPreviewInvest.setEnabled(true);
-                }
-                Throwable cause = unwrapCause(previewErr);
-                showDialogMessage(this, "Investment Preview Failed", extractErrorMessage(cause),
-                        JOptionPane.ERROR_MESSAGE);
-                return;
-            }
-            JTextArea area = new JTextArea(preview.toConfirmationText());
-            area.setEditable(false);
-            area.setFont(UiTheme.font(UiTheme.FontRole.MONO));
-            area.setMargin(new Insets(6, 8, 6, 8));
-            int choice = showConfirmDialog(
-                    this,
-                    "Confirm Investment Order",
-                    new JScrollPane(area),
-                    JOptionPane.OK_CANCEL_OPTION,
-                    JOptionPane.QUESTION_MESSAGE
-            );
-            if (choice != JOptionPane.OK_OPTION) {
-                if (btnSubmitInvest != null) {
-                    btnSubmitInvest.setEnabled(true);
-                }
-                if (btnPreviewInvest != null) {
-                    btnPreviewInvest.setEnabled(true);
-                }
-                lblInvestFeedback.setForeground(UiTheme.color(UiTheme.ColorRole.MUTED));
-                lblInvestFeedback.setText("Investment order cancelled.");
-                return;
-            }
-            executeInvestmentAsync(
-                    preview.getReferenceNumber(),
-                    op,
-                    preview.getUnits().toPlainString(),
-                    "BUY".equals(preview.getOperation()) ? preview.getTotalAmount().toPlainString() : null,
-                    pin
-            ).whenComplete((txn, err) -> runOnEdt(() -> {
-                if (err != null && !logoutHandled) {
-                    Throwable cause = unwrapCause(err);
-                    showDialogMessage(this, "Investment Failed", extractErrorMessage(cause),
-                            JOptionPane.ERROR_MESSAGE);
-                } else if (txn != null) {
-                    showDialogMessage(this,
-                            "Investment Complete",
-                            "Order executed!\nProduct: " + txn.getProduct()
-                                    + "\nUnits: " + txn.getUnits().toPlainString()
-                                    + "\nAmount: " + MoneyUtil.format(txn.getAmount(), txn.getCurrency())
-                                    + "\nReference: " + txn.getReferenceNumber(),
-                            JOptionPane.INFORMATION_MESSAGE);
-                }
-            }));
-        }));
-    }
-
-    private static BigDecimal parseOptionalDecimal(String text) {
-        if (text == null || text.trim().isEmpty()) {
-            return null;
-        }
-        try {
-            return new BigDecimal(text.trim().replace(",", ""));
-        } catch (NumberFormatException ex) {
-            throw new IllegalArgumentException("Invalid numeric value: " + text.trim());
-        }
-    }
-
-    private void verifyPinOrThrow(String userId, String rawPin) {
-        try {
-            if (!authService.verifyPin(userId, rawPin)) {
-                SessionManager session = SessionManager.getInstance();
-                if (session.isLockedOutByPin()) {
-                    throw new WalletException("Session terminated after maximum failed PIN attempts.");
-                }
-                throw new WalletException("Invalid transaction PIN. Outgoing payment blocked.");
-            }
-        } catch (SecurityException ex) {
-            throw new WalletException(ex.getMessage(), ex);
         }
     }
 
@@ -1430,6 +803,14 @@ public class Main extends JFrame {
             cashInOutPanel.loadRepeatDraft(draft);
             lblStatus.setText("Repeat " + op + " draft prepared: " + draft.getReferenceNumber());
             navigateToTab("Cash In / Out");
+        } else if ((draft instanceof InvestMoneyTransaction
+                || draft.getType() == TransactionType.INVESTMENT_BUY
+                || draft.getType() == TransactionType.INVESTMENT_REDEEM)
+                && investmentPanel != null) {
+            String op = draft.getType() == TransactionType.INVESTMENT_REDEEM ? "REDEEM" : "BUY";
+            investmentPanel.loadRepeatDraft(draft);
+            lblStatus.setText("Repeat investment " + op + " draft prepared: " + draft.getReferenceNumber());
+            navigateToTab("Investments");
         } else if (draft instanceof BillPaymentTransaction || draft.getType() == TransactionType.BILL_PAYMENT) {
             if (payBillsPanel != null) {
                 payBillsPanel.loadRepeatDraft(draft);
@@ -1471,409 +852,6 @@ public class Main extends JFrame {
         dispose();
         if (onLogoutCallback != null) {
             SwingUtilities.invokeLater(onLogoutCallback);
-        }
-    }
-
-    private void setLoadingState(String message) {
-        lblLoadingState.setText(message);
-        activityCardLayout.show(activityCardPanel, DashboardState.LOADING.name());
-        lblStatus.setText(message);
-    }
-
-    private void populatePaymentMethodsCombo(List<PaymentMethod> paymentMethods) {
-        if (cmbPaymentMethod == null) {
-            return;
-        }
-        String prevSelectedId = getSelectedPaymentMethodId();
-        List<PaymentMethod> activeMethods = new ArrayList<>();
-        if (paymentMethods != null) {
-            for (PaymentMethod pm : paymentMethods) {
-                if (pm.getStatus() == PaymentMethodStatus.ACTIVE) {
-                    activeMethods.add(pm);
-                }
-            }
-        }
-        this.loadedPaymentMethods = Collections.unmodifiableList(activeMethods);
-        cmbPaymentMethod.removeAllItems();
-        cmbPaymentMethod.addItem("Use Selected Channel");
-        int defaultIndex = 0;
-        int prevIndex = -1;
-        for (int i = 0; i < activeMethods.size(); i++) {
-            PaymentMethod pm = activeMethods.get(i);
-            String label = pm.getProviderName() + " (" + pm.getAccountNumber() + ")"
-                    + (pm.isDefault() ? " [Default]" : "");
-            cmbPaymentMethod.addItem(label);
-            if (prevSelectedId != null && prevSelectedId.equals(pm.getPaymentMethodId())) {
-                prevIndex = i + 1;
-            } else if (pm.isDefault() && defaultIndex == 0) {
-                defaultIndex = i + 1;
-            }
-        }
-        cmbPaymentMethod.setSelectedIndex(prevIndex >= 0 ? prevIndex : defaultIndex);
-        if (cmbCashChannel != null) {
-            cmbCashChannel.setEnabled(cmbPaymentMethod.getSelectedIndex() <= 0);
-        }
-    }
-
-    public String getSelectedPaymentMethodId() {
-        if (cmbPaymentMethod == null) {
-            return null;
-        }
-        int idx = cmbPaymentMethod.getSelectedIndex();
-        if (idx <= 0 || idx - 1 >= loadedPaymentMethods.size()) {
-            return null;
-        }
-        return loadedPaymentMethods.get(idx - 1).getPaymentMethodId();
-    }
-
-    private void populateTransactionsTable(String walletId, List<Transaction> transactions) {
-        if (transactions == null || transactions.isEmpty()) {
-            this.loadedTransactions = Collections.emptyList();
-        } else {
-            List<Transaction> sorted = new ArrayList<>(transactions);
-            Collections.sort(sorted);
-            this.loadedTransactions = Collections.unmodifiableList(sorted);
-        }
-        transactionsTableModel.setRowCount(0);
-        for (Transaction txn : this.loadedTransactions) {
-            String date = txn.getCreatedAt() != null ? txn.getCreatedAt().format(dateFormatter) : "-";
-            String direction = resolveDirection(walletId, txn);
-            String statusText = txn.getStatus() != null ? txn.getStatus().name() : "-";
-            if (txn.getProviderStatus() != null && !txn.getProviderStatus().isEmpty()) {
-                statusText += " [" + txn.getProviderStatus() + "]";
-            }
-            String provRef = (txn.getProviderReference() != null && !txn.getProviderReference().isEmpty())
-                    ? txn.getProviderReference() : "-";
-            transactionsTableModel.addRow(new Object[]{
-                    date,
-                    txn.getReferenceNumber(),
-                    txn.getType() != null ? txn.getType().name() : "-",
-                    direction,
-                    MoneyUtil.format(txn.getAmount(), txn.getCurrency()),
-                    MoneyUtil.format(txn.getFee(), txn.getCurrency()),
-                    statusText,
-                    provRef,
-                    txn.getDescription() != null ? txn.getDescription() : ""
-            });
-        }
-        updateTableActionButtonsState();
-    }
-
-    private void updateTableActionButtonsState() {
-        Transaction selected = getSelectedTransactionForReceipt();
-        if (btnCheckStatus != null) {
-            boolean isCashTxn = selected != null
-                    && (selected.getType() == TransactionType.CASH_IN
-                    || selected.getType() == TransactionType.CASH_OUT
-                    || selected.getType() == TransactionType.BILL_PAYMENT);
-            btnCheckStatus.setEnabled(isCashTxn);
-        }
-        if (btnRepeatDraft != null) {
-            boolean isInvestRepeat = investmentService != null
-                    && selected != null
-                    && (selected.getType() == TransactionType.INVESTMENT_BUY
-                    || selected.getType() == TransactionType.INVESTMENT_REDEEM);
-            boolean canRepeat = selected != null
-                    && (selected.getType() == TransactionType.SEND_MONEY
-                    || selected.getType() == TransactionType.CASH_IN
-                    || selected.getType() == TransactionType.CASH_OUT
-                    || isInvestRepeat
-                    || selected.getType() == TransactionType.BILL_PAYMENT);
-            btnRepeatDraft.setEnabled(canRepeat);
-        }
-    }
-
-    private static Map<TransactionType, String> createDirectionMap() {
-        EnumMap<TransactionType, String> map = new EnumMap<>(TransactionType.class);
-        map.put(TransactionType.CASH_IN, "IN (+)");
-        map.put(TransactionType.CASH_OUT, "OUT (-)");
-        map.put(TransactionType.BILL_PAYMENT, "OUT (-)");
-        map.put(TransactionType.LOAN_DISBURSEMENT, "IN (+)");
-        map.put(TransactionType.LOAN_REPAYMENT, "OUT (-)");
-        map.put(TransactionType.INVESTMENT_BUY, "OUT (-)");
-        map.put(TransactionType.INVESTMENT_REDEEM, "IN (+)");
-        return Collections.unmodifiableMap(map);
-    }
-
-    private String resolveDirection(String walletId, Transaction txn) {
-        if (txn.getType() != null) {
-            String fixedDirection = FIXED_DIRECTION_BY_TYPE.get(txn.getType());
-            if (fixedDirection != null) {
-                return fixedDirection;
-            }
-        }
-        if (walletId != null && walletId.equals(txn.getTargetWalletId())
-                && !walletId.equals(txn.getSourceWalletId())) {
-            return "IN (+)";
-        }
-        if (walletId != null && walletId.equals(txn.getSourceWalletId())) {
-            return "OUT (-)";
-        }
-        return "-";
-    }
-
-    /** Resolves the currently selected table row via view-to-model mapping, or {@code null} if none. */
-    public Transaction getSelectedTransactionForReceipt() {
-        if (tblTransactions == null) {
-            return null;
-        }
-        int viewRow = tblTransactions.getSelectedRow();
-        int row = viewRow >= 0 ? tblTransactions.convertRowIndexToModel(viewRow) : -1;
-        if (row < 0 || row >= loadedTransactions.size()) {
-            return null;
-        }
-        return loadedTransactions.get(row);
-    }
-
-    private void lookupSelectedTransactionStatus() {
-        Transaction txn = getSelectedTransactionForReceipt();
-        if (txn == null) {
-            JOptionPane.showMessageDialog(this,
-                    "Please select a transaction row to check its bank status.",
-                    "No Transaction Selected",
-                    JOptionPane.INFORMATION_MESSAGE);
-            return;
-        }
-        if (txn.getType() != TransactionType.CASH_IN
-                && txn.getType() != TransactionType.CASH_OUT
-                && txn.getType() != TransactionType.BILL_PAYMENT) {
-            String msg = "Status lookup is only available for Cash In / Cash Out and Bill Payment transactions.";
-            if (lblActivityFeedback != null) {
-                lblActivityFeedback.setForeground(UiTheme.color(UiTheme.ColorRole.WARNING));
-                lblActivityFeedback.setText(msg);
-            }
-            lblStatus.setText(msg);
-            return;
-        }
-        submitStatusLookupAsync(txn.getReferenceNumber());
-    }
-
-    private void showSelectedReceipt() {
-        Transaction txn = getSelectedTransactionForReceipt();
-        if (txn == null) {
-            showDialogMessage(this,
-                    "No Transaction Selected",
-                    "Please select a transaction row to view its receipt.",
-                    JOptionPane.INFORMATION_MESSAGE);
-            return;
-        }
-        Wallet wallet = SessionManager.getInstance().getCurrentWallet();
-        String walletId = wallet != null ? wallet.getWalletId() : null;
-        String refKey = txn.getReferenceNumber() != null ? txn.getReferenceNumber() : txn.getTransactionId();
-
-        new SwingWorker<String, Void>() {
-            @Override
-            protected String doInBackground() {
-                if (walletId != null && refKey != null) {
-                    return walletService.getTransactionReceipt(walletId, refKey);
-                }
-                return txn.getReceipt();
-            }
-
-            @Override
-            protected void done() {
-                try {
-                    String formattedReceipt = get();
-                    JTextArea area = new JTextArea(formattedReceipt);
-                    area.setEditable(false);
-                    area.setFont(UiTheme.font(UiTheme.FontRole.MONO));
-                    area.setMargin(new Insets(8, 10, 8, 10));
-                    JScrollPane scroll = new JScrollPane(area);
-                    scroll.setPreferredSize(OtogConfig.getInstance().getUiDimension(
-                            "ui.receipt.width", "ui.receipt.height", 460, 360));
-                    JOptionPane.showMessageDialog(Main.this, scroll,
-                            "Transaction Receipt — " + txn.getReferenceNumber(),
-                            JOptionPane.INFORMATION_MESSAGE);
-                } catch (Exception ex) {
-                    Throwable cause = unwrapCause(ex);
-                    showDialogMessage(Main.this, "Receipt Error", extractErrorMessage(cause),
-                            JOptionPane.ERROR_MESSAGE);
-                }
-            }
-        }.execute();
-    }
-
-    private void handleApplyHistoryFilters() {
-        if (!ensureActiveSessionForInteraction()) {
-            return;
-        }
-        try {
-            TransactionFilter.Builder builder = TransactionFilter.builder();
-            String selectedType = cmbFilterType != null ? (String) cmbFilterType.getSelectedItem() : null;
-            if (selectedType != null && !OverviewPanel.ALL_TYPES_OPTION.equals(selectedType)) {
-                builder.type(TransactionType.valueOf(selectedType));
-            }
-            String selectedStatus = cmbFilterStatus != null ? (String) cmbFilterStatus.getSelectedItem() : null;
-            if (selectedStatus != null && !OverviewPanel.ALL_STATUSES_OPTION.equals(selectedStatus)) {
-                builder.status(TransactionStatus.valueOf(selectedStatus));
-            }
-            String fromRaw = txtFilterFromDate != null && txtFilterFromDate.getText() != null
-                    ? txtFilterFromDate.getText().trim() : "";
-            String toRaw = txtFilterToDate != null && txtFilterToDate.getText() != null
-                    ? txtFilterToDate.getText().trim() : "";
-            if (!fromRaw.isEmpty()) {
-                builder.fromDate(LocalDate.parse(fromRaw));
-            }
-            if (!toRaw.isEmpty()) {
-                builder.toDate(LocalDate.parse(toRaw));
-            }
-            applyHistoryFiltersAsync(builder.build());
-        } catch (DateTimeParseException ex) {
-            String msg = "Invalid date format. Please use YYYY-MM-DD (e.g., 2026-11-19).";
-            lblStatus.setText("Filter validation failed: " + msg);
-            showDialogMessage(this, "Invalid Date Filter", msg, JOptionPane.WARNING_MESSAGE);
-        } catch (IllegalArgumentException ex) {
-            String msg = extractErrorMessage(ex);
-            lblStatus.setText("Filter validation failed: " + msg);
-            showDialogMessage(this, "Invalid History Filter", msg, JOptionPane.WARNING_MESSAGE);
-        }
-    }
-
-    public CompletableFuture<Void> applyHistoryFiltersAsync(TransactionFilter filter) {
-        this.activeHistoryFilter = filter != null ? filter : TransactionFilter.empty();
-        return refreshDashboardAsync();
-    }
-
-    public CompletableFuture<Void> clearHistoryFiltersAsync() {
-        this.activeHistoryFilter = TransactionFilter.empty();
-        runOnEdt(() -> {
-            if (cmbFilterType != null) {
-                cmbFilterType.setSelectedIndex(0);
-            }
-            if (cmbFilterStatus != null) {
-                cmbFilterStatus.setSelectedIndex(0);
-            }
-            if (txtFilterFromDate != null) {
-                txtFilterFromDate.setText("");
-            }
-            if (txtFilterToDate != null) {
-                txtFilterToDate.setText("");
-            }
-        });
-        return refreshDashboardAsync();
-    }
-
-    private void handleRepeatSelectedTransactionDraft() {
-        if (!ensureActiveSessionForInteraction()) {
-            return;
-        }
-        createRepeatDraftForSelectedAsync().whenComplete((draft, err) -> runOnEdt(() -> {
-            if (err != null) {
-                Throwable cause = unwrapCause(err);
-                showDialogMessage(this, "Repeat Draft Failed", extractErrorMessage(cause),
-                        JOptionPane.ERROR_MESSAGE);
-            }
-        }));
-    }
-
-    /**
-     * Clones the currently selected transaction via Prototype ({@code createRepeatTransactionDraft})
-     * with a fresh reference number and pre-fills the matching payment form without auto-submitting.
-     */
-    public CompletableFuture<Transaction> createRepeatDraftForSelectedAsync() {
-        CompletableFuture<Transaction> future = new CompletableFuture<>();
-        Transaction selected = getSelectedTransactionForReceipt();
-        if (selected == null) {
-            future.completeExceptionally(new IllegalStateException("Please select a transaction to repeat."));
-            return future;
-        }
-        Wallet wallet = SessionManager.getInstance().getCurrentWallet();
-        if (wallet == null) {
-            future.completeExceptionally(new IllegalStateException("Active wallet is required."));
-            return future;
-        }
-        String key = selected.getReferenceNumber() != null ? selected.getReferenceNumber() : selected.getTransactionId();
-
-        new SwingWorker<Transaction, Void>() {
-            @Override
-            protected Transaction doInBackground() {
-                SessionManager.getInstance().touchActivity();
-                return walletService.createRepeatTransactionDraft(wallet.getWalletId(), key, null);
-            }
-
-            @Override
-            protected void done() {
-                try {
-                    Transaction draft = get();
-                    applyRepeatDraftToUi(draft);
-                    future.complete(draft);
-                } catch (Exception ex) {
-                    future.completeExceptionally(unwrapCause(ex));
-                }
-            }
-        }.execute();
-        return future;
-    }
-
-    private void applyRepeatDraftToUi(Transaction draft) {
-        if (draft == null) {
-            return;
-        }
-        String amountStr = draft.getAmount() != null ? draft.getAmount().toPlainString() : "";
-        String noteStr = draft.getDescription() != null ? draft.getDescription() : "";
-        if (draft.getType() == TransactionType.SEND_MONEY || draft instanceof SendMoneyTransaction) {
-            String recipientTarget = (draft instanceof SendMoneyTransaction smt && smt.getRecipientNumber() != null)
-                    ? smt.getRecipientNumber()
-                    : (draft.getTargetWalletId() != null ? draft.getTargetWalletId() : "");
-            txtRecipient.setText(recipientTarget);
-            txtSendAmount.setText(amountStr);
-            txtSendNote.setText(noteStr);
-            txtSendPin.setText("");
-            lblSendFeedback.setForeground(UiTheme.color(UiTheme.ColorRole.INFO));
-            lblSendFeedback.setText("Loaded repeat draft (New Ref: " + draft.getReferenceNumber()
-                    + "). Review details and enter PIN to send.");
-            lblStatus.setText("Repeat Send Money draft prepared: " + draft.getReferenceNumber());
-            navigateToTab("Send Money");
-        } else if (draft instanceof CashInOutTransaction
-                || draft.getType() == TransactionType.CASH_IN
-                || draft.getType() == TransactionType.CASH_OUT) {
-            String op = draft.getType() == TransactionType.CASH_OUT ? "CASH_OUT" : "CASH_IN";
-            cmbCashOperation.setSelectedItem(op);
-            if (draft instanceof CashInOutTransaction cio && cio.getChannel() != null) {
-                cmbCashChannel.setSelectedItem(cio.getChannel());
-            }
-            txtCashAmount.setText(amountStr);
-            txtCashNote.setText(noteStr);
-            txtCashPin.setText("");
-            lblCashFeedback.setForeground(UiTheme.color(UiTheme.ColorRole.INFO));
-            lblCashFeedback.setText("Loaded repeat draft (New Ref: " + draft.getReferenceNumber()
-                    + "). Review details and submit when ready.");
-            lblStatus.setText("Repeat " + op + " draft prepared: " + draft.getReferenceNumber());
-            navigateToTab("Cash In / Out");
-        } else if ((draft instanceof InvestMoneyTransaction
-                || draft.getType() == TransactionType.INVESTMENT_BUY
-                || draft.getType() == TransactionType.INVESTMENT_REDEEM)
-                && investmentPanel != null) {
-            String op = draft.getType() == TransactionType.INVESTMENT_REDEEM ? "REDEEM" : "BUY";
-            cmbInvestOperation.setSelectedItem(op);
-            String unitsStr = (draft instanceof InvestMoneyTransaction imt && imt.getUnits() != null)
-                    ? imt.getUnits().toPlainString()
-                    : "";
-            setInvestmentInputTexts(unitsStr, "");
-            txtInvestPin.setText("");
-            lblInvestFeedback.setForeground(UiTheme.color(UiTheme.ColorRole.INFO));
-            lblInvestFeedback.setText("Loaded repeat draft (New Ref: " + draft.getReferenceNumber()
-                    + "). Review units and click Preview or Confirm.");
-            lblStatus.setText("Repeat investment " + op + " draft prepared: " + draft.getReferenceNumber());
-            navigateToTab("Investments");
-        } else if (draft instanceof BillPaymentTransaction || draft.getType() == TransactionType.BILL_PAYMENT) {
-            BillPaymentTransaction bpt = (draft instanceof BillPaymentTransaction b) ? b : null;
-            if (payBillsPanel != null) {
-                if (bpt != null && bpt.getBillerName() != null) {
-                    payBillsPanel.getBillerComboBox().setSelectedItem(bpt.getBillerName());
-                }
-                String refVal = bpt != null ? bpt.getBillerReference() : null;
-                if (refVal != null) {
-                    payBillsPanel.getBillReferenceField().setText(refVal);
-                }
-                payBillsPanel.getBillAmountField().setText(amountStr);
-                payBillsPanel.getBillPinField().setText("");
-                payBillsPanel.getBillFeedbackLabel().setForeground(UiTheme.color(UiTheme.ColorRole.INFO));
-                payBillsPanel.getBillFeedbackLabel().setText("Loaded repeat draft (New Ref: " + draft.getReferenceNumber()
-                        + "). Review details and enter PIN to pay.");
-            }
-            lblStatus.setText("Repeat Bill Payment draft prepared: " + draft.getReferenceNumber());
-            navigateToTab("Pay Bills");
         }
     }
 
@@ -1991,7 +969,8 @@ public class Main extends JFrame {
             SessionManager.getInstance().logout();
             if (isShowing()) {
                 showDialogMessage(this, "Logout Warning",
-                        "Session cleared locally, though server logout reported: " + UiSupport.extractErrorMessage(ex),
+                        "Session cleared locally, though server logout reported: "
+                                + SwingUiSupport.extractErrorMessage(ex),
                         JOptionPane.WARNING_MESSAGE);
             }
         }
@@ -2002,6 +981,10 @@ public class Main extends JFrame {
     }
 
     protected void showDialogMessage(Component parent, String title, String message, int messageType) {
+        JOptionPane.showMessageDialog(parent != null ? parent : this, message, title, messageType);
+    }
+
+    protected void showComponentDialogMessage(Component parent, String title, Object message, int messageType) {
         JOptionPane.showMessageDialog(parent != null ? parent : this, message, title, messageType);
     }
 
@@ -2105,7 +1088,7 @@ public class Main extends JFrame {
     }
 
     public JButton getInvestQuickNavButton() {
-        return btnNavInvest;
+        return overviewPanel != null ? overviewPanel.getNavInvestButton() : null;
     }
 
     public JButton getPinSettingsButton() {
@@ -2237,35 +1220,35 @@ public class Main extends JFrame {
     }
 
     public JComboBox<String> getInvestOperationComboBox() {
-        return cmbInvestOperation;
+        return investmentPanel != null ? investmentPanel.getOperationComboBox() : null;
     }
 
     public JTextField getInvestUnitsField() {
-        return txtInvestUnits;
+        return investmentPanel != null ? investmentPanel.getUnitsField() : null;
     }
 
     public JTextField getInvestAmountField() {
-        return txtInvestAmount;
+        return investmentPanel != null ? investmentPanel.getAmountField() : null;
     }
 
     public JPasswordField getInvestPinField() {
-        return txtInvestPin;
+        return investmentPanel != null ? investmentPanel.getPinField() : null;
     }
 
     public JLabel getInvestPreviewSummaryLabel() {
-        return lblInvestPreviewSummary;
+        return investmentPanel != null ? investmentPanel.getPreviewSummaryLabel() : null;
     }
 
     public JButton getPreviewInvestButton() {
-        return btnPreviewInvest;
+        return investmentPanel != null ? investmentPanel.getPreviewButton() : null;
     }
 
     public JButton getSubmitInvestButton() {
-        return btnSubmitInvest;
+        return investmentPanel != null ? investmentPanel.getSubmitButton() : null;
     }
 
     public JLabel getInvestFeedbackLabel() {
-        return lblInvestFeedback;
+        return investmentPanel != null ? investmentPanel.getFeedbackLabel() : null;
     }
 
     public AdminControlsPanel getAdminControlsPanel() {
@@ -2295,7 +1278,6 @@ public class Main extends JFrame {
 
         pnlHeader = new JPanel();
         pnlHeader.setLayout(new GridLayoutManager(1, 3, new Insets(0, 0, 10, 0), 12, 6));
-        pnlHeader.setBorder(UiTheme.bottomDividerBorder());
         pnlRoot.add(pnlHeader, new GridConstraints(0, 0, 1, 1,
                 GridConstraints.ANCHOR_CENTER, GridConstraints.FILL_BOTH,
                 GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_CAN_GROW,
@@ -2311,23 +1293,18 @@ public class Main extends JFrame {
                 null, null, null, 0, false));
 
         lblWelcome = new JLabel("Welcome");
-        lblWelcome.setFont(UiTheme.font(UiTheme.FontRole.BANNER));
         pnlIdentity.add(lblWelcome, new GridConstraints(0, 0, 1, 1,
                 GridConstraints.ANCHOR_WEST, GridConstraints.FILL_NONE,
                 GridConstraints.SIZEPOLICY_FIXED, GridConstraints.SIZEPOLICY_FIXED,
                 null, null, null, 0, false));
 
         lblWalletId = new JLabel("Wallet: --");
-        lblWalletId.setFont(UiTheme.font(UiTheme.FontRole.LABEL));
-        lblWalletId.setForeground(UiTheme.color(UiTheme.ColorRole.MUTED));
         pnlIdentity.add(lblWalletId, new GridConstraints(1, 0, 1, 1,
                 GridConstraints.ANCHOR_WEST, GridConstraints.FILL_NONE,
                 GridConstraints.SIZEPOLICY_FIXED, GridConstraints.SIZEPOLICY_FIXED,
                 null, null, null, 0, false));
 
         lblPinStatus = new JLabel("Transaction PIN: Checking...");
-        lblPinStatus.setFont(UiTheme.font(UiTheme.FontRole.SMALL));
-        lblPinStatus.setForeground(UiTheme.color(UiTheme.ColorRole.MUTED));
         pnlIdentity.add(lblPinStatus, new GridConstraints(2, 0, 1, 1,
                 GridConstraints.ANCHOR_WEST, GridConstraints.FILL_NONE,
                 GridConstraints.SIZEPOLICY_FIXED, GridConstraints.SIZEPOLICY_FIXED,
@@ -2363,8 +1340,6 @@ public class Main extends JFrame {
                 null, null, null, 0, false));
 
         lblBalance = new JLabel(MoneyUtil.format(MoneyUtil.ZERO, config.getDefaultCurrency()), SwingConstants.RIGHT);
-        lblBalance.setFont(UiTheme.font(UiTheme.FontRole.BALANCE));
-        lblBalance.setForeground(UiTheme.color(UiTheme.ColorRole.SUCCESS));
         pnlBalanceBox.add(lblBalance, new GridConstraints(1, 0, 1, 1,
                 GridConstraints.ANCHOR_EAST, GridConstraints.FILL_NONE,
                 GridConstraints.SIZEPOLICY_FIXED, GridConstraints.SIZEPOLICY_FIXED,
@@ -2372,7 +1347,6 @@ public class Main extends JFrame {
 
         btnBack = new JButton("\u2190 Back");
         btnBack.setEnabled(false);
-        UiTheme.styleSecondaryButton(btnBack);
         pnlBalanceAndActions.add(btnBack, new GridConstraints(0, 1, 1, 1,
                 GridConstraints.ANCHOR_CENTER, GridConstraints.FILL_HORIZONTAL,
                 GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_CAN_GROW,
@@ -2380,7 +1354,6 @@ public class Main extends JFrame {
                 null, null, null, 0, false));
 
         btnRefresh = new JButton("Refresh");
-        UiTheme.styleSecondaryButton(btnRefresh);
         pnlBalanceAndActions.add(btnRefresh, new GridConstraints(0, 2, 1, 1,
                 GridConstraints.ANCHOR_CENTER, GridConstraints.FILL_HORIZONTAL,
                 GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_CAN_GROW,
@@ -2388,7 +1361,6 @@ public class Main extends JFrame {
                 null, null, null, 0, false));
 
         btnNotifications = new JButton("Notifications (0)");
-        UiTheme.styleSecondaryButton(btnNotifications);
         pnlBalanceAndActions.add(btnNotifications, new GridConstraints(0, 3, 1, 1,
                 GridConstraints.ANCHOR_CENTER, GridConstraints.FILL_HORIZONTAL,
                 GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_CAN_GROW,
@@ -2396,7 +1368,6 @@ public class Main extends JFrame {
                 null, null, null, 0, false));
 
         btnPinSettings = new JButton("Transaction PIN");
-        UiTheme.styleSecondaryButton(btnPinSettings);
         pnlBalanceAndActions.add(btnPinSettings, new GridConstraints(0, 4, 1, 1,
                 GridConstraints.ANCHOR_CENTER, GridConstraints.FILL_HORIZONTAL,
                 GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_CAN_GROW,
@@ -2404,7 +1375,6 @@ public class Main extends JFrame {
                 null, null, null, 0, false));
 
         btnLogout = new JButton("Logout");
-        UiTheme.styleSecondaryButton(btnLogout);
         pnlBalanceAndActions.add(btnLogout, new GridConstraints(0, 5, 1, 1,
                 GridConstraints.ANCHOR_CENTER, GridConstraints.FILL_HORIZONTAL,
                 GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_CAN_GROW,
@@ -2412,7 +1382,6 @@ public class Main extends JFrame {
                 null, null, null, 0, false));
 
         tabs = new JTabbedPane();
-        tabs.setFont(UiTheme.font(UiTheme.FontRole.LABEL_BOLD));
         pnlRoot.add(tabs, new GridConstraints(1, 0, 1, 1,
                 GridConstraints.ANCHOR_CENTER, GridConstraints.FILL_BOTH,
                 GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_WANT_GROW,
@@ -2421,7 +1390,6 @@ public class Main extends JFrame {
 
         pnlFooter = new JPanel();
         pnlFooter.setLayout(new GridLayoutManager(1, 1, new Insets(6, 2, 2, 2), 0, 0));
-        pnlFooter.setBorder(UiTheme.topDividerBorder());
         pnlRoot.add(pnlFooter, new GridConstraints(2, 0, 1, 1,
                 GridConstraints.ANCHOR_CENTER, GridConstraints.FILL_BOTH,
                 GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_CAN_GROW,
@@ -2429,8 +1397,6 @@ public class Main extends JFrame {
                 null, null, null, 0, false));
 
         lblStatus = new JLabel("Initializing dashboard...");
-        lblStatus.setFont(UiTheme.font(UiTheme.FontRole.SMALL));
-        lblStatus.setForeground(UiTheme.color(UiTheme.ColorRole.MUTED));
         pnlFooter.add(lblStatus, new GridConstraints(0, 0, 1, 1,
                 GridConstraints.ANCHOR_WEST, GridConstraints.FILL_NONE,
                 GridConstraints.SIZEPOLICY_FIXED, GridConstraints.SIZEPOLICY_FIXED,
