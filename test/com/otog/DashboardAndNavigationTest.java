@@ -408,7 +408,7 @@ public class DashboardAndNavigationTest {
         activeDashboard.getInitialLoadFuture().get(5, TimeUnit.SECONDS);
 
         List<String> visibleTabs = activeDashboard.getVisibleTabTitles();
-        assertEquals(List.of("Overview", "Cash In / Out", "Send Money", "Merchant QR"), visibleTabs,
+        assertEquals(List.of("Overview", "Cash In / Out", "Send Money", "Pay Bills", "Merchant QR"), visibleTabs,
                 "Only finished working features should be visible in demo build");
         assertFalse(visibleTabs.contains("Loans"), "Unfinished Loans tab must be hidden");
         assertFalse(visibleTabs.contains("Investments"), "Unfinished Investments tab must be hidden");
@@ -419,9 +419,19 @@ public class DashboardAndNavigationTest {
         assertTrue(activeDashboard.navigateToTab("Send Money"));
         assertEquals("Send Money", activeDashboard.getTabs().getTitleAt(activeDashboard.getTabs().getSelectedIndex()));
 
+        assertTrue(activeDashboard.navigateToTab("Pay Bills"));
+        assertEquals("Pay Bills", activeDashboard.getTabs().getTitleAt(activeDashboard.getTabs().getSelectedIndex()));
+
+        assertTrue(activeDashboard.navigateToTab("Merchant QR"));
+        assertEquals("Merchant QR", activeDashboard.getTabs().getTitleAt(activeDashboard.getTabs().getSelectedIndex()));
+
         assertFalse(activeDashboard.navigateToTab("Loans"));
 
-        assertEquals(2, activeDashboard.getNavigationHistoryDepth());
+        assertEquals(4, activeDashboard.getNavigationHistoryDepth());
+        assertTrue(activeDashboard.navigateBack());
+        assertEquals("Pay Bills", activeDashboard.getTabs().getTitleAt(activeDashboard.getTabs().getSelectedIndex()));
+        assertTrue(activeDashboard.navigateBack());
+        assertEquals("Send Money", activeDashboard.getTabs().getTitleAt(activeDashboard.getTabs().getSelectedIndex()));
         assertTrue(activeDashboard.navigateBack());
         assertEquals("Cash In / Out", activeDashboard.getTabs().getTitleAt(activeDashboard.getTabs().getSelectedIndex()));
         assertTrue(activeDashboard.navigateBack());

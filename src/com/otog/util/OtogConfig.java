@@ -26,6 +26,9 @@ public final class OtogConfig {
 
     public static final String DEFAULT_CONFIG_PATH = "config/otog.properties";
     public static final String CONFIG_FILE_SYSPROP = "otog.config.file";
+    public static final String DEFAULT_INVESTMENT_PRODUCT_CODE = "OTOG-SIM-FUND";
+    public static final String DEFAULT_INVESTMENT_PRODUCT_NAME = "OTOG Simulated Balanced Fund";
+    public static final BigDecimal DEFAULT_INVESTMENT_SIMULATED_UNIT_PRICE = new BigDecimal("100.00");
     private static final String SYSPROP_PREFIX = "otog.";
 
     private static volatile OtogConfig instance;
@@ -136,6 +139,14 @@ public final class OtogConfig {
 
     public void clearOverrides() {
         overrides.clear();
+    }
+
+    public boolean hasOverrideOrSysProp(String key) {
+        if (key == null || key.trim().isEmpty()) {
+            return false;
+        }
+        String trimmedKey = key.trim();
+        return overrides.containsKey(trimmedKey) || System.getProperty(SYSPROP_PREFIX + trimmedKey) != null;
     }
 
     public String getString(String key, String defaultValue) {
@@ -312,12 +323,39 @@ public final class OtogConfig {
         return getBigDecimal("send.default.fee.percent", "0.00");
     }
 
+    public BigDecimal getBillDefaultFlatFee() {
+        return getBigDecimal("bills.default.fee.flat", "0.00")
+                .setScale(MoneyUtil.DEFAULT_SCALE, MoneyUtil.DEFAULT_ROUNDING);
+    }
+
+    public BigDecimal getBillDefaultPercentFee() {
+        return getBigDecimal("bills.default.fee.percent", "0.00");
+    }
+
     public int getMinRecipientLength() {
         return Math.max(1, getInt("send.min.recipient.length", 10));
     }
 
     public BigDecimal getInvestmentReturnRate() {
         return getBigDecimal("investment.default.return.rate", "0.05");
+    }
+
+    public String getInvestmentProductCode() {
+        String code = getString("investment.product.code", DEFAULT_INVESTMENT_PRODUCT_CODE);
+        return (code == null || code.isBlank()) ? DEFAULT_INVESTMENT_PRODUCT_CODE : code.trim();
+    }
+
+    public String getInvestmentProductName() {
+        String name = getString("investment.product.name", DEFAULT_INVESTMENT_PRODUCT_NAME);
+        return (name == null || name.isBlank()) ? DEFAULT_INVESTMENT_PRODUCT_NAME : name.trim();
+    }
+
+    public BigDecimal getInvestmentSimulatedUnitPrice() {
+        BigDecimal price = getBigDecimal("investment.simulated.unit.price", DEFAULT_INVESTMENT_SIMULATED_UNIT_PRICE.toPlainString());
+        if (price.compareTo(BigDecimal.ZERO) <= 0) {
+            price = DEFAULT_INVESTMENT_SIMULATED_UNIT_PRICE;
+        }
+        return price.setScale(MoneyUtil.DEFAULT_SCALE, MoneyUtil.DEFAULT_ROUNDING);
     }
 
     public int getRecentTransactionLimit() {
@@ -332,6 +370,16 @@ public final class OtogConfig {
 
     public List<String> getCashChannels() {
         return getStringList("cash.channels", Arrays.asList("GCash", "Maya", "BDO", "BPI", "7-Eleven OTC"));
+    }
+
+    public List<String> getSeededBillers() {
+        return getStringList("bills.seeded", Arrays.asList(
+                "Meralco (Electricity)",
+                "Manila Water (Water)",
+                "Maynilad (Water)",
+                "PLDT (Telecom & Internet)",
+                "Globe Telecom (Mobile & Broadband)"
+        ));
     }
 
     public List<DemoBankAccount> getDemoPaymentMethods() {

@@ -3,6 +3,7 @@ package com.otog;
 import com.otog.database.DatabaseManager;
 import com.otog.exception.InvalidAmountException;
 import com.otog.exception.WalletException;
+import com.otog.model.BillPaymentTransaction;
 import com.otog.model.CashInOutTransaction;
 import com.otog.model.CompositeFeePolicy;
 import com.otog.model.FlatFee;
@@ -185,17 +186,24 @@ public class DesignPatternsAndConfigTest {
                 new BigDecimal("10.00"), "Balanced Growth Fund", new BigDecimal("25"), "Monthly SIP");
         invest.invest();
 
+        BillPaymentTransaction bill = TransactionFactory.createBillPayment(
+                "REQ-FM-BILL", aliceWallet.getWalletId(), new BigDecimal("500.00"),
+                new BigDecimal("15.00"), "Meralco", "1234567890", "Electricity bill");
+        bill.setStatus(TransactionStatus.COMPLETED);
+
         assertEquals(TransactionType.CASH_IN, TransactionFactory.createEmptyForType(TransactionType.CASH_IN).getType());
         assertInstanceOf(LoanTransaction.class, TransactionFactory.createEmptyForType(TransactionType.LOAN_REPAYMENT));
         assertInstanceOf(InvestMoneyTransaction.class, TransactionFactory.createEmptyForType(TransactionType.INVESTMENT_REDEEM));
+        assertInstanceOf(BillPaymentTransaction.class, TransactionFactory.createEmptyForType(TransactionType.BILL_PAYMENT));
 
         // Builder missing-field guard check
         assertThrows(IllegalStateException.class, () -> new TransactionBuilder().buildCashInOut());
         assertThrows(IllegalStateException.class, () -> new TransactionBuilder().buildLoan());
         assertThrows(IllegalStateException.class, () -> new TransactionBuilder().buildInvestment());
+        assertThrows(IllegalStateException.class, () -> new TransactionBuilder().buildBillPayment());
 
         // Prototype cloning preserves domain data while resetting lifecycle & idempotency IDs
-        List<TransactionPrototype> prototypes = List.of(send, cash, loan, invest);
+        List<TransactionPrototype> prototypes = List.of(send, cash, loan, invest, bill);
         for (int i = 0; i < prototypes.size(); i++) {
             Transaction original = (Transaction) prototypes.get(i);
             String newRef = "REQ-CLONE-" + i;

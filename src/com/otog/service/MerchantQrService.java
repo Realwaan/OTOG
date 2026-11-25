@@ -1,5 +1,6 @@
 package com.otog.service;
 
+import com.otog.exception.DuplicateTransactionException;
 import com.otog.exception.EntityNotFoundException;
 import com.otog.exception.InsufficientFundsException;
 import com.otog.exception.InvalidAmountException;
@@ -14,8 +15,8 @@ import com.otog.model.UserStatus;
 import com.otog.model.Wallet;
 import com.otog.model.WalletStatus;
 import com.otog.repository.UserRepository;
-import com.otog.util.IdGenerator;
 import com.otog.util.MoneyUtil;
+import com.otog.util.OtogConfig;
 
 import javax.imageio.ImageIO;
 import java.awt.*;
@@ -25,27 +26,36 @@ import java.io.IOException;
 import java.math.BigDecimal;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
+import java.util.List;
 import java.util.Objects;
 import java.util.zip.CRC32;
 
 /**
  * Service managing project-specific Merchant QR image generation, file decoding,
  * merchant and currency validation, pre-payment confirmation, and atomic transfer execution.
+ *
+ * <h3>Documented PNG Raster Format ({@code OTOGQR})</h3>
+ * The UTF-8 encoded {@code OTOG-MERCHANT-QR-v1} payload is embedded losslessly into pixel rows
+ * starting at the bottom-left pixel {@code (0, height - 1)} moving left-to-right and bottom-to-top,
+ * storing one byte per grayscale pixel ({@code R = G = B = byteValue}):
+ * <pre>
+ * [6 bytes ASCII "OTOGQR"][4-byte big-endian payload length N][N bytes UTF-8 payload][4-byte big-endian IEEE CRC-32 of payload bytes]
+ * </pre>
  */
 public class MerchantQrService {
 
+    public static final String QR_TRANSFER_REF_PREFIX = "REQ-QR-";
     private static final byte[] MAGIC_HEADER = new byte[]{'O', 'T', 'O', 'G', 'Q', 'R'};
     public static final int QR_IMAGE_WIDTH = 300;
     public static final int QR_IMAGE_HEIGHT = 300;
+    public static final int MAX_PAYLOAD_BYTES = MerchantQrPayload.MAX_PAYLOAD_BYTES;
 
     private final WalletOperations walletService;
     private final UserRepository userRepository;
-    private final AuthService authService;
 
     public MerchantQrService(WalletOperations walletService, UserRepository userRepository, AuthService authService) {
         this.walletService = Objects.requireNonNull(walletService, "WalletOperations cannot be null");
         this.userRepository = Objects.requireNonNull(userRepository, "UserRepository cannot be null");
-        this.authService = authService;
     }
 
     /**
@@ -67,7 +77,7 @@ public class MerchantQrService {
             g2.setColor(new Color(24, 76, 120));
             g2.fillRect(0, 0, QR_IMAGE_WIDTH, 36);
             g2.setColor(Color.WHITE);
-            g2.setFont(new Font("SansSerif", Font.BOLD, 14));
+            g2.setFont(new Font(OtogConfig.getInstance().getFontFamily(), Font.BOLD, 14));
             FontMetrics fm = g2.getFontMetrics();
             String title = "OTOG MERCHANT QR";
             g2.drawString(title, (QR_IMAGE_WIDTH - fm.stringWidth(title)) / 2, 23);
@@ -78,7 +88,6 @@ public class MerchantQrService {
             int startY = 46;
 
             g2.setColor(Color.BLACK);
-            // Finder patterns (3 corners)
             drawFinderPattern(g2, startX + 10, startY + 10, 42);
             drawFinderPattern(g2, startX + matrixSize - 52, startY + 10, 42);
             drawFinderPattern(g2, startX + 10, startY + matrixSize - 52, 42);
@@ -102,7 +111,6 @@ public class MerchantQrService {
             int moduleSize = 6;
             for (int r = startY + 56; r < startY + matrixSize - 15; r += moduleSize) {
                 for (int c = startX + 15; c < startX + matrixSize - 15; c += moduleSize) {
-                    // Do not overwrite finder corners
                     if ((c < startX + 58 && r < startY + 58) ||
                             (c > startX + matrixSize - 58 && r < startY + 58) ||
                             (c < startX + 58 && r > startY + matrixSize - 58)) {
@@ -114,19 +122,19 @@ public class MerchantQrService {
                 }
             }
 
-            // Footer with merchant name & amount
+            // Footer with merchant name & formatted currency amount
             g2.setColor(new Color(245, 247, 250));
             g2.fillRect(0, QR_IMAGE_HEIGHT - 44, QR_IMAGE_WIDTH, 44);
             g2.setColor(new Color(30, 41, 59));
-            g2.setFont(new Font("SansSerif", Font.BOLD, 12));
+            g2.setFont(new Font(OtogConfig.getInstance().getFontFamily(), Font.BOLD, 12));
             fm = g2.getFontMetrics();
             String nameStr = payload.getMerchantName();
             g2.drawString(nameStr, (QR_IMAGE_WIDTH - fm.stringWidth(nameStr)) / 2, QR_IMAGE_HEIGHT - 26);
 
-            g2.setFont(new Font("SansSerif", Font.PLAIN, 11));
+            g2.setFont(new Font(OtogConfig.getInstance().getFontFamily(), Font.PLAIN, 11));
             fm = g2.getFontMetrics();
             String amtStr = payload.hasFixedAmount()
-                    ? payload.getCurrency() + " " + MoneyUtil.format(payload.getAmount(), "")
+                    ? MoneyUtil.format(payload.getAmount(), payload.getCurrency())
                     : "Pay Any Amount (" + payload.getCurrency() + ")";
             g2.drawString(amtStr, (QR_IMAGE_WIDTH - fm.stringWidth(amtStr)) / 2, QR_IMAGE_HEIGHT - 10);
         } finally {
@@ -145,7 +153,20 @@ public class MerchantQrService {
         if (targetFile == null) {
             throw new IllegalArgumentException("Target file path cannot be null");
         }
-        BufferedImage image = generateQrImage(payload);
+        return exportQrImage(generateQrImage(payload), targetFile);
+    }
+
+    /**
+     * Exports an already-rendered QR {@link BufferedImage} to the specified target file path as PNG
+     * without re-rendering the image.
+     */
+    public Path exportQrImage(BufferedImage image, Path targetFile) {
+        if (image == null) {
+            throw new IllegalArgumentException("QR image cannot be null");
+        }
+        if (targetFile == null) {
+            throw new IllegalArgumentException("Target file path cannot be null");
+        }
         try {
             File file = targetFile.toFile();
             File parent = file.getParentFile();
@@ -190,23 +211,24 @@ public class MerchantQrService {
     }
 
     /**
-     * Validates that the merchant and target wallet exist and are currently active.
+     * Validates that the merchant and target wallet exist, are active, and support the configured currency.
      */
     public User validateMerchant(MerchantQrPayload payload) {
         if (payload == null) {
             throw new MalformedQrException("QR payload cannot be null");
         }
-        if (!MerchantQrPayload.DEFAULT_CURRENCY.equalsIgnoreCase(payload.getCurrency())) {
+        String supportedCurrency = resolveSupportedCurrency();
+        if (!supportedCurrency.equalsIgnoreCase(payload.getCurrency())) {
             throw new WalletException("Unsupported currency: " + payload.getCurrency() + ". Only "
-                    + MerchantQrPayload.DEFAULT_CURRENCY + " is supported.");
+                    + supportedCurrency + " is supported.");
         }
 
         User merchant = userRepository.findById(payload.getMerchantId())
                 .orElseThrow(() -> new EntityNotFoundException("Merchant user", payload.getMerchantId()));
 
         if (merchant.getRole() != UserRole.MERCHANT) {
-            throw new WalletException("Account " + merchant.getUserId() + " is not a registered merchant (Role: "
-                    + merchant.getRole() + ").");
+            throw new WalletException("Account " + ReceiptBuilder.maskIdentifier(merchant.getUserId())
+                    + " is not a registered merchant (Role: " + merchant.getRole() + ").");
         }
 
         if (merchant.getStatus() != UserStatus.ACTIVE) {
@@ -223,39 +245,39 @@ public class MerchantQrService {
         if (merchantWallet.getStatus() != WalletStatus.ACTIVE) {
             throw new WalletException("Merchant wallet is not active: " + merchantWallet.getStatus());
         }
+        if (merchantWallet.getCurrency() == null
+                || !payload.getCurrency().equalsIgnoreCase(merchantWallet.getCurrency())) {
+            throw new WalletException("Currency mismatch: merchant wallet currency ("
+                    + merchantWallet.getCurrency() + ") does not match QR currency (" + payload.getCurrency() + ").");
+        }
 
         return merchant;
     }
 
     /**
-     * Generates a pre-confirmation payment preview validating balance, merchant state, and amount.
+     * Validates an imported QR payload for the active customer immediately after decoding:
+     * verifies merchant & currency, customer active status & currency, blocks self-payment,
+     * and rejects already-settled duplicate QR references.
+     *
+     * @return the DB-verified {@link User} representing the merchant
      */
-    public MerchantPaymentPreview previewPayment(String customerUserId, MerchantQrPayload payload, BigDecimal inputAmount) {
+    public User validateImportForCustomer(String customerUserId, MerchantQrPayload payload) {
         if (customerUserId == null || customerUserId.trim().isEmpty()) {
             throw new IllegalArgumentException("Customer user ID cannot be null or empty");
         }
         String cleanCustomer = customerUserId.trim();
 
-        // Validate merchant and currency
         User merchant = validateMerchant(payload);
-
-        // Reject self-payment
         if (merchant.getUserId().equals(cleanCustomer)) {
             throw new WalletException("Self-payment to owned merchant account is not permitted.");
         }
 
-        // Determine effective amount
-        BigDecimal effectiveAmount;
-        if (payload.hasFixedAmount()) {
-            effectiveAmount = payload.getAmount();
-        } else {
-            if (inputAmount == null) {
-                throw new InvalidAmountException("Payment amount is required for open merchant QR.");
-            }
-            effectiveAmount = MoneyUtil.validatePositiveAmount(inputAmount);
+        User customer = userRepository.findById(cleanCustomer)
+                .orElseThrow(() -> new EntityNotFoundException("Customer user", cleanCustomer));
+        if (customer.getStatus() != UserStatus.ACTIVE) {
+            throw new WalletException("Customer account is not active: " + customer.getStatus());
         }
 
-        // Validate customer wallet & balance
         Wallet customerWallet = walletService.getWalletByUserId(cleanCustomer);
         if (customerWallet == null) {
             throw new EntityNotFoundException("Customer wallet for user", cleanCustomer);
@@ -263,7 +285,49 @@ public class MerchantQrService {
         if (customerWallet.getStatus() != WalletStatus.ACTIVE) {
             throw new WalletException("Customer wallet is not active: " + customerWallet.getStatus());
         }
+        if (customerWallet.getCurrency() == null
+                || !payload.getCurrency().equalsIgnoreCase(customerWallet.getCurrency())) {
+            throw new WalletException("Currency mismatch: customer wallet currency ("
+                    + customerWallet.getCurrency() + ") does not match QR currency (" + payload.getCurrency() + ").");
+        }
 
+        checkDuplicateQrReference(payload.getQrReference(), customerWallet.getWalletId());
+        return merchant;
+    }
+
+    /**
+     * Generates a pre-confirmation payment preview validating merchant state, customer status,
+     * wallet currencies, duplicate references, balance, and amount.
+     */
+    public MerchantPaymentPreview previewPayment(String customerUserId, MerchantQrPayload payload, BigDecimal inputAmount) {
+        if (customerUserId == null || customerUserId.trim().isEmpty()) {
+            throw new IllegalArgumentException("Customer user ID cannot be null or empty");
+        }
+        String cleanCustomer = customerUserId.trim();
+
+        // Validate merchant, customer status, currencies, self-payment, and duplicate QR reference
+        User merchant = validateImportForCustomer(cleanCustomer, payload);
+
+        // Determine and validate effective amount
+        BigDecimal effectiveAmount;
+        if (payload.hasFixedAmount()) {
+            effectiveAmount = payload.getAmount();
+            if (inputAmount != null) {
+                BigDecimal validatedInput = MoneyUtil.validatePositiveAmount(inputAmount);
+                if (validatedInput.compareTo(effectiveAmount) != 0) {
+                    throw new InvalidAmountException("Fixed-amount QR requires exact amount "
+                            + MoneyUtil.format(effectiveAmount, payload.getCurrency())
+                            + " (received " + MoneyUtil.format(validatedInput, payload.getCurrency()) + ").");
+                }
+            }
+        } else {
+            if (inputAmount == null) {
+                throw new InvalidAmountException("Payment amount is required for open merchant QR.");
+            }
+            effectiveAmount = MoneyUtil.validatePositiveAmount(inputAmount);
+        }
+
+        Wallet customerWallet = walletService.getWalletByUserId(cleanCustomer);
         BigDecimal balance = customerWallet.getBalance();
         if (balance.compareTo(effectiveAmount) < 0) {
             throw new InsufficientFundsException(customerWallet.getWalletId(), balance, effectiveAmount);
@@ -295,6 +359,7 @@ public class MerchantQrService {
         if (rawPin == null || rawPin.trim().isEmpty()) {
             throw new WalletException("Transaction PIN is required.");
         }
+        String cleanPin = rawPin.trim();
 
         // Re-validate merchant status right before debiting
         validateMerchant(new MerchantQrPayload(
@@ -307,7 +372,7 @@ public class MerchantQrService {
                 preview.getNote()
         ));
 
-        String transferRef = "REQ-QR-" + preview.getQrReference();
+        String transferRef = QR_TRANSFER_REF_PREFIX + preview.getQrReference();
         String description = "QR Pay: " + preview.getMerchant().getName()
                 + (preview.getNote() != null && !preview.getNote().isEmpty() ? " - " + preview.getNote() : "");
 
@@ -318,8 +383,36 @@ public class MerchantQrService {
                 preview.getAmount(),
                 BigDecimal.ZERO,
                 description,
-                rawPin
+                cleanPin
         );
+    }
+
+    private void checkDuplicateQrReference(String qrReference, String customerWalletId) {
+        String transferRef = QR_TRANSFER_REF_PREFIX + qrReference;
+        WalletOperations root = walletService;
+        while (root instanceof ProtectedWalletOperationsProxy proxy) {
+            root = proxy.getDelegate();
+        }
+        if (root instanceof WalletService ws) {
+            if (ws.getTransactionRepository().findByReferenceNumber(transferRef).isPresent()) {
+                throw new DuplicateTransactionException(transferRef);
+            }
+            return;
+        }
+        List<Transaction> recent = walletService.getRecentTransactions(
+                customerWalletId, OtogConfig.getInstance().getRecentTransactionLimit());
+        for (Transaction txn : recent) {
+            if (transferRef.equalsIgnoreCase(txn.getReferenceNumber())) {
+                throw new DuplicateTransactionException(transferRef);
+            }
+        }
+    }
+
+    private static String resolveSupportedCurrency() {
+        String configured = OtogConfig.getInstance().getDefaultCurrency();
+        return (configured != null && !configured.isBlank())
+                ? configured.trim().toUpperCase(java.util.Locale.ROOT)
+                : MerchantQrPayload.DEFAULT_CURRENCY;
     }
 
     // --- Private Visual & Lossless Raster Helpers ---
@@ -336,44 +429,47 @@ public class MerchantQrService {
     private static void embedPayloadIntoImage(BufferedImage image, MerchantQrPayload payload) {
         String encoded = payload.encode();
         byte[] payloadBytes = encoded.getBytes(StandardCharsets.UTF_8);
+        if (payloadBytes.length > MAX_PAYLOAD_BYTES) {
+            throw new MalformedQrException("QR payload exceeds maximum allowed size of "
+                    + MAX_PAYLOAD_BYTES + " bytes.");
+        }
 
         CRC32 crc = new CRC32();
         crc.update(payloadBytes);
         int crcVal = (int) crc.getValue();
 
-        int totalLen = MAGIC_HEADER.length + 4 + payloadBytes.length + 4;
-        byte[] buffer = new byte[totalLen];
+        long totalLen = (long) MAGIC_HEADER.length + 4L + payloadBytes.length + 4L;
+        long imageCapacity = (long) image.getWidth() * (long) image.getHeight();
+        if (totalLen > imageCapacity) {
+            throw new MalformedQrException("QR payload (" + totalLen + " bytes) exceeds image pixel capacity ("
+                    + imageCapacity + " pixels).");
+        }
+
+        byte[] buffer = new byte[(int) totalLen];
         int pos = 0;
 
         System.arraycopy(MAGIC_HEADER, 0, buffer, pos, MAGIC_HEADER.length);
         pos += MAGIC_HEADER.length;
 
-        // 4 bytes payload length
         int len = payloadBytes.length;
         buffer[pos++] = (byte) ((len >>> 24) & 0xFF);
         buffer[pos++] = (byte) ((len >>> 16) & 0xFF);
         buffer[pos++] = (byte) ((len >>> 8) & 0xFF);
         buffer[pos++] = (byte) (len & 0xFF);
 
-        // payload bytes
         System.arraycopy(payloadBytes, 0, buffer, pos, payloadBytes.length);
         pos += payloadBytes.length;
 
-        // 4 bytes crc
         buffer[pos++] = (byte) ((crcVal >>> 24) & 0xFF);
         buffer[pos++] = (byte) ((crcVal >>> 16) & 0xFF);
         buffer[pos++] = (byte) ((crcVal >>> 8) & 0xFF);
         buffer[pos++] = (byte) (crcVal & 0xFF);
 
-        // Write into pixels at the very bottom edge (lossless RGB preservation)
         int width = image.getWidth();
         int height = image.getHeight();
         for (int i = 0; i < buffer.length; i++) {
             int x = i % width;
             int y = (height - 1) - (i / width);
-            if (y < 0) {
-                break;
-            }
             int val = buffer[i] & 0xFF;
             image.setRGB(x, y, (0xFF << 24) | (val << 16) | (val << 8) | val);
         }
@@ -382,20 +478,22 @@ public class MerchantQrService {
     private static String extractPayloadFromImage(BufferedImage image) {
         int width = image.getWidth();
         int height = image.getHeight();
+        long capacity = (long) width * (long) height;
+        int minBytes = MAGIC_HEADER.length + 4 + 4;
+        if (width <= 0 || height <= 0 || capacity < minBytes) {
+            throw new MalformedQrException("Selected image is too small to contain an OTOG Merchant QR payload.");
+        }
 
-        // 1. Read and check magic header
         int magicLen = MAGIC_HEADER.length;
-        byte[] magic = new byte[magicLen];
         for (int i = 0; i < magicLen; i++) {
             int x = i % width;
             int y = (height - 1) - (i / width);
-            magic[i] = (byte) (image.getRGB(x, y) & 0xFF);
-            if (magic[i] != MAGIC_HEADER[i]) {
+            byte b = (byte) (image.getRGB(x, y) & 0xFF);
+            if (b != MAGIC_HEADER[i]) {
                 throw new MalformedQrException("Selected image is not a valid OTOG Merchant QR code (missing marker).");
             }
         }
 
-        // 2. Read 4 bytes length
         int offset = magicLen;
         int len = 0;
         for (int i = 0; i < 4; i++) {
@@ -406,8 +504,14 @@ public class MerchantQrService {
             len = (len << 8) | b;
         }
 
-        if (len <= 0 || len > 10000) {
+        if (len <= 0 || len > MAX_PAYLOAD_BYTES) {
             throw new MalformedQrException("Corrupted QR payload length: " + len);
+        }
+
+        long requiredPixels = (long) MAGIC_HEADER.length + 4L + (long) len + 4L;
+        if (requiredPixels > capacity) {
+            throw new MalformedQrException("Corrupted QR image: declared payload (" + requiredPixels
+                    + " bytes) exceeds image capacity (" + capacity + " pixels).");
         }
 
         offset += 4;
@@ -441,7 +545,7 @@ public class MerchantQrService {
     }
 
     /**
-     * Immutable confirmation summary displayed to the customer before PIN entry.
+     * Immutable confirmation summary displayed to the customer before PIN approval.
      */
     public static final class MerchantPaymentPreview {
         private final String customerUserId;
@@ -504,20 +608,17 @@ public class MerchantQrService {
         }
 
         public String toConfirmationText() {
-            StringBuilder sb = new StringBuilder();
-            sb.append("========================================\n");
-            sb.append("       MERCHANT PAYMENT CONFIRMATION    \n");
-            sb.append("========================================\n");
-            sb.append("Merchant Name:   ").append(merchant.getName()).append("\n");
-            sb.append("Merchant ID:     ").append(merchant.getUserId()).append("\n");
-            sb.append("Merchant Mobile: ").append(ReceiptBuilder.maskIdentifier(merchant.getMobileNumber())).append("\n");
-            sb.append("Amount:          ").append(MoneyUtil.format(amount, currency)).append("\n");
-            sb.append("QR Reference:    ").append(qrReference).append("\n");
-            if (note != null && !note.isEmpty()) {
-                sb.append("Note:            ").append(note).append("\n");
-            }
-            sb.append("========================================\n");
-            return sb.toString();
+            return new ReceiptBuilder()
+                    .banner("MERCHANT PAYMENT CONFIRMATION")
+                    .labelWidth(16)
+                    .line("Merchant Name", merchant.getName())
+                    .maskedLine("Merchant ID", merchant.getUserId())
+                    .maskedLine("Merchant Mobile", merchant.getMobileNumber())
+                    .maskedLine("Merchant Wallet", merchantWalletId)
+                    .moneyLine("Amount", amount, currency)
+                    .line("QR Reference", qrReference)
+                    .optionalLine("Note", note)
+                    .build();
         }
     }
 }

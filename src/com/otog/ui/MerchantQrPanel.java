@@ -3,7 +3,6 @@ package com.otog.ui;
 import com.intellij.uiDesigner.core.GridConstraints;
 import com.intellij.uiDesigner.core.GridLayoutManager;
 import com.intellij.uiDesigner.core.Spacer;
-import com.otog.exception.MalformedQrException;
 import com.otog.model.MerchantQrPayload;
 import com.otog.model.ReceiptBuilder;
 import com.otog.model.Transaction;
@@ -35,24 +34,40 @@ import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
 import java.util.concurrent.ExecutionException;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.function.BiFunction;
+import java.util.function.BooleanSupplier;
+import java.util.function.Consumer;
 
 /**
  * Bound IntelliJ Swing form panel for Merchant QR Payments (CAP-11):
- * - Customer Flow: Import QR image, confirm recipient & amount, authorize payment with PIN, view receipt.
- * - Merchant Flow: Generate project QR code, export image, view received payments and merchant receipts.
+ * - Customer Flow: Import & validate QR image, confirm DB-verified recipient & amount, authorize payment with PIN, view receipt.
+ * - Merchant Flow (MERCHANT/ADMIN only): Generate project QR code, export PNG image, view received QR payments & merchant receipts.
  */
 public class MerchantQrPanel extends JPanel {
 
     private static final String[] SALES_COLUMNS = {"Txn ID", "Reference", "Date", "Customer", "Amount", "Status"};
+    private static final String MERCHANT_TAB_TITLE = "Merchant Terminal & Sales";
 
     private final MerchantQrService qrService;
     private final WalletOperations walletService;
-    private final AuthService authService;
     private final Runnable backToOverviewCallback;
     private final Runnable paymentCompletedCallback;
 
+    private BooleanSupplier beforeInteractiveSubmit;
+    private BooleanSupplier pinConfiguredSupplier;
+    private Runnable onPinNotSet;
+    private Consumer<Throwable> onPaymentError;
+    private Consumer<Boolean> offEdtObserver;
+    private BiFunction<String, String, Integer> confirmDialogCallback;
+    private final AtomicBoolean paymentInFlight = new AtomicBoolean(false);
+    private volatile boolean lastOperationExecutedOffEdt;
+
     private MerchantQrPayload loadedPayload;
+    private User verifiedMerchant;
     private MerchantQrPayload generatedPayload;
     private BufferedImage lastGeneratedImage;
     private List<Transaction> loadedMerchantSales = Collections.emptyList();
@@ -67,6 +82,7 @@ public class MerchantQrPanel extends JPanel {
     private JLabel lblImportedFile;
     private JLabel lblQrThumbnail;
     private JTextArea txtConfirmation;
+    private JLabel lblPayAmount;
     private JTextField txtPayAmount;
     private JPasswordField txtPayPin;
     private JButton btnConfirmPay;
@@ -77,6 +93,7 @@ public class MerchantQrPanel extends JPanel {
 
     // Merchant Generator Tab
     private JPanel pnlMerchantTab;
+    private JLabel lblGenAmount;
     private JTextField txtGenAmount;
     private JTextField txtGenNote;
     private JButton btnGenerateQr;
@@ -107,15 +124,134 @@ public class MerchantQrPanel extends JPanel {
         super(new BorderLayout());
         this.qrService = qrService;
         this.walletService = walletService;
-        this.authService = authService;
         this.backToOverviewCallback = backToOverviewCallback;
         this.paymentCompletedCallback = paymentCompletedCallback;
 
         if (pnlRoot == null) {
             $$$setupUI$$$();
         }
+        ensureComponentsInitialized();
         add(pnlRoot, BorderLayout.CENTER);
+        applyRoleAccessControl();
         initActions();
+    }
+
+    private void ensureComponentsInitialized() {
+        OtogConfig config = OtogConfig.getInstance();
+        String currency = config.getDefaultCurrency();
+        if (lblPayAmount != null) {
+            lblPayAmount.setText("Payment Amount (" + currency + "):");
+        }
+        if (lblGenAmount != null) {
+            lblGenAmount.setText("Amount (" + currency + ", Optional):");
+        }
+        if (salesTableModel == null) {
+            salesTableModel = new DefaultTableModel(SALES_COLUMNS, 0) {
+                @Override
+                public boolean isCellEditable(int row, int column) {
+                    return false;
+                }
+            };
+        }
+        if (tblMerchantSales != null) {
+            if (tblMerchantSales.getModel() != salesTableModel) {
+                tblMerchantSales.setModel(salesTableModel);
+            }
+            tblMerchantSales.setSelectionMode(ListSelectionModel.SINGLE_SELECTION);
+            tblMerchantSales.setRowHeight(config.getTableRowHeight());
+            tblMerchantSales.setAutoCreateRowSorter(true);
+            tblMerchantSales.getTableHeader().setReorderingAllowed(false);
+        }
+        if (lblQrThumbnail != null) {
+            lblQrThumbnail.setPreferredSize(new Dimension(120, 120));
+            lblQrThumbnail.setBorder(BorderFactory.createLineBorder(UiTheme.color(UiTheme.ColorRole.BORDER)));
+        }
+        if (lblGeneratedQr != null) {
+            lblGeneratedQr.setPreferredSize(new Dimension(160, 160));
+            lblGeneratedQr.setBorder(BorderFactory.createLineBorder(UiTheme.color(UiTheme.ColorRole.BORDER)));
+        }
+        if (txtConfirmation != null) {
+            txtConfirmation.setEditable(false);
+            txtConfirmation.setFont(UiTheme.font(UiTheme.FontRole.MONO));
+            txtConfirmation.setLineWrap(true);
+            txtConfirmation.setWrapStyleWord(true);
+        }
+        if (txtReceipt != null) {
+            txtReceipt.setEditable(false);
+            txtReceipt.setFont(UiTheme.font(UiTheme.FontRole.MONO));
+            txtReceipt.setLineWrap(true);
+            txtReceipt.setWrapStyleWord(true);
+        }
+        if (txtPayPin != null) {
+            txtPayPin.setToolTipText("Enter your " + config.getPinMinLength() + "-" + config.getPinMaxLength()
+                    + " digit Transaction PIN to authorize merchant QR payment");
+        }
+        if (btnConfirmPay != null) {
+            btnConfirmPay.setEnabled(false);
+        }
+        if (btnSaveQr != null) {
+            btnSaveQr.setEnabled(false);
+        }
+        if (btnViewMerchantReceipt != null) {
+            btnViewMerchantReceipt.setEnabled(false);
+        }
+        if (lblPayFeedback != null) {
+            lblPayFeedback.setFont(UiTheme.font(UiTheme.FontRole.LABEL));
+        }
+        if (lblMerchantFeedback != null) {
+            lblMerchantFeedback.setFont(UiTheme.font(UiTheme.FontRole.LABEL));
+        }
+    }
+
+    /**
+     * Enforces CAP-09 role boundaries: hides the Merchant Terminal & Sales sub-tab from standard USER accounts.
+     */
+    public void applyRoleAccessControl() {
+        if (tabsQr == null || pnlMerchantTab == null) {
+            return;
+        }
+        User currentUser = SessionManager.getInstance().getCurrentUser();
+        boolean canAccessMerchantTerminal = currentUser == null
+                || currentUser.getRole() == UserRole.MERCHANT
+                || currentUser.isAdmin();
+        int existingIndex = tabsQr.indexOfComponent(pnlMerchantTab);
+        if (!canAccessMerchantTerminal && existingIndex >= 0) {
+            tabsQr.removeTabAt(existingIndex);
+        } else if (canAccessMerchantTerminal && existingIndex < 0) {
+            tabsQr.addTab(MERCHANT_TAB_TITLE, pnlMerchantTab);
+        }
+    }
+
+    public boolean isMerchantTerminalVisible() {
+        return tabsQr != null && pnlMerchantTab != null && tabsQr.indexOfComponent(pnlMerchantTab) >= 0;
+    }
+
+    public void setBeforeInteractiveSubmit(BooleanSupplier beforeInteractiveSubmit) {
+        this.beforeInteractiveSubmit = beforeInteractiveSubmit;
+    }
+
+    public void setPinConfiguredSupplier(BooleanSupplier pinConfiguredSupplier) {
+        this.pinConfiguredSupplier = pinConfiguredSupplier;
+    }
+
+    public void setOnPinNotSet(Runnable onPinNotSet) {
+        this.onPinNotSet = onPinNotSet;
+    }
+
+    public void setOnPaymentError(Consumer<Throwable> onPaymentError) {
+        this.onPaymentError = onPaymentError;
+    }
+
+    public void setOffEdtObserver(Consumer<Boolean> offEdtObserver) {
+        this.offEdtObserver = offEdtObserver;
+    }
+
+    public void setConfirmDialogCallback(BiFunction<String, String, Integer> confirmDialogCallback) {
+        this.confirmDialogCallback = confirmDialogCallback;
+    }
+
+    public boolean isLastOperationExecutedOffEdt() {
+        return lastOperationExecutedOffEdt;
     }
 
     private void initActions() {
@@ -124,6 +260,12 @@ public class MerchantQrPanel extends JPanel {
         }
         if (btnConfirmPay != null) {
             btnConfirmPay.addActionListener(e -> handleConfirmPayAction());
+        }
+        if (txtPayAmount != null) {
+            txtPayAmount.addActionListener(e -> handleConfirmPayAction());
+        }
+        if (txtPayPin != null) {
+            txtPayPin.addActionListener(e -> handleConfirmPayAction());
         }
         if (btnClearPay != null) {
             btnClearPay.addActionListener(e -> resetPayForm());
@@ -138,6 +280,12 @@ public class MerchantQrPanel extends JPanel {
         if (btnGenerateQr != null) {
             btnGenerateQr.addActionListener(e -> handleGenerateQrAction());
         }
+        if (txtGenAmount != null) {
+            txtGenAmount.addActionListener(e -> handleGenerateQrAction());
+        }
+        if (txtGenNote != null) {
+            txtGenNote.addActionListener(e -> handleGenerateQrAction());
+        }
         if (btnSaveQr != null) {
             btnSaveQr.addActionListener(e -> handleSaveQrAction());
         }
@@ -146,6 +294,13 @@ public class MerchantQrPanel extends JPanel {
         }
         if (btnViewMerchantReceipt != null) {
             btnViewMerchantReceipt.addActionListener(e -> showSelectedSaleReceipt());
+        }
+        if (tabsQr != null) {
+            tabsQr.addChangeListener(e -> {
+                if (pnlMerchantTab != null && tabsQr.getSelectedComponent() == pnlMerchantTab) {
+                    refreshMerchantSalesIfAuthorized();
+                }
+            });
         }
         if (tblMerchantSales != null) {
             tblMerchantSales.addMouseListener(new MouseAdapter() {
@@ -167,6 +322,9 @@ public class MerchantQrPanel extends JPanel {
     // --- Customer Pay Actions ---
 
     private void handleImportQrAction() {
+        if (beforeInteractiveSubmit != null && !beforeInteractiveSubmit.getAsBoolean()) {
+            return;
+        }
         JFileChooser chooser = new JFileChooser();
         chooser.setDialogTitle("Select OTOG Merchant QR Image");
         chooser.setFileFilter(new FileNameExtensionFilter("PNG Images (*.png)", "png", "PNG"));
@@ -175,24 +333,54 @@ public class MerchantQrPanel extends JPanel {
         if (result != JFileChooser.APPROVE_OPTION) {
             return;
         }
+        importQrFileAsync(chooser.getSelectedFile().toPath());
+    }
 
-        File file = chooser.getSelectedFile();
-        lblImportedFile.setText(file.getName());
-        lblPayFeedback.setText("Reading and verifying QR code image...");
-        lblPayFeedback.setForeground(UiTheme.color(UiTheme.ColorRole.MUTED));
-
+    public CompletableFuture<MerchantQrPayload> importQrFileAsync(Path sourceFile) {
+        CompletableFuture<MerchantQrPayload> future = new CompletableFuture<>();
         if (qrService == null) {
-            lblPayFeedback.setText("MerchantQrService is not initialized.");
-            lblPayFeedback.setForeground(UiTheme.color(UiTheme.ColorRole.ERROR));
-            return;
+            IllegalStateException err = new IllegalStateException("MerchantQrService is not initialized.");
+            runOnEdt(() -> {
+                lblPayFeedback.setText(err.getMessage());
+                lblPayFeedback.setForeground(UiTheme.color(UiTheme.ColorRole.ERROR));
+            });
+            future.completeExceptionally(err);
+            return future;
+        }
+        if (sourceFile == null) {
+            IllegalArgumentException err = new IllegalArgumentException("QR source file cannot be null.");
+            future.completeExceptionally(err);
+            return future;
         }
 
-        SwingWorker<MerchantQrPayload, Void> worker = new SwingWorker<>() {
-            private BufferedImage thumbnail;
+        User currentUser = SessionManager.getInstance().getCurrentUser();
+        if (currentUser == null) {
+            SecurityException err = new SecurityException("Active authenticated user session is required.");
+            runOnEdt(() -> {
+                lblPayFeedback.setText(err.getMessage());
+                lblPayFeedback.setForeground(UiTheme.color(UiTheme.ColorRole.ERROR));
+            });
+            future.completeExceptionally(err);
+            return future;
+        }
 
+        File file = sourceFile.toFile();
+        runOnEdt(() -> {
+            btnImportQr.setEnabled(false);
+            btnConfirmPay.setEnabled(false);
+            lblImportedFile.setText(file.getName());
+            lblPayFeedback.setText("Reading and validating QR code image...");
+            lblPayFeedback.setForeground(UiTheme.color(UiTheme.ColorRole.MUTED));
+        });
+
+        SwingWorker<ImportOutcome, Void> worker = new SwingWorker<>() {
             @Override
-            protected MerchantQrPayload doInBackground() throws Exception {
-                MerchantQrPayload payload = qrService.importQrImage(file.toPath());
+            protected ImportOutcome doInBackground() throws Exception {
+                recordOffEdt();
+                SessionManager.getInstance().touchActivity();
+                MerchantQrPayload payload = qrService.importQrImage(sourceFile);
+                User merchant = qrService.validateImportForCustomer(currentUser.getUserId(), payload);
+                BufferedImage thumbnail = null;
                 BufferedImage img = ImageIO.read(file);
                 if (img != null) {
                     Image scaled = img.getScaledInstance(120, 120, Image.SCALE_SMOOTH);
@@ -201,144 +389,300 @@ public class MerchantQrPanel extends JPanel {
                     g.drawImage(scaled, 0, 0, null);
                     g.dispose();
                 }
-                return payload;
+                return new ImportOutcome(payload, merchant, thumbnail);
             }
 
             @Override
             protected void done() {
+                btnImportQr.setEnabled(true);
                 try {
-                    MerchantQrPayload payload = get();
+                    ImportOutcome outcome = get();
+                    MerchantQrPayload payload = outcome.payload();
+                    User merchant = outcome.merchant();
                     loadedPayload = payload;
-                    if (thumbnail != null) {
-                        lblQrThumbnail.setIcon(new ImageIcon(thumbnail));
+                    verifiedMerchant = merchant;
+
+                    if (outcome.thumbnail() != null) {
+                        lblQrThumbnail.setIcon(new ImageIcon(outcome.thumbnail()));
                         lblQrThumbnail.setText("");
                     }
 
-                    // Format recipient confirmation preview
-                    StringBuilder sb = new StringBuilder();
-                    sb.append("Merchant:  ").append(payload.getMerchantName()).append("\n");
-                    sb.append("ID:        ").append(payload.getMerchantId()).append("\n");
-                    sb.append("Terminal:  ").append(ReceiptBuilder.maskIdentifier(payload.getMerchantWalletId())).append("\n");
-                    sb.append("Currency:  ").append(payload.getCurrency()).append("\n");
-                    sb.append("Reference: ").append(payload.getQrReference()).append("\n");
+                    // Render DB-verified merchant details (never raw untrusted payload name or raw user ID)
+                    ReceiptBuilder previewBuilder = new ReceiptBuilder()
+                            .banner("VERIFIED MERCHANT QR")
+                            .labelWidth(15)
+                            .line("Merchant", merchant.getName())
+                            .maskedLine("Merchant ID", merchant.getUserId())
+                            .maskedLine("Mobile", merchant.getMobileNumber())
+                            .maskedLine("Terminal", payload.getMerchantWalletId())
+                            .line("Currency", payload.getCurrency())
+                            .line("QR Reference", payload.getQrReference());
                     if (payload.hasFixedAmount()) {
-                        sb.append("Amount:    ").append(MoneyUtil.format(payload.getAmount(), payload.getCurrency())).append(" (Fixed)\n");
+                        previewBuilder.line("Amount", MoneyUtil.format(payload.getAmount(), payload.getCurrency()) + " (Fixed)");
                         txtPayAmount.setText(payload.getAmount().toPlainString());
                         txtPayAmount.setEditable(false);
                     } else {
-                        sb.append("Amount:    Open (Customer specifies amount)\n");
+                        previewBuilder.line("Amount", "Open (Customer specifies amount)");
                         txtPayAmount.setText("");
                         txtPayAmount.setEditable(true);
                     }
-                    if (payload.getNote() != null && !payload.getNote().isEmpty()) {
-                        sb.append("Note:      ").append(payload.getNote()).append("\n");
-                    }
-                    txtConfirmation.setText(sb.toString());
+                    previewBuilder.optionalLine("Note", payload.getNote());
+                    txtConfirmation.setText(previewBuilder.build());
                     txtConfirmation.setCaretPosition(0);
 
                     btnConfirmPay.setEnabled(true);
-                    lblPayFeedback.setText("QR Code verified! Review recipient details, enter PIN, and click Confirm & Pay.");
+                    lblPayFeedback.setText("Merchant verified! Review recipient details, enter PIN, and click Confirm & Pay.");
                     lblPayFeedback.setForeground(UiTheme.color(UiTheme.ColorRole.SUCCESS));
                     if (!payload.hasFixedAmount()) {
                         txtPayAmount.requestFocusInWindow();
                     } else {
                         txtPayPin.requestFocusInWindow();
                     }
-                } catch (InterruptedException e) {
-                    Thread.currentThread().interrupt();
-                } catch (ExecutionException e) {
-                    Throwable cause = e.getCause() != null ? e.getCause() : e;
+                    future.complete(payload);
+                } catch (Exception e) {
+                    Throwable cause = unwrapCause(e);
                     loadedPayload = null;
+                    verifiedMerchant = null;
                     btnConfirmPay.setEnabled(false);
                     lblQrThumbnail.setIcon(null);
                     lblQrThumbnail.setText("[ Invalid QR ]");
-                    txtConfirmation.setText("Failed to import QR: " + cause.getMessage());
-                    lblPayFeedback.setText("Error: " + cause.getMessage());
+                    txtConfirmation.setText("QR validation failed: " + extractErrorMessage(cause));
+                    lblPayFeedback.setText("Error: " + extractErrorMessage(cause));
                     lblPayFeedback.setForeground(UiTheme.color(UiTheme.ColorRole.ERROR));
+                    if (onPaymentError != null) {
+                        onPaymentError.accept(cause);
+                    }
+                    future.completeExceptionally(cause);
                 }
             }
         };
         worker.execute();
+        return future;
+    }
+
+    protected int showConfirmDialog(String title, String message) {
+        if (confirmDialogCallback != null) {
+            Integer result = confirmDialogCallback.apply(title, message);
+            return result != null ? result : JOptionPane.CANCEL_OPTION;
+        }
+        if (GraphicsEnvironment.isHeadless()) {
+            return JOptionPane.OK_OPTION;
+        }
+        JTextArea area = new JTextArea(message);
+        area.setEditable(false);
+        area.setFont(UiTheme.font(UiTheme.FontRole.MONO));
+        area.setBackground(UIManager.getColor("Panel.background"));
+        return JOptionPane.showConfirmDialog(
+                this,
+                area,
+                title,
+                JOptionPane.OK_CANCEL_OPTION,
+                JOptionPane.QUESTION_MESSAGE
+        );
     }
 
     private void handleConfirmPayAction() {
+        if (!btnConfirmPay.isEnabled() || paymentInFlight.get()) {
+            return;
+        }
+        if (beforeInteractiveSubmit != null && !beforeInteractiveSubmit.getAsBoolean()) {
+            return;
+        }
+        if (qrService == null) {
+            lblPayFeedback.setText("MerchantQrService is not initialized.");
+            lblPayFeedback.setForeground(UiTheme.color(UiTheme.ColorRole.ERROR));
+            return;
+        }
         if (loadedPayload == null) {
             lblPayFeedback.setText("Please import a valid Merchant QR code image first.");
             lblPayFeedback.setForeground(UiTheme.color(UiTheme.ColorRole.ERROR));
             return;
         }
-
-        SessionManager session = SessionManager.getInstance();
-        User currentUser = session.getCurrentUser();
-        if (currentUser == null) {
-            lblPayFeedback.setText("Active authenticated user session is required.");
-            lblPayFeedback.setForeground(UiTheme.color(UiTheme.ColorRole.ERROR));
+        if (pinConfiguredSupplier != null && !pinConfiguredSupplier.getAsBoolean()) {
+            txtPayPin.setText("");
+            lblPayFeedback.setForeground(UiTheme.color(UiTheme.ColorRole.WARNING));
+            lblPayFeedback.setText("Transaction PIN is not set. Please set a Transaction PIN before paying via Merchant QR.");
+            if (onPinNotSet != null) {
+                onPinNotSet.run();
+            }
             return;
         }
 
         String rawAmount = txtPayAmount.getText() != null ? txtPayAmount.getText().trim() : "";
+        char[] pinChars = txtPayPin.getPassword();
+        String rawPin = (pinChars != null && pinChars.length > 0) ? new String(pinChars).trim() : "";
+        submitPaymentAsync(rawAmount, rawPin);
+    }
+
+    public CompletableFuture<Transaction> submitPaymentAsync(String rawAmountText, String rawPin) {
+        CompletableFuture<Transaction> future = new CompletableFuture<>();
+        if (qrService == null) {
+            IllegalStateException err = new IllegalStateException("MerchantQrService is not initialized.");
+            future.completeExceptionally(err);
+            return future;
+        }
+        if (loadedPayload == null) {
+            IllegalStateException err = new IllegalStateException("Please import a valid Merchant QR code image first.");
+            runOnEdt(() -> {
+                lblPayFeedback.setText(err.getMessage());
+                lblPayFeedback.setForeground(UiTheme.color(UiTheme.ColorRole.ERROR));
+            });
+            future.completeExceptionally(err);
+            return future;
+        }
+        User currentUser = SessionManager.getInstance().getCurrentUser();
+        if (currentUser == null) {
+            SecurityException err = new SecurityException("Active authenticated user session is required.");
+            runOnEdt(() -> {
+                lblPayFeedback.setText(err.getMessage());
+                lblPayFeedback.setForeground(UiTheme.color(UiTheme.ColorRole.ERROR));
+            });
+            future.completeExceptionally(err);
+            return future;
+        }
+
+        String trimmedAmount = rawAmountText != null ? rawAmountText.trim() : "";
         BigDecimal inputAmount;
         try {
-            inputAmount = rawAmount.isEmpty() ? null : new BigDecimal(rawAmount);
+            inputAmount = trimmedAmount.isEmpty() ? null : new BigDecimal(trimmedAmount);
         } catch (NumberFormatException nfe) {
-            lblPayFeedback.setText("Invalid amount format. Please enter a valid number (e.g. 150.00).");
-            lblPayFeedback.setForeground(UiTheme.color(UiTheme.ColorRole.ERROR));
-            txtPayAmount.requestFocusInWindow();
-            return;
+            IllegalArgumentException err = new IllegalArgumentException(
+                    "Invalid amount format. Please enter a valid number (e.g. 150.00).", nfe);
+            runOnEdt(() -> {
+                lblPayFeedback.setText(err.getMessage());
+                lblPayFeedback.setForeground(UiTheme.color(UiTheme.ColorRole.ERROR));
+                txtPayAmount.requestFocusInWindow();
+            });
+            future.completeExceptionally(err);
+            return future;
         }
 
-        char[] pinChars = txtPayPin.getPassword();
-        String rawPin = (pinChars != null && pinChars.length > 0) ? new String(pinChars) : "";
-        if (rawPin.isEmpty()) {
-            lblPayFeedback.setText("Transaction PIN is required to authorize payment.");
-            lblPayFeedback.setForeground(UiTheme.color(UiTheme.ColorRole.ERROR));
-            txtPayPin.requestFocusInWindow();
-            return;
+        String cleanPin = rawPin != null ? rawPin.trim() : "";
+        if (cleanPin.isEmpty()) {
+            IllegalArgumentException err = new IllegalArgumentException("Transaction PIN is required to authorize payment.");
+            runOnEdt(() -> {
+                lblPayFeedback.setText(err.getMessage());
+                lblPayFeedback.setForeground(UiTheme.color(UiTheme.ColorRole.ERROR));
+                txtPayPin.requestFocusInWindow();
+            });
+            future.completeExceptionally(err);
+            return future;
         }
 
-        btnConfirmPay.setEnabled(false);
-        lblPayFeedback.setText("Processing merchant payment...");
-        lblPayFeedback.setForeground(UiTheme.color(UiTheme.ColorRole.MUTED));
+        if (!paymentInFlight.compareAndSet(false, true)) {
+            future.complete(null);
+            return future;
+        }
 
-        MerchantQrPayload payload = loadedPayload;
-        SwingWorker<Transaction, Void> worker = new SwingWorker<>() {
+        final MerchantQrPayload payload = loadedPayload;
+        runOnEdt(() -> {
+            btnConfirmPay.setEnabled(false);
+            btnImportQr.setEnabled(false);
+            txtPayPin.setText("");
+            lblPayFeedback.setText("Validating payment preview...");
+            lblPayFeedback.setForeground(UiTheme.color(UiTheme.ColorRole.INFO));
+        });
+
+        // Step 1: Validate and build preview off the EDT, then show recipient confirmation before debiting
+        new SwingWorker<MerchantPaymentPreview, Void>() {
             @Override
-            protected Transaction doInBackground() {
-                MerchantPaymentPreview preview = qrService.previewPayment(currentUser.getUserId(), payload, inputAmount);
-                return qrService.confirmAndPay(preview, rawPin);
+            protected MerchantPaymentPreview doInBackground() {
+                recordOffEdt();
+                SessionManager.getInstance().touchActivity();
+                return qrService.previewPayment(currentUser.getUserId(), payload, inputAmount);
             }
 
             @Override
             protected void done() {
-                txtPayPin.setText("");
-                btnConfirmPay.setEnabled(true);
+                MerchantPaymentPreview preview;
                 try {
-                    Transaction txn = get();
-                    lblPayFeedback.setText("Payment successful! Reference: " + txn.getReferenceNumber());
-                    lblPayFeedback.setForeground(UiTheme.color(UiTheme.ColorRole.SUCCESS));
-
-                    String receiptText = ReceiptBuilder.forMerchantPayment(
-                            txn, payload.getMerchantName(), payload.getQrReference(), false).build();
-                    txtReceipt.setText(receiptText);
-                    txtReceipt.setCaretPosition(0);
-
-                    if (paymentCompletedCallback != null) {
-                        paymentCompletedCallback.run();
-                    }
-                } catch (InterruptedException e) {
-                    Thread.currentThread().interrupt();
-                } catch (ExecutionException e) {
-                    Throwable cause = e.getCause() != null ? e.getCause() : e;
-                    lblPayFeedback.setText("Payment failed: " + cause.getMessage());
+                    preview = get();
+                } catch (Exception ex) {
+                    Throwable cause = unwrapCause(ex);
+                    paymentInFlight.set(false);
+                    btnImportQr.setEnabled(true);
+                    btnConfirmPay.setEnabled(loadedPayload != null);
+                    lblPayFeedback.setText("Validation failed: " + extractErrorMessage(cause));
                     lblPayFeedback.setForeground(UiTheme.color(UiTheme.ColorRole.ERROR));
+                    if (onPaymentError != null) {
+                        onPaymentError.accept(cause);
+                    }
+                    future.completeExceptionally(cause);
+                    return;
                 }
+
+                txtConfirmation.setText(preview.toConfirmationText());
+                txtConfirmation.setCaretPosition(0);
+
+                int choice = showConfirmDialog("Confirm Merchant QR Payment", preview.toConfirmationText());
+                if (choice != JOptionPane.OK_OPTION) {
+                    paymentInFlight.set(false);
+                    btnImportQr.setEnabled(true);
+                    btnConfirmPay.setEnabled(loadedPayload != null);
+                    lblPayFeedback.setForeground(UiTheme.color(UiTheme.ColorRole.MUTED));
+                    lblPayFeedback.setText("Merchant QR payment cancelled.");
+                    future.complete(null);
+                    return;
+                }
+
+                lblPayFeedback.setForeground(UiTheme.color(UiTheme.ColorRole.INFO));
+                lblPayFeedback.setText("Authorizing and processing merchant payment...");
+
+                // Step 2: Execute atomic transfer off the EDT
+                new SwingWorker<Transaction, Void>() {
+                    @Override
+                    protected Transaction doInBackground() {
+                        recordOffEdt();
+                        SessionManager.getInstance().touchActivity();
+                        return qrService.confirmAndPay(preview, cleanPin);
+                    }
+
+                    @Override
+                    protected void done() {
+                        paymentInFlight.set(false);
+                        btnImportQr.setEnabled(true);
+                        txtPayPin.setText("");
+                        try {
+                            Transaction txn = get();
+                            // Clear single-use QR payload & lock submit button after successful settlement
+                            loadedPayload = null;
+                            verifiedMerchant = null;
+                            btnConfirmPay.setEnabled(false);
+
+                            lblPayFeedback.setText("Payment successful! Reference: " + txn.getReferenceNumber());
+                            lblPayFeedback.setForeground(UiTheme.color(UiTheme.ColorRole.SUCCESS));
+
+                            String verifiedMerchantName = preview.getMerchant().getName();
+                            String receiptText = ReceiptBuilder.forMerchantPayment(
+                                    txn, verifiedMerchantName, preview.getQrReference(), false).build();
+                            txtReceipt.setText(receiptText);
+                            txtReceipt.setCaretPosition(0);
+
+                            if (paymentCompletedCallback != null) {
+                                paymentCompletedCallback.run();
+                            }
+                            future.complete(txn);
+                        } catch (Exception ex) {
+                            Throwable cause = unwrapCause(ex);
+                            btnConfirmPay.setEnabled(loadedPayload != null);
+                            lblPayFeedback.setText("Payment failed: " + extractErrorMessage(cause));
+                            lblPayFeedback.setForeground(UiTheme.color(UiTheme.ColorRole.ERROR));
+                            if (onPaymentError != null) {
+                                onPaymentError.accept(cause);
+                            }
+                            future.completeExceptionally(cause);
+                        }
+                    }
+                }.execute();
             }
-        };
-        worker.execute();
+        }.execute();
+
+        return future;
     }
 
     public void resetPayForm() {
         loadedPayload = null;
+        verifiedMerchant = null;
         lblImportedFile.setText("No QR file loaded.");
         lblQrThumbnail.setIcon(null);
         lblQrThumbnail.setText("[ QR Image ]");
@@ -354,73 +698,143 @@ public class MerchantQrPanel extends JPanel {
     // --- Merchant Generator Actions ---
 
     private void handleGenerateQrAction() {
+        if (beforeInteractiveSubmit != null && !beforeInteractiveSubmit.getAsBoolean()) {
+            return;
+        }
+        String rawAmount = txtGenAmount.getText() != null ? txtGenAmount.getText().trim() : "";
+        String note = txtGenNote.getText() != null ? txtGenNote.getText().trim() : "";
+        generateQrAsync(rawAmount, note);
+    }
+
+    public CompletableFuture<MerchantQrPayload> generateQrAsync(String rawAmountText, String noteText) {
+        CompletableFuture<MerchantQrPayload> future = new CompletableFuture<>();
+        if (qrService == null) {
+            IllegalStateException err = new IllegalStateException("MerchantQrService is not initialized.");
+            runOnEdt(() -> {
+                lblMerchantFeedback.setText(err.getMessage());
+                lblMerchantFeedback.setForeground(UiTheme.color(UiTheme.ColorRole.ERROR));
+            });
+            future.completeExceptionally(err);
+            return future;
+        }
+
         SessionManager session = SessionManager.getInstance();
         User currentUser = session.getCurrentUser();
         Wallet currentWallet = session.getCurrentWallet();
-
-        String merchantId;
-        String merchantWalletId;
-        String merchantName;
+        if (currentUser != null && currentUser.getRole() != UserRole.MERCHANT && !currentUser.isAdmin()) {
+            SecurityException err = new SecurityException("Only merchant or administrator accounts can generate merchant QR codes.");
+            runOnEdt(() -> {
+                lblMerchantFeedback.setText(err.getMessage());
+                lblMerchantFeedback.setForeground(UiTheme.color(UiTheme.ColorRole.ERROR));
+            });
+            future.completeExceptionally(err);
+            return future;
+        }
 
         OtogConfig config = OtogConfig.getInstance();
         OtogConfig.MerchantSeedConfig seedConfig = config.getMerchantSeedConfig();
-
+        final String merchantId;
+        final String merchantWalletId;
+        final String merchantName;
         if (currentUser != null && currentUser.getRole() == UserRole.MERCHANT && currentWallet != null) {
             merchantId = currentUser.getUserId();
             merchantWalletId = currentWallet.getWalletId();
             merchantName = currentUser.getName();
         } else {
-            // Default to configured seeded merchant profile
             merchantId = seedConfig.userId();
             merchantWalletId = seedConfig.walletId();
             merchantName = seedConfig.username();
         }
 
-        String rawAmount = txtGenAmount.getText() != null ? txtGenAmount.getText().trim() : "";
-        BigDecimal amount = null;
+        String rawAmount = rawAmountText != null ? rawAmountText.trim() : "";
+        BigDecimal parsedAmount = null;
         if (!rawAmount.isEmpty()) {
             try {
-                amount = new BigDecimal(rawAmount);
+                parsedAmount = new BigDecimal(rawAmount);
             } catch (NumberFormatException ex) {
-                lblMerchantFeedback.setText("Invalid amount format. Please enter a positive number or leave blank.");
-                lblMerchantFeedback.setForeground(UiTheme.color(UiTheme.ColorRole.ERROR));
-                txtGenAmount.requestFocusInWindow();
-                return;
+                IllegalArgumentException err = new IllegalArgumentException(
+                        "Invalid amount format. Please enter a positive number or leave blank.", ex);
+                runOnEdt(() -> {
+                    lblMerchantFeedback.setText(err.getMessage());
+                    lblMerchantFeedback.setForeground(UiTheme.color(UiTheme.ColorRole.ERROR));
+                    txtGenAmount.requestFocusInWindow();
+                });
+                future.completeExceptionally(err);
+                return future;
             }
         }
 
-        String note = txtGenNote.getText() != null ? txtGenNote.getText().trim() : "";
-        String ref = IdGenerator.nextReferenceNumber();
+        final BigDecimal amount = parsedAmount;
+        final String note = noteText != null ? noteText.trim() : "";
+        final String ref = IdGenerator.nextReferenceNumber();
+        final String currency = config.getDefaultCurrency();
 
-        try {
-            MerchantQrPayload payload = new MerchantQrPayload(
-                    merchantId,
-                    merchantWalletId,
-                    merchantName,
-                    amount,
-                    MerchantQrPayload.DEFAULT_CURRENCY,
-                    ref,
-                    note
-            );
+        runOnEdt(() -> {
+            btnGenerateQr.setEnabled(false);
+            btnSaveQr.setEnabled(false);
+            lblMerchantFeedback.setText("Generating merchant QR image...");
+            lblMerchantFeedback.setForeground(UiTheme.color(UiTheme.ColorRole.MUTED));
+        });
 
-            BufferedImage qrImage = qrService.generateQrImage(payload);
-            generatedPayload = payload;
-            lastGeneratedImage = qrImage;
+        new SwingWorker<GeneratedQrOutcome, Void>() {
+            @Override
+            protected GeneratedQrOutcome doInBackground() {
+                recordOffEdt();
+                SessionManager.getInstance().touchActivity();
+                MerchantQrPayload payload = new MerchantQrPayload(
+                        merchantId,
+                        merchantWalletId,
+                        merchantName,
+                        amount,
+                        currency,
+                        ref,
+                        note
+                );
+                BufferedImage qrImage = qrService.generateQrImage(payload);
+                Image scaled = qrImage.getScaledInstance(160, 160, Image.SCALE_SMOOTH);
+                BufferedImage previewImg = new BufferedImage(160, 160, BufferedImage.TYPE_INT_ARGB);
+                Graphics2D g = previewImg.createGraphics();
+                g.drawImage(scaled, 0, 0, null);
+                g.dispose();
+                return new GeneratedQrOutcome(payload, qrImage, previewImg);
+            }
 
-            Image scaled = qrImage.getScaledInstance(160, 160, Image.SCALE_SMOOTH);
-            lblGeneratedQr.setIcon(new ImageIcon(scaled));
-            lblGeneratedQr.setText("");
-            btnSaveQr.setEnabled(true);
+            @Override
+            protected void done() {
+                btnGenerateQr.setEnabled(true);
+                try {
+                    GeneratedQrOutcome outcome = get();
+                    generatedPayload = outcome.payload();
+                    lastGeneratedImage = outcome.fullImage();
+                    lblGeneratedQr.setIcon(new ImageIcon(outcome.previewImage()));
+                    lblGeneratedQr.setText("");
+                    btnSaveQr.setEnabled(true);
+                    lblMerchantFeedback.setText("QR Code generated for " + merchantName + " (Ref: " + ref
+                            + ")! Click 'Export / Save QR Image...' to export.");
+                    lblMerchantFeedback.setForeground(UiTheme.color(UiTheme.ColorRole.SUCCESS));
+                    future.complete(outcome.payload());
+                } catch (Exception ex) {
+                    Throwable cause = unwrapCause(ex);
+                    btnSaveQr.setEnabled(lastGeneratedImage != null);
+                    lblMerchantFeedback.setText("Failed to generate QR: " + extractErrorMessage(cause));
+                    lblMerchantFeedback.setForeground(UiTheme.color(UiTheme.ColorRole.ERROR));
+                    future.completeExceptionally(cause);
+                }
+            }
+        }.execute();
 
-            lblMerchantFeedback.setText("QR Code generated for " + merchantName + " (Ref: " + ref + ")! Click 'Export / Save QR Image...' to export.");
-            lblMerchantFeedback.setForeground(UiTheme.color(UiTheme.ColorRole.SUCCESS));
-        } catch (Exception ex) {
-            lblMerchantFeedback.setText("Failed to generate QR: " + ex.getMessage());
-            lblMerchantFeedback.setForeground(UiTheme.color(UiTheme.ColorRole.ERROR));
-        }
+        return future;
     }
 
     private void handleSaveQrAction() {
+        if (beforeInteractiveSubmit != null && !beforeInteractiveSubmit.getAsBoolean()) {
+            return;
+        }
+        if (qrService == null) {
+            lblMerchantFeedback.setText("MerchantQrService is not initialized.");
+            lblMerchantFeedback.setForeground(UiTheme.color(UiTheme.ColorRole.ERROR));
+            return;
+        }
         if (generatedPayload == null || lastGeneratedImage == null) {
             lblMerchantFeedback.setText("Please generate a QR code first.");
             lblMerchantFeedback.setForeground(UiTheme.color(UiTheme.ColorRole.ERROR));
@@ -438,58 +852,129 @@ public class MerchantQrPanel extends JPanel {
         }
 
         File target = chooser.getSelectedFile();
-        if (!target.getName().toLowerCase().endsWith(".png")) {
+        if (!target.getName().toLowerCase(java.util.Locale.ROOT).endsWith(".png")) {
             target = new File(target.getParentFile(), target.getName() + ".png");
         }
+        exportGeneratedQrAsync(target.toPath());
+    }
 
-        try {
-            qrService.exportQrImage(generatedPayload, target.toPath());
-            lblMerchantFeedback.setText("Successfully saved QR image to: " + target.getAbsolutePath());
-            lblMerchantFeedback.setForeground(UiTheme.color(UiTheme.ColorRole.SUCCESS));
-        } catch (Exception ex) {
-            lblMerchantFeedback.setText("Failed to export image: " + ex.getMessage());
-            lblMerchantFeedback.setForeground(UiTheme.color(UiTheme.ColorRole.ERROR));
+    public CompletableFuture<Path> exportGeneratedQrAsync(Path targetFile) {
+        CompletableFuture<Path> future = new CompletableFuture<>();
+        if (qrService == null) {
+            IllegalStateException err = new IllegalStateException("MerchantQrService is not initialized.");
+            future.completeExceptionally(err);
+            return future;
+        }
+        if (generatedPayload == null || lastGeneratedImage == null) {
+            IllegalStateException err = new IllegalStateException("Please generate a QR code first.");
+            future.completeExceptionally(err);
+            return future;
+        }
+
+        final BufferedImage imageToExport = lastGeneratedImage;
+        runOnEdt(() -> {
+            btnSaveQr.setEnabled(false);
+            lblMerchantFeedback.setText("Exporting QR image...");
+            lblMerchantFeedback.setForeground(UiTheme.color(UiTheme.ColorRole.MUTED));
+        });
+
+        new SwingWorker<Path, Void>() {
+            @Override
+            protected Path doInBackground() {
+                recordOffEdt();
+                SessionManager.getInstance().touchActivity();
+                return qrService.exportQrImage(imageToExport, targetFile);
+            }
+
+            @Override
+            protected void done() {
+                btnSaveQr.setEnabled(lastGeneratedImage != null);
+                try {
+                    Path saved = get();
+                    lblMerchantFeedback.setText("Successfully saved QR image to: " + saved.toAbsolutePath());
+                    lblMerchantFeedback.setForeground(UiTheme.color(UiTheme.ColorRole.SUCCESS));
+                    future.complete(saved);
+                } catch (Exception ex) {
+                    Throwable cause = unwrapCause(ex);
+                    lblMerchantFeedback.setText("Failed to export image: " + extractErrorMessage(cause));
+                    lblMerchantFeedback.setForeground(UiTheme.color(UiTheme.ColorRole.ERROR));
+                    future.completeExceptionally(cause);
+                }
+            }
+        }.execute();
+
+        return future;
+    }
+
+    public void refreshMerchantSalesIfAuthorized() {
+        User currentUser = SessionManager.getInstance().getCurrentUser();
+        if (currentUser != null && (currentUser.getRole() == UserRole.MERCHANT || currentUser.isAdmin())) {
+            refreshMerchantSalesAsync();
         }
     }
 
-    public void refreshMerchantSalesAsync() {
+    public CompletableFuture<List<Transaction>> refreshMerchantSalesAsync() {
+        CompletableFuture<List<Transaction>> future = new CompletableFuture<>();
         if (walletService == null) {
-            return;
+            future.complete(Collections.emptyList());
+            return future;
         }
 
         SessionManager session = SessionManager.getInstance();
         User currentUser = session.getCurrentUser();
         Wallet currentWallet = session.getCurrentWallet();
 
-        String merchantWalletId;
-        if (currentUser != null && currentUser.getRole() == UserRole.MERCHANT && currentWallet != null) {
+        // Enforce CAP-09: standard USER accounts must never inspect merchant sales history
+        if (currentUser == null || (currentUser.getRole() != UserRole.MERCHANT && !currentUser.isAdmin())) {
+            SecurityException denied = new SecurityException(
+                    "Access denied: Merchant sales history is restricted to merchant or admin accounts.");
+            runOnEdt(() -> {
+                loadedMerchantSales = Collections.emptyList();
+                salesTableModel.setRowCount(0);
+                lblMerchantFeedback.setText(denied.getMessage());
+                lblMerchantFeedback.setForeground(UiTheme.color(UiTheme.ColorRole.ERROR));
+            });
+            future.completeExceptionally(denied);
+            return future;
+        }
+
+        final String merchantWalletId;
+        if (currentUser.getRole() == UserRole.MERCHANT && currentWallet != null) {
             merchantWalletId = currentWallet.getWalletId();
         } else {
             merchantWalletId = OtogConfig.getInstance().getMerchantSeedConfig().walletId();
         }
 
-        lblMerchantFeedback.setText("Loading received payments for " + merchantWalletId + "...");
-        lblMerchantFeedback.setForeground(UiTheme.color(UiTheme.ColorRole.MUTED));
+        runOnEdt(() -> {
+            btnRefreshSales.setEnabled(false);
+            lblMerchantFeedback.setText("Loading received QR payments for "
+                    + ReceiptBuilder.maskIdentifier(merchantWalletId) + "...");
+            lblMerchantFeedback.setForeground(UiTheme.color(UiTheme.ColorRole.MUTED));
+        });
 
         SwingWorker<List<Transaction>, Void> worker = new SwingWorker<>() {
             @Override
             protected List<Transaction> doInBackground() {
-                List<Transaction> all = walletService.getRecentTransactions(merchantWalletId, 50);
-                List<Transaction> incoming = new ArrayList<>();
+                recordOffEdt();
+                SessionManager.getInstance().touchActivity();
+                int limit = OtogConfig.getInstance().getRecentTransactionLimit();
+                List<Transaction> all = walletService.getRecentTransactions(merchantWalletId, limit);
+                List<Transaction> qrSales = new ArrayList<>();
                 for (Transaction t : all) {
-                    if (merchantWalletId.equals(t.getTargetWalletId())) {
-                        incoming.add(t);
+                    if (isReceivedMerchantQrPayment(merchantWalletId, t)) {
+                        qrSales.add(t);
                     }
                 }
-                return incoming;
+                return qrSales;
             }
 
             @Override
             protected void done() {
+                btnRefreshSales.setEnabled(true);
                 try {
                     loadedMerchantSales = get();
                     salesTableModel.setRowCount(0);
-                    DateTimeFormatter dtf = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm");
+                    DateTimeFormatter dtf = DateTimeFormatter.ofPattern(OtogConfig.getInstance().getUiDatePattern());
                     for (Transaction t : loadedMerchantSales) {
                         salesTableModel.addRow(new Object[]{
                                 t.getTransactionId(),
@@ -500,32 +985,108 @@ public class MerchantQrPanel extends JPanel {
                                 t.getStatus()
                         });
                     }
-                    lblMerchantFeedback.setText("Loaded " + loadedMerchantSales.size() + " incoming payment(s).");
+                    lblMerchantFeedback.setText("Loaded " + loadedMerchantSales.size() + " received QR payment(s).");
                     lblMerchantFeedback.setForeground(UiTheme.color(UiTheme.ColorRole.SUCCESS));
+                    future.complete(loadedMerchantSales);
                 } catch (Exception ex) {
-                    lblMerchantFeedback.setText("Failed to load sales: " + ex.getMessage());
+                    Throwable cause = unwrapCause(ex);
+                    lblMerchantFeedback.setText("Failed to load sales: " + extractErrorMessage(cause));
                     lblMerchantFeedback.setForeground(UiTheme.color(UiTheme.ColorRole.ERROR));
+                    if (onPaymentError != null) {
+                        onPaymentError.accept(cause);
+                    }
+                    future.completeExceptionally(cause);
                 }
             }
         };
         worker.execute();
+        return future;
+    }
+
+    private static boolean isReceivedMerchantQrPayment(String merchantWalletId, Transaction txn) {
+        if (txn == null || !merchantWalletId.equals(txn.getTargetWalletId())) {
+            return false;
+        }
+        boolean hasQrRef = txn.getReferenceNumber() != null
+                && txn.getReferenceNumber().startsWith(MerchantQrService.QR_TRANSFER_REF_PREFIX);
+        boolean hasQrDesc = txn.getDescription() != null && txn.getDescription().startsWith("QR Pay:");
+        return hasQrRef || hasQrDesc;
+    }
+
+    public String buildSelectedSaleReceiptText() {
+        int viewRow = tblMerchantSales.getSelectedRow();
+        if (viewRow < 0) {
+            return null;
+        }
+        int modelRow = tblMerchantSales.convertRowIndexToModel(viewRow);
+        if (modelRow < 0 || modelRow >= loadedMerchantSales.size()) {
+            return null;
+        }
+        Transaction txn = loadedMerchantSales.get(modelRow);
+        User currentUser = SessionManager.getInstance().getCurrentUser();
+        String merchantName = (currentUser != null && currentUser.getRole() == UserRole.MERCHANT
+                && currentUser.getName() != null && !currentUser.getName().isBlank())
+                ? currentUser.getName().trim()
+                : OtogConfig.getInstance().getMerchantSeedConfig().username();
+        String ref = txn.getReferenceNumber();
+        String qrRef = (ref != null && ref.startsWith(MerchantQrService.QR_TRANSFER_REF_PREFIX))
+                ? ref.substring(MerchantQrService.QR_TRANSFER_REF_PREFIX.length())
+                : ref;
+        return ReceiptBuilder.forMerchantPayment(txn, merchantName, qrRef, true).build();
     }
 
     private void showSelectedSaleReceipt() {
-        int selectedRow = tblMerchantSales.getSelectedRow();
-        if (selectedRow < 0 || selectedRow >= loadedMerchantSales.size()) {
+        String receipt = buildSelectedSaleReceiptText();
+        if (receipt == null) {
             return;
         }
-        Transaction txn = loadedMerchantSales.get(selectedRow);
-        String merchantName = OtogConfig.getInstance().getMerchantSeedConfig().username();
-        String receipt = ReceiptBuilder.forMerchantPayment(txn, merchantName, txn.getReferenceNumber(), true).build();
-
         JTextArea area = new JTextArea(receipt);
         area.setEditable(false);
-        area.setFont(new Font("Monospaced", Font.PLAIN, 12));
+        area.setFont(UiTheme.font(UiTheme.FontRole.MONO));
+        area.setMargin(new Insets(8, 10, 8, 10));
         JScrollPane scroll = new JScrollPane(area);
-        scroll.setPreferredSize(new Dimension(500, 360));
+        scroll.setPreferredSize(OtogConfig.getInstance().getUiDimension(
+                "ui.receipt.width", "ui.receipt.height", 460, 360));
         JOptionPane.showMessageDialog(this, scroll, "Merchant Payment Receipt", JOptionPane.INFORMATION_MESSAGE);
+    }
+
+    private void recordOffEdt() {
+        boolean offEdt = !SwingUtilities.isEventDispatchThread();
+        lastOperationExecutedOffEdt = offEdt;
+        if (offEdtObserver != null) {
+            offEdtObserver.accept(offEdt);
+        }
+    }
+
+    private static void runOnEdt(Runnable action) {
+        if (SwingUtilities.isEventDispatchThread()) {
+            action.run();
+        } else {
+            SwingUtilities.invokeLater(action);
+        }
+    }
+
+    private static Throwable unwrapCause(Throwable ex) {
+        Throwable current = ex;
+        while ((current instanceof ExecutionException || current instanceof CompletionException)
+                && current.getCause() != null) {
+            current = current.getCause();
+        }
+        return current;
+    }
+
+    private static String extractErrorMessage(Throwable ex) {
+        if (ex == null) {
+            return "Unknown error";
+        }
+        String msg = ex.getMessage();
+        return (msg != null && !msg.trim().isEmpty()) ? msg : ex.getClass().getSimpleName();
+    }
+
+    private record ImportOutcome(MerchantQrPayload payload, User merchant, BufferedImage thumbnail) {
+    }
+
+    private record GeneratedQrOutcome(MerchantQrPayload payload, BufferedImage fullImage, BufferedImage previewImage) {
     }
 
     // --- Getters for Tests & Shell ---
@@ -606,6 +1167,10 @@ public class MerchantQrPanel extends JPanel {
         return tblMerchantSales;
     }
 
+    public DefaultTableModel getSalesTableModel() {
+        return salesTableModel;
+    }
+
     public JButton getViewMerchantReceiptButton() {
         return btnViewMerchantReceipt;
     }
@@ -622,6 +1187,10 @@ public class MerchantQrPanel extends JPanel {
         return loadedPayload;
     }
 
+    public User getVerifiedMerchant() {
+        return verifiedMerchant;
+    }
+
     public MerchantQrPayload getGeneratedPayload() {
         return generatedPayload;
     }
@@ -629,6 +1198,9 @@ public class MerchantQrPanel extends JPanel {
     // --- Manual UI Construction Fallback ---
 
     private void $$$setupUI$$$() {
+        OtogConfig config = OtogConfig.getInstance();
+        String currency = config.getDefaultCurrency();
+
         pnlRoot = new JPanel();
         pnlRoot.setLayout(new GridLayoutManager(1, 1, new Insets(10, 10, 10, 10), 10, 10));
 
@@ -668,7 +1240,7 @@ public class MerchantQrPanel extends JPanel {
 
         lblQrThumbnail = new JLabel("[ QR Image ]", SwingConstants.CENTER);
         lblQrThumbnail.setPreferredSize(new Dimension(120, 120));
-        lblQrThumbnail.setBorder(BorderFactory.createLineBorder(Color.LIGHT_GRAY));
+        lblQrThumbnail.setBorder(BorderFactory.createLineBorder(UiTheme.color(UiTheme.ColorRole.BORDER)));
         pnlPayTab.add(lblQrThumbnail, new GridConstraints(1, 0, 1, 1,
                 GridConstraints.ANCHOR_CENTER, GridConstraints.FILL_NONE,
                 GridConstraints.SIZEPOLICY_FIXED, GridConstraints.SIZEPOLICY_FIXED,
@@ -676,7 +1248,7 @@ public class MerchantQrPanel extends JPanel {
 
         txtConfirmation = new JTextArea("Import a merchant QR code image to confirm recipient and view details.");
         txtConfirmation.setEditable(false);
-        txtConfirmation.setFont(new Font("Monospaced", Font.PLAIN, 12));
+        txtConfirmation.setFont(UiTheme.font(UiTheme.FontRole.MONO));
         txtConfirmation.setLineWrap(true);
         txtConfirmation.setWrapStyleWord(true);
         JScrollPane scrollConfirm = new JScrollPane(txtConfirmation);
@@ -687,8 +1259,8 @@ public class MerchantQrPanel extends JPanel {
                 GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_CAN_GROW,
                 null, new Dimension(450, 110), null, 0, false));
 
-        JLabel lblAmount = new JLabel("Payment Amount (PHP):");
-        pnlPayTab.add(lblAmount, new GridConstraints(2, 0, 1, 1,
+        lblPayAmount = new JLabel("Payment Amount (" + currency + "):");
+        pnlPayTab.add(lblPayAmount, new GridConstraints(2, 0, 1, 1,
                 GridConstraints.ANCHOR_WEST, GridConstraints.FILL_NONE,
                 GridConstraints.SIZEPOLICY_FIXED, GridConstraints.SIZEPOLICY_FIXED,
                 null, null, null, 0, false));
@@ -713,7 +1285,7 @@ public class MerchantQrPanel extends JPanel {
         btnConfirmPay = new JButton("Confirm & Pay");
         btnConfirmPay.setEnabled(false);
         btnClearPay = new JButton("Clear");
-        btnBackToOverview = new JButton("← Back to Overview");
+        btnBackToOverview = new JButton("\u2190 Back to Overview");
         pnlPayBtns.add(btnConfirmPay, new GridConstraints(0, 0, 1, 1,
                 GridConstraints.ANCHOR_CENTER, GridConstraints.FILL_HORIZONTAL,
                 GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_CAN_GROW,
@@ -743,7 +1315,7 @@ public class MerchantQrPanel extends JPanel {
 
         txtReceipt = new JTextArea();
         txtReceipt.setEditable(false);
-        txtReceipt.setFont(new Font("Monospaced", Font.PLAIN, 12));
+        txtReceipt.setFont(UiTheme.font(UiTheme.FontRole.MONO));
         txtReceipt.setLineWrap(true);
         txtReceipt.setWrapStyleWord(true);
         JScrollPane scrollReceipt = new JScrollPane(txtReceipt);
@@ -757,9 +1329,9 @@ public class MerchantQrPanel extends JPanel {
         // Merchant Terminal Tab
         pnlMerchantTab = new JPanel();
         pnlMerchantTab.setLayout(new GridLayoutManager(6, 2, new Insets(12, 12, 12, 12), 10, 8));
-        tabsQr.addTab("Merchant Terminal & Sales", pnlMerchantTab);
+        tabsQr.addTab(MERCHANT_TAB_TITLE, pnlMerchantTab);
 
-        JLabel lblGenAmount = new JLabel("Amount (PHP, Optional):");
+        lblGenAmount = new JLabel("Amount (" + currency + ", Optional):");
         pnlMerchantTab.add(lblGenAmount, new GridConstraints(0, 0, 1, 1,
                 GridConstraints.ANCHOR_WEST, GridConstraints.FILL_NONE,
                 GridConstraints.SIZEPOLICY_FIXED, GridConstraints.SIZEPOLICY_FIXED,
@@ -804,20 +1376,13 @@ public class MerchantQrPanel extends JPanel {
 
         lblGeneratedQr = new JLabel("[ Generated QR Preview ]", SwingConstants.CENTER);
         lblGeneratedQr.setPreferredSize(new Dimension(160, 160));
-        lblGeneratedQr.setBorder(BorderFactory.createLineBorder(Color.LIGHT_GRAY));
+        lblGeneratedQr.setBorder(BorderFactory.createLineBorder(UiTheme.color(UiTheme.ColorRole.BORDER)));
         pnlMerchantTab.add(lblGeneratedQr, new GridConstraints(3, 0, 1, 1,
                 GridConstraints.ANCHOR_CENTER, GridConstraints.FILL_NONE,
                 GridConstraints.SIZEPOLICY_FIXED, GridConstraints.SIZEPOLICY_FIXED,
                 null, new Dimension(160, 160), null, 0, false));
 
-        salesTableModel = new DefaultTableModel(SALES_COLUMNS, 0) {
-            @Override
-            public boolean isCellEditable(int row, int column) {
-                return false;
-            }
-        };
-        tblMerchantSales = new JTable(salesTableModel);
-        tblMerchantSales.setSelectionMode(ListSelectionModel.SINGLE_SELECTION);
+        tblMerchantSales = new JTable();
         JScrollPane scrollSales = new JScrollPane(tblMerchantSales);
         scrollSales.setBorder(UiTheme.titledBorder("Received Merchant Payments"));
         pnlMerchantTab.add(scrollSales, new GridConstraints(3, 1, 1, 1,

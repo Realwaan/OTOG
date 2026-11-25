@@ -1,6 +1,8 @@
 package com.otog.service;
 
+import com.otog.exception.EntityNotFoundException;
 import com.otog.exception.WalletException;
+import com.otog.model.InvestMoneyTransaction;
 import com.otog.model.Notification;
 import com.otog.model.PaymentMethod;
 import com.otog.model.Transaction;
@@ -18,7 +20,7 @@ import java.util.Objects;
  * callers by enforcing an active, non-suspended session and wallet ownership verification
  * before delegating to the underlying {@link WalletService} facade.
  */
-public class ProtectedWalletOperationsProxy implements WalletOperations {
+public class ProtectedWalletOperationsProxy implements WalletOperations, InvestmentService {
 
     private final WalletOperations delegate;
 
@@ -35,6 +37,24 @@ public class ProtectedWalletOperationsProxy implements WalletOperations {
 
     public WalletOperations getDelegate() {
         return delegate;
+    }
+
+    public boolean supportsInvestments() {
+        WalletOperations current = delegate;
+        while (current instanceof ProtectedWalletOperationsProxy nested) {
+            current = nested.getDelegate();
+        }
+        return current instanceof InvestmentService;
+    }
+
+    public static InvestmentService asInvestmentServiceOrNull(WalletOperations ops) {
+        if (ops == null) {
+            return null;
+        }
+        if (ops instanceof ProtectedWalletOperationsProxy proxy) {
+            return proxy.supportsInvestments() ? proxy : null;
+        }
+        return ops instanceof InvestmentService inv ? inv : null;
     }
 
     @Override
@@ -122,6 +142,23 @@ public class ProtectedWalletOperationsProxy implements WalletOperations {
         User caller = requireActiveUser();
         requireWalletOwnershipOrAdmin(caller, sourceWalletId);
         return delegate.cashOutWithPin(referenceNumber, sourceWalletId, paymentMethodId, amount, fee, description, rawPin);
+    }
+
+    @Override
+    public Transaction payBill(String referenceNumber, String sourceWalletId, String billerName,
+                               String billerReference, BigDecimal amount, BigDecimal fee, String description) {
+        User caller = requireActiveUser();
+        requireWalletOwnershipOrAdmin(caller, sourceWalletId);
+        return delegate.payBill(referenceNumber, sourceWalletId, billerName, billerReference, amount, fee, description);
+    }
+
+    @Override
+    public Transaction payBillWithPin(String referenceNumber, String sourceWalletId, String billerName,
+                                      String billerReference, BigDecimal amount, BigDecimal fee,
+                                      String description, String rawPin) {
+        User caller = requireActiveUser();
+        requireWalletOwnershipOrAdmin(caller, sourceWalletId);
+        return delegate.payBillWithPin(referenceNumber, sourceWalletId, billerName, billerReference, amount, fee, description, rawPin);
     }
 
     @Override
@@ -253,6 +290,133 @@ public class ProtectedWalletOperationsProxy implements WalletOperations {
             return new MerchantQrService(this, ws.getUserRepository(), authService);
         }
         return delegate.createMerchantQrService(authService);
+    }
+
+    @Override
+    public SimulatedProduct getSeededProduct() {
+        return requireInvestmentDelegate().getSeededProduct();
+    }
+
+    @Override
+    public InvestmentHolding getHolding(String walletId) {
+        User caller = requireActiveUser();
+        requireWalletOwnershipOrAdmin(caller, walletId);
+        return requireInvestmentDelegate().getHolding(walletId);
+    }
+
+    @Override
+    public InvestmentPreview previewBuy(String walletId, BigDecimal units, BigDecimal amount) {
+        User caller = requireActiveUser();
+        requireWalletOwnershipOrAdmin(caller, walletId);
+        return requireInvestmentDelegate().previewBuy(walletId, units, amount);
+    }
+
+    @Override
+    public InvestmentPreview previewRedeem(String walletId, BigDecimal units) {
+        User caller = requireActiveUser();
+        requireWalletOwnershipOrAdmin(caller, walletId);
+        return requireInvestmentDelegate().previewRedeem(walletId, units);
+    }
+
+    @Override
+    public InvestMoneyTransaction invest(String referenceNumber, String walletId, String product,
+                                         BigDecimal amount, BigDecimal units) {
+        User caller = requireActiveUser();
+        requireWalletOwnershipOrAdmin(caller, walletId);
+        return requireInvestmentDelegate().invest(referenceNumber, walletId, product, amount, units);
+    }
+
+    @Override
+    public InvestMoneyTransaction buyInvestment(String referenceNumber, String walletId,
+                                                BigDecimal units, BigDecimal amount) {
+        User caller = requireActiveUser();
+        requireWalletOwnershipOrAdmin(caller, walletId);
+        return requireInvestmentDelegate().buyInvestment(referenceNumber, walletId, units, amount);
+    }
+
+    @Override
+    public InvestMoneyTransaction buyInvestmentWithPin(String referenceNumber, String walletId,
+                                                       BigDecimal units, BigDecimal amount, String rawPin) {
+        User caller = requireActiveUser();
+        requireWalletOwnershipOrAdmin(caller, walletId);
+        return requireInvestmentDelegate().buyInvestmentWithPin(referenceNumber, walletId, units, amount, rawPin);
+    }
+
+    @Override
+    public InvestMoneyTransaction redeemInvestment(String referenceNumber, String walletId, BigDecimal units) {
+        User caller = requireActiveUser();
+        requireWalletOwnershipOrAdmin(caller, walletId);
+        return requireInvestmentDelegate().redeemInvestment(referenceNumber, walletId, units);
+    }
+
+    @Override
+    public InvestMoneyTransaction redeemInvestmentWithPin(String referenceNumber, String walletId,
+                                                          BigDecimal units, String rawPin) {
+        User caller = requireActiveUser();
+        requireWalletOwnershipOrAdmin(caller, walletId);
+        return requireInvestmentDelegate().redeemInvestmentWithPin(referenceNumber, walletId, units, rawPin);
+    }
+
+    @Override
+    public Transaction withdrawInvestment(String referenceNumber, String walletId, String investmentTransactionId) {
+        User caller = requireActiveUser();
+        requireWalletOwnershipOrAdmin(caller, walletId);
+        return requireInvestmentDelegate().withdrawInvestment(referenceNumber, walletId, investmentTransactionId);
+    }
+
+    @Override
+    public BigDecimal calculateReturns(String investmentTransactionId) {
+        User caller = requireActiveUser();
+        if (investmentTransactionId == null || investmentTransactionId.trim().isEmpty()) {
+            throw new IllegalArgumentException("Investment transaction ID must not be null or empty");
+        }
+        if (!caller.isAdmin()) {
+            String key = investmentTransactionId.trim();
+            WalletOperations root = delegate;
+            while (root instanceof ProtectedWalletOperationsProxy nested) {
+                root = nested.getDelegate();
+            }
+            if (root instanceof WalletService ws) {
+                Transaction txn = ws.getTransactionRepository().findById(key)
+                        .or(() -> ws.getTransactionRepository().findByReferenceNumber(key))
+                        .orElseThrow(() -> new EntityNotFoundException("Investment transaction", key));
+                String ownerWalletId = txn.getSourceWalletId() != null
+                        ? txn.getSourceWalletId()
+                        : txn.getTargetWalletId();
+                if (ownerWalletId == null) {
+                    throw new SecurityException("Access denied: Unable to verify ownership for transaction " + key);
+                }
+                requireWalletOwnershipOrAdmin(caller, ownerWalletId);
+            } else {
+                Wallet callerWallet = delegate.getWalletByUserId(caller.getUserId());
+                boolean owned = false;
+                for (InvestMoneyTransaction imt : requireInvestmentDelegate().getInvestmentsByWalletId(callerWallet.getWalletId())) {
+                    if (key.equals(imt.getTransactionId()) || key.equals(imt.getReferenceNumber())) {
+                        owned = true;
+                        break;
+                    }
+                }
+                if (!owned) {
+                    throw new SecurityException("Access denied: Investment transaction " + key
+                            + " does not belong to active user.");
+                }
+            }
+        }
+        return requireInvestmentDelegate().calculateReturns(investmentTransactionId);
+    }
+
+    @Override
+    public List<InvestMoneyTransaction> getInvestmentsByWalletId(String walletId) {
+        User caller = requireActiveUser();
+        requireWalletOwnershipOrAdmin(caller, walletId);
+        return requireInvestmentDelegate().getInvestmentsByWalletId(walletId);
+    }
+
+    private InvestmentService requireInvestmentDelegate() {
+        if (delegate instanceof InvestmentService investmentDelegate) {
+            return investmentDelegate;
+        }
+        throw new UnsupportedOperationException("Delegate does not implement InvestmentService");
     }
 
     private static User requireActiveUser() {

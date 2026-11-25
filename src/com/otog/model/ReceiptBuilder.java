@@ -122,7 +122,9 @@ public class ReceiptBuilder {
                 .moneyLine("Amount", txn.getAmount(), txn.getCurrency())
                 .moneyLine("Fee", txn.getFee(), txn.getCurrency())
                 .divider()
-                .moneyLine(isMerchantView ? "Net Credited" : "Total Paid", txn.getTotalAmount(), txn.getCurrency())
+                .moneyLine(isMerchantView ? "Net Credited" : "Total Paid",
+                        isMerchantView ? txn.getAmount() : txn.getTotalAmount(),
+                        txn.getCurrency())
                 .optionalLine("Note", txn.getDescription());
         return builder;
     }
@@ -133,11 +135,28 @@ public class ReceiptBuilder {
         if (explicitCounterparty != null && !explicitCounterparty.trim().isEmpty()) {
             return explicitCounterparty.trim();
         }
+        if (txn.getDescription() != null && txn.getDescription().startsWith("QR Pay:")) {
+            if (viewingWalletId != null && viewingWalletId.equals(txn.getTargetWalletId())) {
+                return "Customer " + maskIdentifier(txn.getSourceWalletId());
+            }
+            int colonIdx = txn.getDescription().indexOf(':');
+            int dashIdx = txn.getDescription().indexOf(" - ", colonIdx);
+            String name = dashIdx > colonIdx
+                    ? txn.getDescription().substring(colonIdx + 1, dashIdx).trim()
+                    : txn.getDescription().substring(colonIdx + 1).trim();
+            return !name.isEmpty() ? name : "Merchant " + maskIdentifier(txn.getTargetWalletId());
+        }
         if (txn instanceof CashInOutTransaction cio) {
             if (cio.getChannel() != null && !cio.getChannel().trim().isEmpty()) {
                 return cio.getChannel().trim();
             }
             return "External Bank / OTC";
+        }
+        if (txn instanceof BillPaymentTransaction bpt) {
+            if (bpt.getBillerName() != null && !bpt.getBillerName().trim().isEmpty()) {
+                return bpt.getBillerName().trim();
+            }
+            return "Biller";
         }
         if (txn instanceof SendMoneyTransaction smt) {
             if (viewingWalletId != null && viewingWalletId.equals(txn.getTargetWalletId())
@@ -156,17 +175,6 @@ public class ReceiptBuilder {
         }
         if (txn instanceof LoanTransaction) {
             return "OTOG Lending";
-        }
-        if (txn.getDescription() != null && txn.getDescription().startsWith("QR Pay:")) {
-            if (viewingWalletId != null && viewingWalletId.equals(txn.getTargetWalletId())) {
-                return "Customer " + maskIdentifier(txn.getSourceWalletId());
-            }
-            int colonIdx = txn.getDescription().indexOf(':');
-            int dashIdx = txn.getDescription().indexOf('-', colonIdx);
-            String name = dashIdx > colonIdx
-                    ? txn.getDescription().substring(colonIdx + 1, dashIdx).trim()
-                    : txn.getDescription().substring(colonIdx + 1).trim();
-            return !name.isEmpty() ? name : "Merchant " + maskIdentifier(txn.getTargetWalletId());
         }
         String otherWallet = (viewingWalletId != null && viewingWalletId.equals(txn.getSourceWalletId()))
                 ? txn.getTargetWalletId()
