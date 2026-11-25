@@ -106,6 +106,18 @@ public class OverviewPanel extends JPanel {
                 cmbFilterStatus.addItem(status.name());
             }
         }
+        if (txtFilterFromDate != null) {
+            txtFilterFromDate.setToolTipText("Start date (YYYY-MM-DD)");
+        }
+        if (txtFilterToDate != null) {
+            txtFilterToDate.setToolTipText("End date (YYYY-MM-DD)");
+        }
+        if (btnApplyFilters != null) {
+            btnApplyFilters.setToolTipText("Filter owned transaction history by date, type, and status");
+        }
+        if (btnClearFilters != null) {
+            btnClearFilters.setToolTipText("Clear active filters and show recent activity");
+        }
         if (activityCardPanel != null && activityCardLayout == null) {
             if (activityCardPanel.getLayout() instanceof CardLayout existingLayout) {
                 activityCardLayout = existingLayout;
@@ -113,6 +125,17 @@ public class OverviewPanel extends JPanel {
                 activityCardLayout = new CardLayout();
                 activityCardPanel.setLayout(activityCardLayout);
             }
+        }
+        if (lblLoadingState != null) {
+            lblLoadingState.setFont(UiTheme.font(UiTheme.FontRole.BODY_ITALIC));
+        }
+        if (lblEmptyState != null) {
+            lblEmptyState.setFont(UiTheme.font(UiTheme.FontRole.BODY));
+            lblEmptyState.setForeground(UiTheme.color(UiTheme.ColorRole.MUTED));
+        }
+        if (lblErrorState != null) {
+            lblErrorState.setFont(UiTheme.font(UiTheme.FontRole.BODY));
+            lblErrorState.setForeground(UiTheme.color(UiTheme.ColorRole.ERROR));
         }
         if (transactionsTableModel == null) {
             String[] columns = {"Date", "Ref #", "Type", "Direction", "Amount", "Fee", "Status", "Provider Ref", "Description"};
@@ -130,6 +153,16 @@ public class OverviewPanel extends JPanel {
             tblTransactions.setSelectionMode(ListSelectionModel.SINGLE_SELECTION);
             tblTransactions.setRowHeight(OtogConfig.getInstance().getTableRowHeight());
             tblTransactions.getTableHeader().setReorderingAllowed(false);
+        }
+        if (lblActivityFeedback != null) {
+            lblActivityFeedback.setFont(UiTheme.font(UiTheme.FontRole.LABEL));
+        }
+        if (btnCheckStatus != null) {
+            btnCheckStatus.setEnabled(false);
+        }
+        if (btnRepeatDraft != null) {
+            btnRepeatDraft.setToolTipText("Clone selected transaction into a fresh repeat draft with a new reference number");
+            btnRepeatDraft.setEnabled(false);
         }
     }
 

@@ -109,8 +109,12 @@ public class PayBillsPanel extends JPanel {
     }
 
     private void populateBillersIfEmpty() {
+        OtogConfig config = OtogConfig.getInstance();
+        if (pnlForm != null) {
+            pnlForm.setBorder(UiTheme.titledBorder("Pay Utility & Service Bills"));
+        }
         if (cmbBiller != null && cmbBiller.getItemCount() == 0) {
-            List<String> billers = OtogConfig.getInstance().getSeededBillers();
+            List<String> billers = config.getSeededBillers();
             if (billers == null || billers.isEmpty()) {
                 billers = SEEDED_BILLERS;
             }
@@ -118,6 +122,20 @@ public class PayBillsPanel extends JPanel {
                 cmbBiller.addItem(b);
             }
         }
+        if (lblFeePreview != null) {
+            lblFeePreview.setFont(UiTheme.font(UiTheme.FontRole.LABEL));
+        }
+        if (lblTotalPreview != null) {
+            lblTotalPreview.setFont(UiTheme.font(UiTheme.FontRole.LABEL));
+        }
+        if (txtBillPin != null) {
+            txtBillPin.setToolTipText("Enter your " + config.getPinMinLength() + "-" + config.getPinMaxLength()
+                    + " digit Transaction PIN to authorize bill payment");
+        }
+        if (lblBillFeedback != null) {
+            lblBillFeedback.setFont(UiTheme.font(UiTheme.FontRole.LABEL));
+        }
+        updateFeePreview();
     }
 
     public void setWalletService(WalletOperations walletService) {

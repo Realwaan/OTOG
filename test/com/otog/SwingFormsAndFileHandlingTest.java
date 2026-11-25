@@ -28,6 +28,12 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
 import javax.swing.*;
+import javax.xml.parsers.DocumentBuilderFactory;
+import org.w3c.dom.Document;
+import org.w3c.dom.Element;
+import org.w3c.dom.NodeList;
+import java.lang.reflect.Field;
+import java.lang.reflect.Method;
 import java.math.BigDecimal;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
@@ -289,5 +295,141 @@ public class SwingFormsAndFileHandlingTest {
         Path savedReceipt = activeDashboard.exportSelectedReceiptAsync(receiptFile).get(5, TimeUnit.SECONDS);
         assertEquals(receiptFile, savedReceipt);
         assertTrue(Files.isRegularFile(receiptFile));
+    }
+
+    @Test
+    void testIntelliJProjectConfigAndAllFormBindingsAreValid() throws Exception {
+        DocumentBuilderFactory dbf = DocumentBuilderFactory.newInstance();
+        dbf.setNamespaceAware(true);
+
+        List<Path> ideaXmlFiles = List.of(
+                Paths.get(".idea/OTOG.iml"),
+                Paths.get(".idea/modules.xml"),
+                Paths.get(".idea/misc.xml"),
+                Paths.get(".idea/uiDesigner.xml"),
+                Paths.get(".idea/encodings.xml"),
+                Paths.get(".idea/libraries/lib.xml"),
+                Paths.get(".idea/runConfigurations/OTOG_E_Wallet.xml"),
+                Paths.get(".idea/runConfigurations/OTOG_All_Tests.xml")
+        );
+        for (Path xmlPath : ideaXmlFiles) {
+            assertTrue(Files.isRegularFile(xmlPath), "Missing IntelliJ config file: " + xmlPath);
+            Document doc = dbf.newDocumentBuilder().parse(xmlPath.toFile());
+            assertNotNull(doc.getDocumentElement(), "Invalid XML root in " + xmlPath);
+        }
+
+        String iml = Files.readString(Paths.get(".idea/OTOG.iml"), StandardCharsets.UTF_8);
+        assertTrue(iml.contains("file://$MODULE_DIR$/src"), "OTOG.iml must register src/");
+        assertTrue(iml.contains("file://$MODULE_DIR$/test"), "OTOG.iml must register test/");
+        assertTrue(iml.contains("file://$MODULE_DIR$/config"), "OTOG.iml must register config/ as resources");
+        assertTrue(iml.contains("name=\"lib\""), "OTOG.iml must depend on lib project library");
+
+        String appRun = Files.readString(Paths.get(".idea/runConfigurations/OTOG_E_Wallet.xml"), StandardCharsets.UTF_8);
+        assertTrue(appRun.contains("value=\"UserLogin\""), "App run configuration must launch UserLogin");
+        assertTrue(appRun.contains("module name=\"OTOG\""), "App run configuration must target OTOG module");
+
+        String uiDesigner = Files.readString(Paths.get(".idea/uiDesigner.xml"), StandardCharsets.UTF_8);
+        assertTrue(uiDesigner.contains("name=\"INSTRUMENT_CLASSES\" value=\"true\""),
+                "uiDesigner.xml should use Binary class files instrumentation to avoid Form2SourceCompiler IndexNotReadyException");
+
+        List<Path> formFiles = List.of(
+                Paths.get("src/UserLogin.form"),
+                Paths.get("src/com/otog/ui/RegisterDialog.form"),
+                Paths.get("src/com/otog/ui/PinSettingsDialog.form"),
+                Paths.get("src/com/otog/ui/Main.form"),
+                Paths.get("src/com/otog/ui/OverviewPanel.form"),
+                Paths.get("src/com/otog/ui/CashInOutPanel.form"),
+                Paths.get("src/com/otog/ui/SendMoneyPanel.form"),
+                Paths.get("src/com/otog/ui/PayBillsPanel.form"),
+                Paths.get("src/com/otog/ui/InvestmentPanel.form"),
+                Paths.get("src/com/otog/ui/MerchantQrPanel.form"),
+                Paths.get("src/com/otog/ui/AdminControlsPanel.form"),
+                Paths.get("src/com/otog/ui/NotificationInboxDialog.form")
+        );
+
+        for (Path formPath : formFiles) {
+            Document doc = dbf.newDocumentBuilder().parse(formPath.toFile());
+            String boundClassName = doc.getDocumentElement().getAttribute("bind-to-class");
+            assertNotNull(boundClassName);
+            Class<?> boundClass = Class.forName(boundClassName);
+
+            NodeList allNodes = doc.getElementsByTagName("*");
+            for (int i = 0; i < allNodes.getLength(); i++) {
+                Element el = (Element) allNodes.item(i);
+                String binding = el.getAttribute("binding");
+                if (binding != null && !binding.isEmpty()) {
+                    Field declaredField = assertDoesNotThrow(
+                            () -> boundClass.getDeclaredField(binding),
+                            formPath + " binding '" + binding + "' missing in " + boundClassName
+                    );
+                    assertNotNull(declaredField);
+                }
+            }
+        }
+    }
+
+    @Test
+    void testPanelsSurviveIntelliJGuiDesignerRegeneration() throws Exception {
+        // Simulate IntelliJ Form2SourceCompiler/AsmCodeGenerator creating raw Swing widgets without custom models/items
+        OverviewPanel overviewPanel = new OverviewPanel();
+        setField(overviewPanel, "activityCardLayout", null);
+        setField(overviewPanel, "transactionsTableModel", null);
+        overviewPanel.getFilterTypeComboBox().removeAllItems();
+        overviewPanel.getFilterStatusComboBox().removeAllItems();
+        invokePrivate(overviewPanel, "ensureComponentsInitialized");
+        assertNotNull(overviewPanel.getActivityCardLayout(), "OverviewPanel must recover CardLayout from activityCardPanel");
+        assertNotNull(overviewPanel.getTransactionsTableModel(), "OverviewPanel must recreate transactionsTableModel");
+        assertSame(overviewPanel.getTransactionsTableModel(), overviewPanel.getTransactionsTable().getModel());
+        assertTrue(overviewPanel.getFilterTypeComboBox().getItemCount() > 1);
+        assertTrue(overviewPanel.getFilterStatusComboBox().getItemCount() > 1);
+
+        CashInOutPanel cashPanel = new CashInOutPanel(BankResponseStatus.SUCCESS);
+        cashPanel.getCashOperationComboBox().removeAllItems();
+        cashPanel.getPaymentMethodComboBox().removeAllItems();
+        cashPanel.getCashChannelComboBox().removeAllItems();
+        cashPanel.getProviderModeComboBox().removeAllItems();
+        invokePrivate(cashPanel, "ensureComponentsInitialized");
+        assertTrue(cashPanel.getCashOperationComboBox().getItemCount() > 0);
+        assertTrue(cashPanel.getPaymentMethodComboBox().getItemCount() > 0);
+        assertTrue(cashPanel.getCashChannelComboBox().getItemCount() > 0);
+        assertEquals(BankResponseStatus.values().length, cashPanel.getProviderModeComboBox().getItemCount());
+
+        AdminControlsPanel adminPanel = new AdminControlsPanel(null, null, null, null);
+        setField(adminPanel, "userModel", null);
+        setField(adminPanel, "auditModel", null);
+        invokePrivate(adminPanel, "ensureComponentsInitialized");
+        assertNotNull(getField(adminPanel, "userModel"), "AdminControlsPanel must recreate userModel");
+        assertNotNull(getField(adminPanel, "auditModel"), "AdminControlsPanel must recreate auditModel");
+        assertSame(getField(adminPanel, "userModel"), adminPanel.getUserTable().getModel());
+        assertSame(getField(adminPanel, "auditModel"), adminPanel.getAuditTable().getModel());
+
+        NotificationInboxDialog notifDialog = new NotificationInboxDialog(null, null, null, null, null);
+        try {
+            setField(notifDialog, "notificationsTableModel", null);
+            invokePrivate(notifDialog, "ensureComponentsInitialized");
+            assertNotNull(getField(notifDialog, "notificationsTableModel"),
+                    "NotificationInboxDialog must recreate notificationsTableModel");
+            assertSame(getField(notifDialog, "notificationsTableModel"), notifDialog.getNotificationsTable().getModel());
+        } finally {
+            notifDialog.dispose();
+        }
+    }
+
+    private static void setField(Object target, String fieldName, Object value) throws Exception {
+        Field f = target.getClass().getDeclaredField(fieldName);
+        f.setAccessible(true);
+        f.set(target, value);
+    }
+
+    private static Object getField(Object target, String fieldName) throws Exception {
+        Field f = target.getClass().getDeclaredField(fieldName);
+        f.setAccessible(true);
+        return f.get(target);
+    }
+
+    private static void invokePrivate(Object target, String methodName) throws Exception {
+        Method m = target.getClass().getDeclaredMethod(methodName);
+        m.setAccessible(true);
+        m.invoke(target);
     }
 }

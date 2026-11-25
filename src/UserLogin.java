@@ -100,6 +100,15 @@ public class UserLogin extends JFrame {
         if (pnlMain == null) {
             $$$setupUI$$$();
         }
+        if (pnlPassword != null) {
+            pnlPassword.setBorder(UiTheme.titledBorder(OtogConfig.getInstance().getAppTitle() + " \u2014 Sign In"));
+        }
+        if (pnl2FA != null) {
+            pnl2FA.setBorder(UiTheme.titledBorder("Two-Factor Verification"));
+        }
+        if (passwordFieldPasswordInput != null) {
+            passwordFieldPasswordInput.setEchoChar('*');
+        }
 
         pnlPassword.setVisible(true);
         pnl2FA.setVisible(false);

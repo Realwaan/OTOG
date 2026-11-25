@@ -87,9 +87,66 @@ public class AdminControlsPanel extends JPanel {
         if (pnlRoot == null) {
             $$$setupUI$$$();
         }
+        ensureComponentsInitialized();
         add(pnlRoot, BorderLayout.CENTER);
         if (adminService != null && adminId != null) {
             wireActionsAndLoad();
+        }
+    }
+
+    private void ensureComponentsInitialized() {
+        if (lblTitle != null) {
+            lblTitle.setFont(UiTheme.font(UiTheme.FontRole.TITLE));
+        }
+        if (splitPane != null) {
+            splitPane.setOrientation(JSplitPane.VERTICAL_SPLIT);
+            splitPane.setResizeWeight(0.55);
+        }
+        if (userModel == null) {
+            String[] userCols = {"User ID", "Name", "Mobile", "Role", "Status", "Wallet", "Balance"};
+            userModel = new DefaultTableModel(userCols, 0) {
+                @Override
+                public boolean isCellEditable(int r, int c) {
+                    return false;
+                }
+            };
+        }
+        if (userTable != null) {
+            if (userTable.getModel() != userModel) {
+                userTable.setModel(userModel);
+            }
+            userTable.setSelectionMode(ListSelectionModel.SINGLE_SELECTION);
+            userTable.setAutoCreateRowSorter(true);
+        }
+        if (auditModel == null) {
+            String[] auditCols = {"Action ID", "Type", "Target", "Reason", "Timestamp"};
+            auditModel = new DefaultTableModel(auditCols, 0) {
+                @Override
+                public boolean isCellEditable(int r, int c) {
+                    return false;
+                }
+            };
+        }
+        if (auditTable != null) {
+            if (auditTable.getModel() != auditModel) {
+                auditTable.setModel(auditModel);
+            }
+            auditTable.setAutoCreateRowSorter(true);
+        }
+        if (btnSuspend != null) {
+            btnSuspend.setEnabled(false);
+        }
+        if (btnReactivate != null) {
+            btnReactivate.setEnabled(false);
+        }
+        if (btnChangeRole != null) {
+            btnChangeRole.setEnabled(false);
+        }
+        if (btnViewUserTxns != null) {
+            btnViewUserTxns.setEnabled(false);
+        }
+        if (statusLbl != null) {
+            statusLbl.setFont(UiTheme.font(UiTheme.FontRole.SMALL));
         }
     }
 

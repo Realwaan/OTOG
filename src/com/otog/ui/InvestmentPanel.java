@@ -61,6 +61,15 @@ public class InvestmentPanel extends JPanel {
     private void ensureInteractiveComponentsInitialized() {
         OtogConfig config = OtogConfig.getInstance();
         String defaultCurrency = config.getDefaultCurrency();
+        if (pnlProductSummary != null) {
+            pnlProductSummary.setBorder(UiTheme.titledBorder("Seeded Simulated Investment Product"));
+        }
+        if (pnlOrderForm != null) {
+            pnlOrderForm.setBorder(UiTheme.titledBorder("Simulated Purchase & Redemption"));
+        }
+        if (pnlActivity != null) {
+            pnlActivity.setBorder(UiTheme.titledBorder("Persisted Investment Activity"));
+        }
         if (cmbInvestOperation != null && cmbInvestOperation.getItemCount() == 0) {
             cmbInvestOperation.addItem("BUY");
             cmbInvestOperation.addItem("REDEEM");
@@ -82,15 +91,34 @@ public class InvestmentPanel extends JPanel {
             tblInvestmentActivity.setSelectionMode(ListSelectionModel.SINGLE_SELECTION);
             tblInvestmentActivity.getTableHeader().setReorderingAllowed(false);
         }
+        if (lblProductName != null) {
+            lblProductName.setFont(UiTheme.font(UiTheme.FontRole.SECTION_HEADER));
+            lblProductName.setText(config.getInvestmentProductName() + " (" + config.getInvestmentProductCode() + ")");
+        }
         if (lblSimulatedPrice != null) {
+            lblSimulatedPrice.setFont(UiTheme.font(UiTheme.FontRole.LABEL));
+            lblSimulatedPrice.setForeground(UiTheme.color(UiTheme.ColorRole.PRIMARY));
             lblSimulatedPrice.setText(MoneyUtil.format(
                     config.getInvestmentSimulatedUnitPrice(), defaultCurrency) + " / unit [SIMULATED FIXED PRICE]");
         }
+        if (lblHoldingsUnits != null) {
+            lblHoldingsUnits.setFont(UiTheme.font(UiTheme.FontRole.SECTION_HEADER));
+        }
         if (lblHoldingsValue != null) {
+            lblHoldingsValue.setFont(UiTheme.font(UiTheme.FontRole.SECTION_HEADER));
+            lblHoldingsValue.setForeground(UiTheme.color(UiTheme.ColorRole.SUCCESS));
             lblHoldingsValue.setText(MoneyUtil.format(BigDecimal.ZERO, defaultCurrency));
         }
+        if (txtInvestPin != null) {
+            txtInvestPin.setToolTipText("Enter your Transaction PIN when PIN authorization is enabled");
+        }
         if (lblPreviewSummary != null) {
+            lblPreviewSummary.setFont(UiTheme.font(UiTheme.FontRole.LABEL));
+            lblPreviewSummary.setForeground(UiTheme.color(UiTheme.ColorRole.INFO));
             lblPreviewSummary.setText("Enter units or " + defaultCurrency + " amount, then click Preview Units & Cost.");
+        }
+        if (lblInvestFeedback != null) {
+            lblInvestFeedback.setFont(UiTheme.font(UiTheme.FontRole.LABEL));
         }
     }
 

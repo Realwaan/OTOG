@@ -38,6 +38,9 @@ public class RegisterDialog extends JDialog {
     }
 
     private void initUI() {
+        if (pnlForm != null) {
+            pnlForm.setBorder(UiTheme.titledBorder("Account Details"));
+        }
         setContentPane(pnlRoot);
         setSize(OtogConfig.getInstance().getUiDimension("ui.register.width", "ui.register.height", 480, 350));
         setLocationRelativeTo(getParent());
