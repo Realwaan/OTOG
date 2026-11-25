@@ -103,7 +103,7 @@ public class InvestmentWorkflowTest {
         assertTrue(product.getSimulationDisclaimer().contains("SIMULATED"));
 
         InvestmentPanel panel = new InvestmentPanel();
-        assertNotNull(panel.$$$getRootComponent$$$());
+        assertNotNull(panel.getRootPanel());
         assertInstanceOf(GridLayoutManager.class, panel.getRootPanel().getLayout());
         assertTrue(panel.getSimulatedPriceLabel().getText().contains("SIMULATED"));
         assertEquals("0.0000 units", panel.getHoldingsUnitsLabel().getText());

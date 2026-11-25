@@ -186,7 +186,7 @@ public class PayBillsTest {
     @DisplayName("AC-1: Bound IntelliJ Swing form panel initializes cleanly with GridLayoutManager and UI interactions")
     void testPayBillsPanelBoundFormLayoutAndInteractions() {
         PayBillsPanel panel = new PayBillsPanel(walletService, authService);
-        assertNotNull(panel.$$$getRootComponent$$$());
+        assertNotNull(panel.getRootPanel());
         assertInstanceOf(GridLayoutManager.class, panel.getRootPanel().getLayout());
 
         assertNotNull(panel.getBillerComboBox());

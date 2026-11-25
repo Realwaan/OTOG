@@ -112,7 +112,7 @@ public class SwingFormsAndFileHandlingTest {
     void testRegisterPinAndTabFormPanelsInitializeWithGridLayoutManager() {
         RegisterDialog registerDialog = new RegisterDialog(null, authService);
         try {
-            assertNotNull(registerDialog.$$$getRootComponent$$$());
+            assertNotNull(registerDialog.getRootPanel());
             assertInstanceOf(GridLayoutManager.class, registerDialog.getRootPanel().getLayout());
             assertNotNull(registerDialog.getNameField());
             assertNotNull(registerDialog.getMobileField());
@@ -128,7 +128,7 @@ public class SwingFormsAndFileHandlingTest {
         PinSettingsDialog pinDialog = new PinSettingsDialog(
                 null, authService, "USR-TEST", false, null, null, null);
         try {
-            assertNotNull(pinDialog.$$$getRootComponent$$$());
+            assertNotNull(pinDialog.getRootPanel());
             assertInstanceOf(GridLayoutManager.class, pinDialog.getRootPanel().getLayout());
             assertNotNull(pinDialog.getSecretField());
             assertNotNull(pinDialog.getNewPinField());
@@ -140,29 +140,29 @@ public class SwingFormsAndFileHandlingTest {
         }
 
         OverviewPanel overviewPanel = new OverviewPanel();
-        assertNotNull(overviewPanel.$$$getRootComponent$$$());
+        assertNotNull(overviewPanel.getRootPanel());
         assertInstanceOf(GridLayoutManager.class, overviewPanel.getRootPanel().getLayout());
         assertNotNull(overviewPanel.getExportStatementButton());
         assertNotNull(overviewPanel.getLoadStatementButton());
         assertNotNull(overviewPanel.getExportReceiptButton());
 
         CashInOutPanel cashPanel = new CashInOutPanel(BankResponseStatus.SUCCESS);
-        assertNotNull(cashPanel.$$$getRootComponent$$$());
+        assertNotNull(cashPanel.getRootPanel());
         assertInstanceOf(GridLayoutManager.class, cashPanel.getRootPanel().getLayout());
 
         SendMoneyPanel sendPanel = new SendMoneyPanel();
-        assertNotNull(sendPanel.$$$getRootComponent$$$());
+        assertNotNull(sendPanel.getRootPanel());
         assertInstanceOf(GridLayoutManager.class, sendPanel.getRootPanel().getLayout());
 
         InvestmentPanel investmentPanel = new InvestmentPanel();
-        assertNotNull(investmentPanel.$$$getRootComponent$$$());
+        assertNotNull(investmentPanel.getRootPanel());
         assertInstanceOf(GridLayoutManager.class, investmentPanel.getRootPanel().getLayout());
         assertNotNull(investmentPanel.getPreviewButton());
         assertNotNull(investmentPanel.getSubmitButton());
         assertNotNull(investmentPanel.getActivityTable());
 
         com.otog.ui.PayBillsPanel payBillsPanel = new com.otog.ui.PayBillsPanel();
-        assertNotNull(payBillsPanel.$$$getRootComponent$$$());
+        assertNotNull(payBillsPanel.getRootPanel());
         assertInstanceOf(GridLayoutManager.class, payBillsPanel.getRootPanel().getLayout());
         assertNotNull(payBillsPanel.getBillerComboBox());
         assertNotNull(payBillsPanel.getBillReferenceField());
@@ -172,11 +172,11 @@ public class SwingFormsAndFileHandlingTest {
         assertNotNull(payBillsPanel.getBillBackToOverviewButton());
 
         AdminControlsPanel adminPanel = new AdminControlsPanel(null, null, null, null);
-        assertNotNull(adminPanel.$$$getRootComponent$$$());
+        assertNotNull(adminPanel.getRootPanel());
         assertInstanceOf(GridLayoutManager.class, adminPanel.getRootPanel().getLayout());
 
         MerchantQrPanel merchantQrPanel = new MerchantQrPanel();
-        assertNotNull(merchantQrPanel.$$$getRootComponent$$$());
+        assertNotNull(merchantQrPanel.getRootPanel());
         assertInstanceOf(GridLayoutManager.class, merchantQrPanel.getRootPanel().getLayout());
         assertNotNull(merchantQrPanel.getImportQrButton());
         assertNotNull(merchantQrPanel.getConfirmPayButton());
@@ -189,7 +189,7 @@ public class SwingFormsAndFileHandlingTest {
 
         NotificationInboxDialog notifDialog = new NotificationInboxDialog(null, null, null, null, null);
         try {
-            assertNotNull(notifDialog.$$$getRootComponent$$$());
+            assertNotNull(notifDialog.getRootPanel());
             assertInstanceOf(GridLayoutManager.class, notifDialog.getRootPanel().getLayout());
             assertNotNull(notifDialog.getNotificationsTable());
             assertNotNull(notifDialog.getMarkReadButton());
@@ -278,7 +278,7 @@ public class SwingFormsAndFileHandlingTest {
         activeDashboard = new Main(walletService, authService);
         activeDashboard.getInitialLoadFuture().get(5, TimeUnit.SECONDS);
 
-        assertNotNull(activeDashboard.$$$getRootComponent$$$());
+        assertNotNull(activeDashboard.getRootPanel());
         assertInstanceOf(GridLayoutManager.class, activeDashboard.getRootPanel().getLayout());
 
         Path exportedFile = tempDir.resolve("dashboard-statement.txt");
