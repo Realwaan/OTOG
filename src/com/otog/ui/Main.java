@@ -258,6 +258,29 @@ public class Main extends JFrame {
         setMinimumSize(config.getUiDimension("ui.dashboard.min.width", "ui.dashboard.min.height", 840, 560));
         setLocationRelativeTo(null);
 
+        if (pnlHeader != null) {
+            pnlHeader.setBorder(UiTheme.bottomDividerBorder());
+        }
+        if (lblWelcome != null) {
+            lblWelcome.setFont(UiTheme.font(UiTheme.FontRole.BANNER));
+        }
+        if (lblWalletId != null) {
+            lblWalletId.setFont(UiTheme.font(UiTheme.FontRole.LABEL));
+            lblWalletId.setForeground(UiTheme.color(UiTheme.ColorRole.MUTED));
+        }
+        if (lblPinStatus != null) {
+            lblPinStatus.setFont(UiTheme.font(UiTheme.FontRole.SMALL));
+            lblPinStatus.setForeground(UiTheme.color(UiTheme.ColorRole.MUTED));
+        }
+        if (lblBalance != null) {
+            lblBalance.setFont(UiTheme.font(UiTheme.FontRole.BALANCE));
+            lblBalance.setForeground(UiTheme.color(UiTheme.ColorRole.SUCCESS));
+        }
+        if (lblStatus != null) {
+            lblStatus.setFont(UiTheme.font(UiTheme.FontRole.SMALL));
+            lblStatus.setForeground(UiTheme.color(UiTheme.ColorRole.MUTED));
+        }
+
         btnBack.setToolTipText("Return to the previously viewed tab");
         btnBack.setEnabled(false);
         btnBack.addActionListener(e -> navigateBack());

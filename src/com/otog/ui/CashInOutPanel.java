@@ -35,10 +35,44 @@ public class CashInOutPanel extends JPanel {
         if (pnlRoot == null) {
             $$$setupUI$$$();
         }
+        ensureComponentsInitialized();
         if (initialProviderMode != null) {
             cmbProviderMode.setSelectedItem(initialProviderMode.name());
         }
         add(pnlRoot, BorderLayout.CENTER);
+    }
+
+    private void ensureComponentsInitialized() {
+        OtogConfig config = OtogConfig.getInstance();
+        if (pnlForm != null) {
+            pnlForm.setBorder(UiTheme.titledBorder("Cash In / Cash Out via Linked Bank or Channel"));
+        }
+        if (cmbCashOperation != null && cmbCashOperation.getItemCount() == 0) {
+            for (String op : config.getCashOperations()) {
+                cmbCashOperation.addItem(op);
+            }
+        }
+        if (cmbPaymentMethod != null && cmbPaymentMethod.getItemCount() == 0) {
+            cmbPaymentMethod.addItem("Use Selected Channel");
+        }
+        if (cmbCashChannel != null && cmbCashChannel.getItemCount() == 0) {
+            for (String channel : config.getCashChannels()) {
+                cmbCashChannel.addItem(channel);
+            }
+        }
+        if (cmbProviderMode != null && cmbProviderMode.getItemCount() == 0) {
+            for (BankResponseStatus status : BankResponseStatus.values()) {
+                cmbProviderMode.addItem(status.name());
+            }
+        }
+        if (txtCashPin != null) {
+            txtCashPin.setEnabled(false);
+            txtCashPin.setToolTipText("Required for Cash Out transactions ("
+                    + config.getPinMinLength() + "-" + config.getPinMaxLength() + " digit PIN)");
+        }
+        if (lblCashFeedback != null) {
+            lblCashFeedback.setFont(UiTheme.font(UiTheme.FontRole.LABEL));
+        }
     }
 
     public JPanel getRootPanel() {

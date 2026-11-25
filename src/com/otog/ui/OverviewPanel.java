@@ -70,7 +70,96 @@ public class OverviewPanel extends JPanel {
         if (pnlRoot == null) {
             $$$setupUI$$$();
         }
+        ensureComponentsInitialized();
         add(pnlRoot, BorderLayout.CENTER);
+    }
+
+    private void ensureComponentsInitialized() {
+        if (pnlQuickActions != null) {
+            pnlQuickActions.setBorder(UiTheme.titledBorder("Quick Actions & Statement Files"));
+        }
+        if (pnlRecentActivity != null) {
+            pnlRecentActivity.setBorder(UiTheme.titledBorder("Recent Activity & History"));
+        }
+        if (btnNavInvest != null) {
+            btnNavInvest.setVisible(false);
+        }
+        if (btnExportStatement != null) {
+            btnExportStatement.setToolTipText("Export wallet statement and recent activity to a file");
+        }
+        if (btnLoadStatement != null) {
+            btnLoadStatement.setToolTipText("Load and inspect a saved wallet statement file");
+        }
+        if (cmbFilterType != null && cmbFilterType.getItemCount() == 0) {
+            cmbFilterType.addItem(ALL_TYPES_OPTION);
+            for (TransactionType type : TransactionType.values()) {
+                cmbFilterType.addItem(type.name());
+            }
+        }
+        if (cmbFilterStatus != null && cmbFilterStatus.getItemCount() == 0) {
+            cmbFilterStatus.addItem(ALL_STATUSES_OPTION);
+            for (TransactionStatus status : TransactionStatus.values()) {
+                cmbFilterStatus.addItem(status.name());
+            }
+        }
+        if (txtFilterFromDate != null) {
+            txtFilterFromDate.setToolTipText("Start date (YYYY-MM-DD)");
+        }
+        if (txtFilterToDate != null) {
+            txtFilterToDate.setToolTipText("End date (YYYY-MM-DD)");
+        }
+        if (btnApplyFilters != null) {
+            btnApplyFilters.setToolTipText("Filter owned transaction history by date, type, and status");
+        }
+        if (btnClearFilters != null) {
+            btnClearFilters.setToolTipText("Clear active filters and show recent activity");
+        }
+        if (activityCardPanel != null && activityCardLayout == null) {
+            if (activityCardPanel.getLayout() instanceof CardLayout existingLayout) {
+                activityCardLayout = existingLayout;
+            } else {
+                activityCardLayout = new CardLayout();
+                activityCardPanel.setLayout(activityCardLayout);
+            }
+        }
+        if (lblLoadingState != null) {
+            lblLoadingState.setFont(UiTheme.font(UiTheme.FontRole.BODY_ITALIC));
+        }
+        if (lblEmptyState != null) {
+            lblEmptyState.setFont(UiTheme.font(UiTheme.FontRole.BODY));
+            lblEmptyState.setForeground(UiTheme.color(UiTheme.ColorRole.MUTED));
+        }
+        if (lblErrorState != null) {
+            lblErrorState.setFont(UiTheme.font(UiTheme.FontRole.BODY));
+            lblErrorState.setForeground(UiTheme.color(UiTheme.ColorRole.ERROR));
+        }
+        if (transactionsTableModel == null) {
+            String[] columns = {"Date", "Ref #", "Type", "Direction", "Amount", "Fee", "Status", "Provider Ref", "Description"};
+            transactionsTableModel = new DefaultTableModel(columns, 0) {
+                @Override
+                public boolean isCellEditable(int row, int column) {
+                    return false;
+                }
+            };
+        }
+        if (tblTransactions != null) {
+            if (tblTransactions.getModel() != transactionsTableModel) {
+                tblTransactions.setModel(transactionsTableModel);
+            }
+            tblTransactions.setSelectionMode(ListSelectionModel.SINGLE_SELECTION);
+            tblTransactions.setRowHeight(OtogConfig.getInstance().getTableRowHeight());
+            tblTransactions.getTableHeader().setReorderingAllowed(false);
+        }
+        if (lblActivityFeedback != null) {
+            lblActivityFeedback.setFont(UiTheme.font(UiTheme.FontRole.LABEL));
+        }
+        if (btnCheckStatus != null) {
+            btnCheckStatus.setEnabled(false);
+        }
+        if (btnRepeatDraft != null) {
+            btnRepeatDraft.setToolTipText("Clone selected transaction into a fresh repeat draft with a new reference number");
+            btnRepeatDraft.setEnabled(false);
+        }
     }
 
     public JPanel getRootPanel() {

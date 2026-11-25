@@ -30,7 +30,22 @@ public class SendMoneyPanel extends JPanel {
         if (pnlRoot == null) {
             $$$setupUI$$$();
         }
+        ensureComponentsInitialized();
         add(pnlRoot, BorderLayout.CENTER);
+    }
+
+    private void ensureComponentsInitialized() {
+        OtogConfig config = OtogConfig.getInstance();
+        if (pnlForm != null) {
+            pnlForm.setBorder(UiTheme.titledBorder("Wallet-to-Wallet Transfer"));
+        }
+        if (txtSendPin != null) {
+            txtSendPin.setToolTipText("Enter your " + config.getPinMinLength() + "-" + config.getPinMaxLength()
+                    + " digit Transaction PIN to authorize outgoing transfer");
+        }
+        if (lblSendFeedback != null) {
+            lblSendFeedback.setFont(UiTheme.font(UiTheme.FontRole.LABEL));
+        }
     }
 
     public JPanel getRootPanel() {
