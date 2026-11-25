@@ -6,6 +6,7 @@ import com.intellij.uiDesigner.core.Spacer;
 import com.otog.exception.DuplicateTransactionException;
 import com.otog.exception.InsufficientFundsException;
 import com.otog.exception.WalletException;
+import com.otog.model.BillPaymentTransaction;
 import com.otog.model.FeeComponent;
 import com.otog.model.ReceiptBuilder;
 import com.otog.model.Transaction;
@@ -20,6 +21,7 @@ import com.otog.service.WalletService;
 import com.otog.util.IdGenerator;
 import com.otog.util.MoneyUtil;
 import com.otog.util.OtogConfig;
+import com.otog.util.SwingUiSupport;
 import com.otog.util.UiTheme;
 
 import javax.swing.*;
@@ -29,8 +31,6 @@ import java.awt.*;
 import java.math.BigDecimal;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.CompletionException;
-import java.util.concurrent.ExecutionException;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.BooleanSupplier;
 import java.util.function.Consumer;
@@ -113,25 +113,33 @@ public class PayBillsPanel extends JPanel {
         if (pnlForm != null) {
             pnlForm.setBorder(UiTheme.titledBorder("Pay Utility & Service Bills"));
         }
-        if (cmbBiller != null && cmbBiller.getItemCount() == 0) {
-            List<String> billers = config.getSeededBillers();
-            if (billers == null || billers.isEmpty()) {
-                billers = SEEDED_BILLERS;
+        if (cmbBiller != null) {
+            if (cmbBiller.getItemCount() == 0) {
+                List<String> billers = config.getSeededBillers();
+                if (billers == null || billers.isEmpty()) {
+                    billers = SEEDED_BILLERS;
+                }
+                for (String b : billers) {
+                    cmbBiller.addItem(b);
+                }
             }
-            for (String b : billers) {
-                cmbBiller.addItem(b);
-            }
+            UiTheme.styleInputField(cmbBiller);
         }
-        if (lblFeePreview != null) {
-            lblFeePreview.setFont(UiTheme.font(UiTheme.FontRole.LABEL));
-        }
-        if (lblTotalPreview != null) {
-            lblTotalPreview.setFont(UiTheme.font(UiTheme.FontRole.LABEL));
-        }
+        UiTheme.styleInputField(txtBillReference);
+        UiTheme.styleInputField(txtBillAmount);
         if (txtBillPin != null) {
             txtBillPin.setToolTipText("Enter your " + config.getPinMinLength() + "-" + config.getPinMaxLength()
                     + " digit Transaction PIN to authorize bill payment");
+            UiTheme.styleInputField(txtBillPin);
         }
+        if (lblFeePreview != null) {
+            lblFeePreview.setFont(UiTheme.font(UiTheme.FontRole.LABEL_BOLD));
+        }
+        if (lblTotalPreview != null) {
+            lblTotalPreview.setFont(UiTheme.font(UiTheme.FontRole.LABEL_BOLD));
+        }
+        UiTheme.stylePrimaryButton(btnSubmitBillPayment);
+        UiTheme.styleSecondaryButton(btnBillBackToOverview);
         if (lblBillFeedback != null) {
             lblBillFeedback.setFont(UiTheme.font(UiTheme.FontRole.LABEL));
         }
@@ -177,6 +185,24 @@ public class PayBillsPanel extends JPanel {
 
     public boolean isLastPaymentExecutedOffEdt() {
         return lastPaymentExecutedOffEdt;
+    }
+
+    public void loadRepeatDraft(Transaction draft) {
+        if (draft == null) {
+            return;
+        }
+        BillPaymentTransaction bpt = (draft instanceof BillPaymentTransaction b) ? b : null;
+        if (bpt != null && bpt.getBillerName() != null) {
+            cmbBiller.setSelectedItem(bpt.getBillerName());
+        }
+        if (bpt != null && bpt.getBillerReference() != null) {
+            txtBillReference.setText(bpt.getBillerReference());
+        }
+        txtBillAmount.setText(draft.getAmount() != null ? draft.getAmount().toPlainString() : "");
+        txtBillPin.setText("");
+        lblBillFeedback.setForeground(UiTheme.color(UiTheme.ColorRole.INFO));
+        lblBillFeedback.setText("Loaded repeat draft (New Ref: " + draft.getReferenceNumber()
+                + "). Review details and enter PIN to pay.");
     }
 
     private void initInteractions() {
@@ -339,7 +365,7 @@ public class PayBillsPanel extends JPanel {
             request = validateInputs(biller, billerReference, amountText, pin);
         } catch (RuntimeException ex) {
             CompletableFuture<Transaction> future = new CompletableFuture<>();
-            runOnEdt(() -> {
+            SwingUiSupport.runOnEdt(() -> {
                 applyFailureUi(ex);
                 if (onPaymentError != null) {
                     onPaymentError.accept(ex);
@@ -356,7 +382,7 @@ public class PayBillsPanel extends JPanel {
             return CompletableFuture.completedFuture(null);
         }
         CompletableFuture<Transaction> future = new CompletableFuture<>();
-        runOnEdt(() -> {
+        SwingUiSupport.runOnEdt(() -> {
             btnSubmitBillPayment.setEnabled(false);
             txtBillPin.setText("");
             lblBillFeedback.setForeground(UiTheme.color(UiTheme.ColorRole.INFO));
@@ -379,7 +405,7 @@ public class PayBillsPanel extends JPanel {
                     applyPaymentOutcomeUi(request, txn);
                     future.complete(txn);
                 } catch (Exception ex) {
-                    Throwable cause = unwrapCause(ex);
+                    Throwable cause = SwingUiSupport.unwrapCause(ex);
                     applyFailureUi(cause);
                     if (onPaymentError != null) {
                         onPaymentError.accept(cause);
@@ -468,7 +494,7 @@ public class PayBillsPanel extends JPanel {
         Transaction txn;
 
         if (authService != null) {
-            verifyPinOrThrow(wallet.getUserId(), request.pin());
+            AuthService.verifyPinOrThrow(authService, wallet.getUserId(), request.pin());
             txn = walletService.payBill(
                     reqReference,
                     wallet.getWalletId(),
@@ -492,20 +518,6 @@ public class PayBillsPanel extends JPanel {
         }
         session.refreshWallet(walletService);
         return txn;
-    }
-
-    private void verifyPinOrThrow(String userId, String rawPin) {
-        try {
-            if (!authService.verifyPin(userId, rawPin)) {
-                SessionManager session = SessionManager.getInstance();
-                if (session.isLockedOutByPin()) {
-                    throw new WalletException("Session terminated after maximum failed PIN attempts.");
-                }
-                throw new WalletException("Invalid transaction PIN. Outgoing payment blocked.");
-            }
-        } catch (SecurityException ex) {
-            throw new WalletException(ex.getMessage(), ex);
-        }
     }
 
     private void applyPaymentOutcomeUi(BillPaymentRequest request, Transaction txn) {
@@ -546,28 +558,9 @@ public class PayBillsPanel extends JPanel {
         } else if (ex instanceof InsufficientFundsException) {
             lblBillFeedback.setText("Payment failed: Insufficient wallet balance.");
         } else {
-            String msg = (ex != null && ex.getMessage() != null && !ex.getMessage().trim().isEmpty())
-                    ? ex.getMessage()
-                    : (ex != null ? ex.getClass().getSimpleName() : "Unknown error");
+            String msg = SwingUiSupport.extractErrorMessage(ex);
             lblBillFeedback.setText("Payment validation failed: " + msg);
         }
-    }
-
-    private static void runOnEdt(Runnable action) {
-        if (SwingUtilities.isEventDispatchThread()) {
-            action.run();
-        } else {
-            SwingUtilities.invokeLater(action);
-        }
-    }
-
-    private static Throwable unwrapCause(Throwable ex) {
-        Throwable current = ex;
-        while ((current instanceof ExecutionException || current instanceof CompletionException)
-                && current.getCause() != null) {
-            current = current.getCause();
-        }
-        return current;
     }
 
     public JPanel getRootPanel() {
@@ -637,9 +630,9 @@ public class PayBillsPanel extends JPanel {
         txtBillAmount = new JTextField(22);
         String zeroFormatted = MoneyUtil.format(MoneyUtil.ZERO, config.getDefaultCurrency());
         lblFeePreview = new JLabel(zeroFormatted);
-        lblFeePreview.setFont(UiTheme.font(UiTheme.FontRole.LABEL));
+        lblFeePreview.setFont(UiTheme.font(UiTheme.FontRole.LABEL_BOLD));
         lblTotalPreview = new JLabel(zeroFormatted);
-        lblTotalPreview.setFont(UiTheme.font(UiTheme.FontRole.LABEL));
+        lblTotalPreview.setFont(UiTheme.font(UiTheme.FontRole.LABEL_BOLD));
         txtBillPin = new JPasswordField(22);
         txtBillPin.setToolTipText("Enter your " + config.getPinMinLength() + "-" + config.getPinMaxLength()
                 + " digit Transaction PIN to authorize bill payment");
@@ -660,6 +653,7 @@ public class PayBillsPanel extends JPanel {
                 null, null, null, 0, false));
 
         btnSubmitBillPayment = new JButton("Pay Bill");
+        UiTheme.stylePrimaryButton(btnSubmitBillPayment);
         pnlActions.add(btnSubmitBillPayment, new GridConstraints(0, 0, 1, 1,
                 GridConstraints.ANCHOR_CENTER, GridConstraints.FILL_HORIZONTAL,
                 GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_CAN_GROW,
@@ -667,6 +661,7 @@ public class PayBillsPanel extends JPanel {
                 null, null, null, 0, false));
 
         btnBillBackToOverview = new JButton("\u2190 Back to Overview");
+        UiTheme.styleSecondaryButton(btnBillBackToOverview);
         pnlActions.add(btnBillBackToOverview, new GridConstraints(0, 1, 1, 1,
                 GridConstraints.ANCHOR_CENTER, GridConstraints.FILL_HORIZONTAL,
                 GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_CAN_GROW,
@@ -693,7 +688,12 @@ public class PayBillsPanel extends JPanel {
     }
 
     private static void addRow(JPanel panel, int row, String labelText, JComponent field) {
-        panel.add(new JLabel(labelText), new GridConstraints(row, 0, 1, 1,
+        JLabel label = new JLabel(labelText);
+        UiTheme.styleFormLabel(label);
+        if (!(field instanceof JLabel)) {
+            UiTheme.styleInputField(field);
+        }
+        panel.add(label, new GridConstraints(row, 0, 1, 1,
                 GridConstraints.ANCHOR_WEST, GridConstraints.FILL_NONE,
                 GridConstraints.SIZEPOLICY_FIXED, GridConstraints.SIZEPOLICY_FIXED,
                 null, null, null, 0, false));

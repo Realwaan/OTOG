@@ -11,6 +11,7 @@ import com.otog.model.Wallet;
 import com.otog.service.AdminService;
 import com.otog.util.MoneyUtil;
 import com.otog.util.OtogConfig;
+import com.otog.util.SwingUiSupport;
 import com.otog.util.UiTheme;
 
 import javax.swing.*;
@@ -21,8 +22,6 @@ import java.time.format.DateTimeFormatter;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.concurrent.CompletionException;
-import java.util.concurrent.ExecutionException;
 import java.util.function.Consumer;
 
 /**
@@ -31,12 +30,10 @@ import java.util.function.Consumer;
  */
 public class AdminControlsPanel extends JPanel {
 
-    private final DateTimeFormatter dateFormatter = DateTimeFormatter.ofPattern(OtogConfig.getInstance().getUiDatePattern());
+    private static final String[] USER_COLUMNS = {"User ID", "Name", "Mobile", "Role", "Status", "Wallet", "Balance"};
+    private static final String[] AUDIT_COLUMNS = {"Action ID", "Type", "Target", "Reason", "Timestamp"};
 
-    @FunctionalInterface
-    public interface DialogMessageCallback {
-        void show(Component parent, String title, String message, int messageType);
-    }
+    private final DateTimeFormatter dateFormatter = DateTimeFormatter.ofPattern(OtogConfig.getInstance().getUiDatePattern());
 
     private static final class AdminPanelSnapshot {
         final List<User> users;
@@ -53,7 +50,7 @@ public class AdminControlsPanel extends JPanel {
     private final AdminService adminService;
     private final String adminId;
     private final Consumer<Boolean> offEdtObserver;
-    private final DialogMessageCallback messageCallback;
+    private final SwingUiSupport.DialogMessageCallback messageCallback;
 
     private JPanel pnlRoot;
     private JLabel lblTitle;
@@ -75,14 +72,14 @@ public class AdminControlsPanel extends JPanel {
     public AdminControlsPanel(AdminService adminService,
                               String adminId,
                               Consumer<Boolean> offEdtObserver,
-                              DialogMessageCallback messageCallback) {
+                              SwingUiSupport.DialogMessageCallback messageCallback) {
         super(new BorderLayout());
         this.adminService = adminService;
         this.adminId = adminId;
         this.offEdtObserver = offEdtObserver;
         this.messageCallback = messageCallback != null
                 ? messageCallback
-                : (parent, title, msg, type) -> JOptionPane.showMessageDialog(parent, msg, title, type);
+                : SwingUiSupport.defaultMessageCallback();
 
         if (pnlRoot == null) {
             $$$setupUI$$$();
@@ -94,6 +91,10 @@ public class AdminControlsPanel extends JPanel {
         }
     }
 
+    /**
+     * Applies table models and runtime UiTheme styling outside {@code $$$setupUI$$$()} so
+     * IntelliJ GUI Designer bytecode instrumentation never strips table/button configuration.
+     */
     private void ensureComponentsInitialized() {
         if (lblTitle != null) {
             lblTitle.setFont(UiTheme.font(UiTheme.FontRole.TITLE));
@@ -103,8 +104,7 @@ public class AdminControlsPanel extends JPanel {
             splitPane.setResizeWeight(0.55);
         }
         if (userModel == null) {
-            String[] userCols = {"User ID", "Name", "Mobile", "Role", "Status", "Wallet", "Balance"};
-            userModel = new DefaultTableModel(userCols, 0) {
+            userModel = new DefaultTableModel(USER_COLUMNS, 0) {
                 @Override
                 public boolean isCellEditable(int r, int c) {
                     return false;
@@ -115,12 +115,12 @@ public class AdminControlsPanel extends JPanel {
             if (userTable.getModel() != userModel) {
                 userTable.setModel(userModel);
             }
-            userTable.setSelectionMode(ListSelectionModel.SINGLE_SELECTION);
             userTable.setAutoCreateRowSorter(true);
+            UiTheme.styleTable(userTable, 115, 135, 105, 80, 85, 155, 105);
+            UiTheme.alignTableColumnsRight(userTable, 6);
         }
         if (auditModel == null) {
-            String[] auditCols = {"Action ID", "Type", "Target", "Reason", "Timestamp"};
-            auditModel = new DefaultTableModel(auditCols, 0) {
+            auditModel = new DefaultTableModel(AUDIT_COLUMNS, 0) {
                 @Override
                 public boolean isCellEditable(int r, int c) {
                     return false;
@@ -132,21 +132,29 @@ public class AdminControlsPanel extends JPanel {
                 auditTable.setModel(auditModel);
             }
             auditTable.setAutoCreateRowSorter(true);
+            UiTheme.styleTable(auditTable, 115, 130, 115, 290, 145);
         }
         if (btnSuspend != null) {
             btnSuspend.setEnabled(false);
+            UiTheme.styleSecondaryButton(btnSuspend);
         }
         if (btnReactivate != null) {
             btnReactivate.setEnabled(false);
+            UiTheme.styleSecondaryButton(btnReactivate);
         }
         if (btnChangeRole != null) {
             btnChangeRole.setEnabled(false);
+            UiTheme.styleSecondaryButton(btnChangeRole);
         }
         if (btnViewUserTxns != null) {
             btnViewUserTxns.setEnabled(false);
+            UiTheme.styleSecondaryButton(btnViewUserTxns);
         }
+        UiTheme.styleSecondaryButton(btnViewAllTxns);
+        UiTheme.styleSecondaryButton(btnRefreshAll);
         if (statusLbl != null) {
             statusLbl.setFont(UiTheme.font(UiTheme.FontRole.SMALL));
+            statusLbl.setForeground(UiTheme.color(UiTheme.ColorRole.MUTED));
         }
     }
 
@@ -211,8 +219,8 @@ public class AdminControlsPanel extends JPanel {
                         statusLbl.setText("Last refreshed: " + LocalDateTime.now()
                                 .format(DateTimeFormatter.ofPattern(OtogConfig.getInstance().getTimestampPattern())));
                     } catch (Exception ex) {
-                        Throwable cause = unwrapCause(ex);
-                        String message = extractErrorMessage(cause);
+                        Throwable cause = SwingUiSupport.unwrapCause(ex);
+                        String message = SwingUiSupport.extractErrorMessage(cause);
                         statusLbl.setText("Error loading admin data: " + message);
                         if (showErrorPopup) {
                             messageCallback.show(pnlRoot, "Admin Refresh Failed", message, JOptionPane.ERROR_MESSAGE);
@@ -271,8 +279,9 @@ public class AdminControlsPanel extends JPanel {
                         messageCallback.show(pnlRoot, "Done", "Role updated to " + selectedRole + ".",
                                 JOptionPane.INFORMATION_MESSAGE);
                     } catch (Exception ex) {
-                        Throwable cause = unwrapCause(ex);
-                        messageCallback.show(pnlRoot, "Role Update Failed", "Error: " + extractErrorMessage(cause),
+                        Throwable cause = SwingUiSupport.unwrapCause(ex);
+                        messageCallback.show(pnlRoot, "Role Update Failed",
+                                "Error: " + SwingUiSupport.extractErrorMessage(cause),
                                 JOptionPane.ERROR_MESSAGE);
                     } finally {
                         reloadAll.accept(false);
@@ -340,10 +349,10 @@ public class AdminControlsPanel extends JPanel {
                             suspend ? "Account suspended." : "Account reactivated.",
                             JOptionPane.INFORMATION_MESSAGE);
                 } catch (Exception ex) {
-                    Throwable cause = unwrapCause(ex);
+                    Throwable cause = SwingUiSupport.unwrapCause(ex);
                     messageCallback.show(userTable,
                             suspend ? "Suspend Failed" : "Reactivate Failed",
-                            "Error: " + extractErrorMessage(cause),
+                            "Error: " + SwingUiSupport.extractErrorMessage(cause),
                             JOptionPane.ERROR_MESSAGE);
                 } finally {
                     reloadAll.run();
@@ -401,13 +410,15 @@ public class AdminControlsPanel extends JPanel {
                     }
                     JTable table = new JTable(model);
                     table.setAutoCreateRowSorter(true);
+                    UiTheme.styleTable(table, 110, 120, 90, 105, 105, 90, 70, 90, 150);
+                    UiTheme.alignTableColumnsRight(table, 5, 6);
                     JScrollPane scroll = new JScrollPane(table);
                     scroll.setPreferredSize(new Dimension(760, 320));
                     JOptionPane.showMessageDialog(pnlRoot, scroll, dialogTitle, JOptionPane.INFORMATION_MESSAGE);
                     reloadAll.run();
                 } catch (Exception ex) {
-                    Throwable cause = unwrapCause(ex);
-                    String message = extractErrorMessage(cause);
+                    Throwable cause = SwingUiSupport.unwrapCause(ex);
+                    String message = SwingUiSupport.extractErrorMessage(cause);
                     statusLbl.setText("Error loading transactions: " + message);
                     messageCallback.show(pnlRoot, "Transaction Inspection Failed", "Error: " + message,
                             JOptionPane.ERROR_MESSAGE);
@@ -449,7 +460,6 @@ public class AdminControlsPanel extends JPanel {
         pnlRoot.setLayout(new GridLayoutManager(3, 1, new Insets(10, 12, 10, 12), 8, 8));
 
         lblTitle = new JLabel("Admin Controls — Account Management & Audit Log");
-        lblTitle.setFont(UiTheme.font(UiTheme.FontRole.TITLE));
         pnlRoot.add(lblTitle, new GridConstraints(0, 0, 1, 1,
                 GridConstraints.ANCHOR_WEST, GridConstraints.FILL_NONE,
                 GridConstraints.SIZEPOLICY_FIXED, GridConstraints.SIZEPOLICY_FIXED,
@@ -467,17 +477,7 @@ public class AdminControlsPanel extends JPanel {
         pnlUsers.setLayout(new GridLayoutManager(2, 1, new Insets(0, 0, 0, 0), 4, 4));
         splitPane.setTopComponent(pnlUsers);
 
-        String[] userCols = {"User ID", "Name", "Mobile", "Role", "Status", "Wallet", "Balance"};
-        userModel = new DefaultTableModel(userCols, 0) {
-            @Override
-            public boolean isCellEditable(int r, int c) {
-                return false;
-            }
-        };
-        userTable = new JTable(userModel);
-        userTable.setSelectionMode(ListSelectionModel.SINGLE_SELECTION);
-        userTable.setAutoCreateRowSorter(true);
-
+        userTable = new JTable();
         JScrollPane userScroll = new JScrollPane(userTable);
         userScroll.setBorder(UiTheme.titledBorder("Registered Accounts & Wallets"));
         pnlUsers.add(userScroll, new GridConstraints(0, 0, 1, 1,
@@ -500,10 +500,6 @@ public class AdminControlsPanel extends JPanel {
         btnViewUserTxns = new JButton("View User Txns");
         btnViewAllTxns = new JButton("All System Txns");
         btnRefreshAll = new JButton("Refresh");
-        btnSuspend.setEnabled(false);
-        btnReactivate.setEnabled(false);
-        btnChangeRole.setEnabled(false);
-        btnViewUserTxns.setEnabled(false);
 
         pnlButtons.add(btnSuspend, new GridConstraints(0, 0, 1, 1,
                 GridConstraints.ANCHOR_CENTER, GridConstraints.FILL_HORIZONTAL,
@@ -533,22 +529,12 @@ public class AdminControlsPanel extends JPanel {
                 GridConstraints.ANCHOR_CENTER, GridConstraints.FILL_HORIZONTAL,
                 GridConstraints.SIZEPOLICY_WANT_GROW, 1, null, null, null, 0, false));
 
-        String[] auditCols = {"Action ID", "Type", "Target", "Reason", "Timestamp"};
-        auditModel = new DefaultTableModel(auditCols, 0) {
-            @Override
-            public boolean isCellEditable(int r, int c) {
-                return false;
-            }
-        };
-        auditTable = new JTable(auditModel);
-        auditTable.setAutoCreateRowSorter(true);
-
+        auditTable = new JTable();
         JScrollPane auditScroll = new JScrollPane(auditTable);
         auditScroll.setBorder(UiTheme.titledBorder("Admin Action Audit Log"));
         splitPane.setBottomComponent(auditScroll);
 
         statusLbl = new JLabel("Loading admin records...");
-        statusLbl.setFont(UiTheme.font(UiTheme.FontRole.SMALL));
         pnlRoot.add(statusLbl, new GridConstraints(2, 0, 1, 1,
                 GridConstraints.ANCHOR_WEST, GridConstraints.FILL_NONE,
                 GridConstraints.SIZEPOLICY_FIXED, GridConstraints.SIZEPOLICY_FIXED,
@@ -557,22 +543,5 @@ public class AdminControlsPanel extends JPanel {
 
     public JComponent $$$getRootComponent$$$() {
         return pnlRoot;
-    }
-
-    private static Throwable unwrapCause(Throwable ex) {
-        Throwable current = ex;
-        while ((current instanceof ExecutionException || current instanceof CompletionException)
-                && current.getCause() != null) {
-            current = current.getCause();
-        }
-        return current;
-    }
-
-    private static String extractErrorMessage(Throwable ex) {
-        if (ex == null) {
-            return "Unknown error";
-        }
-        String msg = ex.getMessage();
-        return (msg != null && !msg.trim().isEmpty()) ? msg : ex.getClass().getSimpleName();
     }
 }
