@@ -2,7 +2,6 @@ package com.otog.ui;
 
 import com.intellij.uiDesigner.core.GridConstraints;
 import com.intellij.uiDesigner.core.GridLayoutManager;
-import com.intellij.uiDesigner.core.Spacer;
 import com.otog.model.InvestMoneyTransaction;
 import com.otog.model.Transaction;
 import com.otog.model.TransactionType;
@@ -106,7 +105,7 @@ public class InvestmentPanel extends JPanel {
             $$$setupUI$$$();
         }
         ensureInteractiveComponentsInitialized();
-        add(pnlRoot, BorderLayout.CENTER);
+        add(SwingUiSupport.createResponsiveScrollPane(pnlRoot), BorderLayout.CENTER);
         initInteractions();
     }
 
@@ -142,6 +141,9 @@ public class InvestmentPanel extends JPanel {
         UiTheme.styleSecondaryButton(btnPreviewInvest);
         UiTheme.stylePrimaryButton(btnSubmitInvest);
         UiTheme.styleSecondaryButton(btnInvestBackToOverview);
+        if (pnlActions != null) {
+            SwingUiSupport.applyWrapLayout(pnlActions, FlowLayout.LEFT, 8, 4);
+        }
 
         if (activityTableModel == null) {
             activityTableModel = new DefaultTableModel(ACTIVITY_COLUMNS, 0) {
@@ -184,6 +186,10 @@ public class InvestmentPanel extends JPanel {
         if (lblInvestFeedback != null) {
             lblInvestFeedback.setFont(UiTheme.font(UiTheme.FontRole.LABEL));
         }
+        SwingUiSupport.makeShrinkable(
+                lblProductName, lblSimulatedPrice, lblHoldingsUnits, lblHoldingsValue,
+                cmbInvestOperation, txtInvestUnits, txtInvestAmount, txtInvestPin,
+                lblPreviewSummary, lblInvestFeedback);
     }
 
     public void setOnBackToOverview(Runnable onBackToOverview) {
@@ -861,11 +867,11 @@ public class InvestmentPanel extends JPanel {
         pnlRoot.setLayout(new GridLayoutManager(3, 1, new Insets(14, 14, 14, 14), 10, 10));
 
         pnlProductSummary = new JPanel();
-        pnlProductSummary.setLayout(new GridLayoutManager(2, 4, new Insets(10, 12, 10, 12), 12, 6));
+        pnlProductSummary.setLayout(new GridLayoutManager(3, 4, new Insets(10, 12, 10, 12), 12, 6));
         pnlProductSummary.setBorder(UiTheme.titledBorder("Seeded Simulated Investment Product"));
         pnlRoot.add(pnlProductSummary, new GridConstraints(0, 0, 1, 1,
                 GridConstraints.ANCHOR_CENTER, GridConstraints.FILL_BOTH,
-                GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_CAN_GROW,
+                GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_CAN_GROW | GridConstraints.SIZEPOLICY_WANT_GROW,
                 GridConstraints.SIZEPOLICY_FIXED,
                 null, null, null, 0, false));
 
@@ -875,17 +881,17 @@ public class InvestmentPanel extends JPanel {
         lblHoldingsUnits = new JLabel("0.0000 units");
         lblHoldingsValue = new JLabel(MoneyUtil.format(BigDecimal.ZERO, config.getDefaultCurrency()));
 
-        addSummaryCell(pnlProductSummary, 0, 0, "Product:", lblProductName);
-        addSummaryCell(pnlProductSummary, 0, 2, "Simulated Price:", lblSimulatedPrice);
-        addSummaryCell(pnlProductSummary, 1, 0, "Persisted Holdings:", lblHoldingsUnits);
-        addSummaryCell(pnlProductSummary, 1, 2, "Simulated Market Value:", lblHoldingsValue);
+        addSummarySpanRow(pnlProductSummary, 0, "Product:", lblProductName);
+        addSummarySpanRow(pnlProductSummary, 1, "Simulated Price:", lblSimulatedPrice);
+        addSummaryCell(pnlProductSummary, 2, 0, "Persisted Holdings:", lblHoldingsUnits);
+        addSummaryCell(pnlProductSummary, 2, 2, "Simulated Market Value:", lblHoldingsValue);
 
         pnlOrderForm = new JPanel();
         pnlOrderForm.setLayout(new GridLayoutManager(7, 2, new Insets(10, 12, 10, 12), 10, 8));
         pnlOrderForm.setBorder(UiTheme.titledBorder("Simulated Purchase & Redemption"));
         pnlRoot.add(pnlOrderForm, new GridConstraints(1, 0, 1, 1,
                 GridConstraints.ANCHOR_CENTER, GridConstraints.FILL_BOTH,
-                GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_CAN_GROW,
+                GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_CAN_GROW | GridConstraints.SIZEPOLICY_WANT_GROW,
                 GridConstraints.SIZEPOLICY_FIXED,
                 null, null, null, 0, false));
 
@@ -902,43 +908,26 @@ public class InvestmentPanel extends JPanel {
         addFormRow(pnlOrderForm, 4, "Order Preview:", lblPreviewSummary);
 
         pnlActions = new JPanel();
-        pnlActions.setLayout(new GridLayoutManager(1, 4, new Insets(4, 0, 0, 0), 8, 0));
+        pnlActions.setLayout(new FlowLayout(FlowLayout.LEFT, 8, 4));
         pnlOrderForm.add(pnlActions, new GridConstraints(5, 1, 1, 1,
                 GridConstraints.ANCHOR_WEST, GridConstraints.FILL_HORIZONTAL,
-                GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_CAN_GROW,
+                GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_CAN_GROW | GridConstraints.SIZEPOLICY_WANT_GROW,
                 GridConstraints.SIZEPOLICY_FIXED,
                 null, null, null, 0, false));
 
         btnPreviewInvest = new JButton("Preview Units & Cost");
-        pnlActions.add(btnPreviewInvest, new GridConstraints(0, 0, 1, 1,
-                GridConstraints.ANCHOR_CENTER, GridConstraints.FILL_HORIZONTAL,
-                GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_CAN_GROW,
-                GridConstraints.SIZEPOLICY_FIXED,
-                null, null, null, 0, false));
+        pnlActions.add(btnPreviewInvest);
 
         btnSubmitInvest = new JButton("Confirm Investment");
-        pnlActions.add(btnSubmitInvest, new GridConstraints(0, 1, 1, 1,
-                GridConstraints.ANCHOR_CENTER, GridConstraints.FILL_HORIZONTAL,
-                GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_CAN_GROW,
-                GridConstraints.SIZEPOLICY_FIXED,
-                null, null, null, 0, false));
+        pnlActions.add(btnSubmitInvest);
 
         btnInvestBackToOverview = new JButton("\u2190 Back to Overview");
-        pnlActions.add(btnInvestBackToOverview, new GridConstraints(0, 2, 1, 1,
-                GridConstraints.ANCHOR_CENTER, GridConstraints.FILL_HORIZONTAL,
-                GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_CAN_GROW,
-                GridConstraints.SIZEPOLICY_FIXED,
-                null, null, null, 0, false));
-
-        pnlActions.add(new Spacer(), new GridConstraints(0, 3, 1, 1,
-                GridConstraints.ANCHOR_CENTER, GridConstraints.FILL_HORIZONTAL,
-                GridConstraints.SIZEPOLICY_WANT_GROW, 1,
-                null, null, null, 0, false));
+        pnlActions.add(btnInvestBackToOverview);
 
         lblInvestFeedback = new JLabel(" ");
         pnlOrderForm.add(lblInvestFeedback, new GridConstraints(6, 0, 1, 2,
                 GridConstraints.ANCHOR_WEST, GridConstraints.FILL_HORIZONTAL,
-                GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_CAN_GROW,
+                GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_CAN_GROW | GridConstraints.SIZEPOLICY_WANT_GROW,
                 GridConstraints.SIZEPOLICY_FIXED,
                 null, null, null, 0, false));
 
@@ -947,9 +936,9 @@ public class InvestmentPanel extends JPanel {
         pnlActivity.setBorder(UiTheme.titledBorder("Persisted Investment Activity"));
         pnlRoot.add(pnlActivity, new GridConstraints(2, 0, 1, 1,
                 GridConstraints.ANCHOR_CENTER, GridConstraints.FILL_BOTH,
-                GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_CAN_GROW,
+                GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_CAN_GROW | GridConstraints.SIZEPOLICY_WANT_GROW,
                 GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_WANT_GROW,
-                null, new Dimension(720, 180), null, 0, false));
+                new Dimension(200, 150), null, null, 0, false));
 
         tblInvestmentActivity = new JTable();
         scrollInvestmentActivity = new JScrollPane(tblInvestmentActivity);
@@ -957,6 +946,20 @@ public class InvestmentPanel extends JPanel {
                 GridConstraints.ANCHOR_CENTER, GridConstraints.FILL_BOTH,
                 GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_WANT_GROW,
                 GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_WANT_GROW,
+                new Dimension(180, 120), new Dimension(360, 160), null, 0, false));
+    }
+
+    private static void addSummarySpanRow(JPanel panel, int row, String labelText, JLabel valueLabel) {
+        JLabel label = new JLabel(labelText);
+        UiTheme.styleFormLabel(label);
+        panel.add(label, new GridConstraints(row, 0, 1, 1,
+                GridConstraints.ANCHOR_WEST, GridConstraints.FILL_NONE,
+                GridConstraints.SIZEPOLICY_FIXED, GridConstraints.SIZEPOLICY_FIXED,
+                null, null, null, 0, false));
+        panel.add(valueLabel, new GridConstraints(row, 1, 1, 3,
+                GridConstraints.ANCHOR_WEST, GridConstraints.FILL_HORIZONTAL,
+                GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_CAN_GROW | GridConstraints.SIZEPOLICY_WANT_GROW,
+                GridConstraints.SIZEPOLICY_FIXED,
                 null, null, null, 0, false));
     }
 
@@ -969,7 +972,8 @@ public class InvestmentPanel extends JPanel {
                 null, null, null, 0, false));
         panel.add(valueLabel, new GridConstraints(row, labelCol + 1, 1, 1,
                 GridConstraints.ANCHOR_WEST, GridConstraints.FILL_HORIZONTAL,
-                GridConstraints.SIZEPOLICY_WANT_GROW, GridConstraints.SIZEPOLICY_FIXED,
+                GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_CAN_GROW | GridConstraints.SIZEPOLICY_WANT_GROW,
+                GridConstraints.SIZEPOLICY_FIXED,
                 null, null, null, 0, false));
     }
 
@@ -982,7 +986,8 @@ public class InvestmentPanel extends JPanel {
                 null, null, null, 0, false));
         panel.add(field, new GridConstraints(row, 1, 1, 1,
                 GridConstraints.ANCHOR_WEST, GridConstraints.FILL_HORIZONTAL,
-                GridConstraints.SIZEPOLICY_WANT_GROW, GridConstraints.SIZEPOLICY_FIXED,
+                GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_CAN_GROW | GridConstraints.SIZEPOLICY_WANT_GROW,
+                GridConstraints.SIZEPOLICY_FIXED,
                 null, null, null, 0, false));
     }
 

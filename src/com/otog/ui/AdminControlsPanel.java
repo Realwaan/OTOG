@@ -2,7 +2,6 @@ package com.otog.ui;
 
 import com.intellij.uiDesigner.core.GridConstraints;
 import com.intellij.uiDesigner.core.GridLayoutManager;
-import com.intellij.uiDesigner.core.Spacer;
 import com.otog.model.AdminAction;
 import com.otog.model.Transaction;
 import com.otog.model.User;
@@ -152,10 +151,14 @@ public class AdminControlsPanel extends JPanel {
         }
         UiTheme.styleSecondaryButton(btnViewAllTxns);
         UiTheme.styleSecondaryButton(btnRefreshAll);
+        if (pnlButtons != null) {
+            SwingUiSupport.applyWrapLayout(pnlButtons, FlowLayout.LEFT, 6, 4);
+        }
         if (statusLbl != null) {
             statusLbl.setFont(UiTheme.font(UiTheme.FontRole.SMALL));
             statusLbl.setForeground(UiTheme.color(UiTheme.ColorRole.MUTED));
         }
+        SwingUiSupport.makeShrinkable(lblTitle, statusLbl);
     }
 
     private void wireActionsAndLoad() {
@@ -461,8 +464,9 @@ public class AdminControlsPanel extends JPanel {
 
         lblTitle = new JLabel("Admin Controls — Account Management & Audit Log");
         pnlRoot.add(lblTitle, new GridConstraints(0, 0, 1, 1,
-                GridConstraints.ANCHOR_WEST, GridConstraints.FILL_NONE,
-                GridConstraints.SIZEPOLICY_FIXED, GridConstraints.SIZEPOLICY_FIXED,
+                GridConstraints.ANCHOR_WEST, GridConstraints.FILL_HORIZONTAL,
+                GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_CAN_GROW | GridConstraints.SIZEPOLICY_WANT_GROW,
+                GridConstraints.SIZEPOLICY_FIXED,
                 null, null, null, 0, false));
 
         splitPane = new JSplitPane(JSplitPane.VERTICAL_SPLIT);
@@ -471,7 +475,7 @@ public class AdminControlsPanel extends JPanel {
                 GridConstraints.ANCHOR_CENTER, GridConstraints.FILL_BOTH,
                 GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_WANT_GROW,
                 GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_WANT_GROW,
-                null, null, null, 0, false));
+                new Dimension(200, 200), null, null, 0, false));
 
         pnlUsers = new JPanel();
         pnlUsers.setLayout(new GridLayoutManager(2, 1, new Insets(0, 0, 0, 0), 4, 4));
@@ -484,13 +488,13 @@ public class AdminControlsPanel extends JPanel {
                 GridConstraints.ANCHOR_CENTER, GridConstraints.FILL_BOTH,
                 GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_WANT_GROW,
                 GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_WANT_GROW,
-                null, null, null, 0, false));
+                new Dimension(180, 100), null, null, 0, false));
 
         pnlButtons = new JPanel();
-        pnlButtons.setLayout(new GridLayoutManager(1, 7, new Insets(2, 0, 2, 0), 6, 4));
+        pnlButtons.setLayout(new FlowLayout(FlowLayout.LEFT, 6, 4));
         pnlUsers.add(pnlButtons, new GridConstraints(1, 0, 1, 1,
                 GridConstraints.ANCHOR_CENTER, GridConstraints.FILL_BOTH,
-                GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_CAN_GROW,
+                GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_CAN_GROW | GridConstraints.SIZEPOLICY_WANT_GROW,
                 GridConstraints.SIZEPOLICY_FIXED,
                 null, null, null, 0, false));
 
@@ -501,43 +505,24 @@ public class AdminControlsPanel extends JPanel {
         btnViewAllTxns = new JButton("All System Txns");
         btnRefreshAll = new JButton("Refresh");
 
-        pnlButtons.add(btnSuspend, new GridConstraints(0, 0, 1, 1,
-                GridConstraints.ANCHOR_CENTER, GridConstraints.FILL_HORIZONTAL,
-                GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_CAN_GROW,
-                GridConstraints.SIZEPOLICY_FIXED, null, null, null, 0, false));
-        pnlButtons.add(btnReactivate, new GridConstraints(0, 1, 1, 1,
-                GridConstraints.ANCHOR_CENTER, GridConstraints.FILL_HORIZONTAL,
-                GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_CAN_GROW,
-                GridConstraints.SIZEPOLICY_FIXED, null, null, null, 0, false));
-        pnlButtons.add(btnChangeRole, new GridConstraints(0, 2, 1, 1,
-                GridConstraints.ANCHOR_CENTER, GridConstraints.FILL_HORIZONTAL,
-                GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_CAN_GROW,
-                GridConstraints.SIZEPOLICY_FIXED, null, null, null, 0, false));
-        pnlButtons.add(btnViewUserTxns, new GridConstraints(0, 3, 1, 1,
-                GridConstraints.ANCHOR_CENTER, GridConstraints.FILL_HORIZONTAL,
-                GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_CAN_GROW,
-                GridConstraints.SIZEPOLICY_FIXED, null, null, null, 0, false));
-        pnlButtons.add(btnViewAllTxns, new GridConstraints(0, 4, 1, 1,
-                GridConstraints.ANCHOR_CENTER, GridConstraints.FILL_HORIZONTAL,
-                GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_CAN_GROW,
-                GridConstraints.SIZEPOLICY_FIXED, null, null, null, 0, false));
-        pnlButtons.add(btnRefreshAll, new GridConstraints(0, 5, 1, 1,
-                GridConstraints.ANCHOR_CENTER, GridConstraints.FILL_HORIZONTAL,
-                GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_CAN_GROW,
-                GridConstraints.SIZEPOLICY_FIXED, null, null, null, 0, false));
-        pnlButtons.add(new Spacer(), new GridConstraints(0, 6, 1, 1,
-                GridConstraints.ANCHOR_CENTER, GridConstraints.FILL_HORIZONTAL,
-                GridConstraints.SIZEPOLICY_WANT_GROW, 1, null, null, null, 0, false));
+        pnlButtons.add(btnSuspend);
+        pnlButtons.add(btnReactivate);
+        pnlButtons.add(btnChangeRole);
+        pnlButtons.add(btnViewUserTxns);
+        pnlButtons.add(btnViewAllTxns);
+        pnlButtons.add(btnRefreshAll);
 
         auditTable = new JTable();
         JScrollPane auditScroll = new JScrollPane(auditTable);
         auditScroll.setBorder(UiTheme.titledBorder("Admin Action Audit Log"));
+        auditScroll.setMinimumSize(new Dimension(180, 100));
         splitPane.setBottomComponent(auditScroll);
 
         statusLbl = new JLabel("Loading admin records...");
         pnlRoot.add(statusLbl, new GridConstraints(2, 0, 1, 1,
-                GridConstraints.ANCHOR_WEST, GridConstraints.FILL_NONE,
-                GridConstraints.SIZEPOLICY_FIXED, GridConstraints.SIZEPOLICY_FIXED,
+                GridConstraints.ANCHOR_WEST, GridConstraints.FILL_HORIZONTAL,
+                GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_CAN_GROW | GridConstraints.SIZEPOLICY_WANT_GROW,
+                GridConstraints.SIZEPOLICY_FIXED,
                 null, null, null, 0, false));
     }
 

@@ -2,7 +2,6 @@ package com.otog.ui;
 
 import com.intellij.uiDesigner.core.GridConstraints;
 import com.intellij.uiDesigner.core.GridLayoutManager;
-import com.intellij.uiDesigner.core.Spacer;
 import com.otog.database.DatabaseManager;
 import com.otog.model.BillPaymentTransaction;
 import com.otog.model.CashInOutTransaction;
@@ -175,9 +174,6 @@ public class Main extends JFrame {
         OtogConfig config = OtogConfig.getInstance();
         setTitle(config.getAppTitle() + " \u2014 Dashboard");
         setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
-        setSize(config.getUiDimension("ui.dashboard.width", "ui.dashboard.height", 940, 640));
-        setMinimumSize(config.getUiDimension("ui.dashboard.min.width", "ui.dashboard.min.height", 840, 560));
-        setLocationRelativeTo(null);
 
         applyShellStyling();
 
@@ -201,6 +197,14 @@ public class Main extends JFrame {
         buildTabsPanel();
         setContentPane(pnlRoot);
         applyInitialSessionSnapshot();
+
+        SwingUiSupport.applyFlexibleWindowBounds(
+                this,
+                config.getUiDimension("ui.dashboard.width", "ui.dashboard.height", 1020, 680),
+                config.getUiDimension("ui.dashboard.min.width", "ui.dashboard.min.height", 720, 520),
+                false
+        );
+        setLocationRelativeTo(null);
     }
 
     /**
@@ -210,6 +214,9 @@ public class Main extends JFrame {
     private void applyShellStyling() {
         if (pnlHeader != null) {
             pnlHeader.setBorder(UiTheme.bottomDividerBorder());
+        }
+        if (pnlBalanceAndActions != null) {
+            SwingUiSupport.applyWrapLayout(pnlBalanceAndActions, FlowLayout.RIGHT, 8, 4);
         }
         if (pnlFooter != null) {
             pnlFooter.setBorder(UiTheme.topDividerBorder());
@@ -233,8 +240,11 @@ public class Main extends JFrame {
             lblStatus.setFont(UiTheme.font(UiTheme.FontRole.SMALL));
             lblStatus.setForeground(UiTheme.color(UiTheme.ColorRole.MUTED));
         }
+        SwingUiSupport.makeShrinkable(lblWelcome, lblWalletId, lblPinStatus, lblStatus);
         if (tabs != null) {
             tabs.setFont(UiTheme.font(UiTheme.FontRole.LABEL_BOLD));
+            tabs.setTabLayoutPolicy(JTabbedPane.WRAP_TAB_LAYOUT);
+            tabs.setMinimumSize(new Dimension(200, 200));
         }
         UiTheme.styleSecondaryButton(btnBack);
         UiTheme.styleSecondaryButton(btnRefresh);
@@ -518,23 +528,32 @@ public class Main extends JFrame {
         }
         boolean pinVerified = SessionManager.getInstance().isPinVerified();
         if (!hasPin) {
-            lblPinStatus.setText("Transaction PIN: Not Set (required for Cash Out, Send Money, Pay Bills, Merchant QR & Investments)");
+            String pinText = "Transaction PIN: Not Set (required for Cash Out, Send Money, Pay Bills, Merchant QR & Investments)";
+            lblPinStatus.setText(pinText);
+            lblPinStatus.setToolTipText(pinText);
             lblPinStatus.setForeground(UiTheme.color(UiTheme.ColorRole.WARNING));
             if (btnPinSettings != null) {
                 btnPinSettings.setText("Set PIN");
             }
         } else if (pinVerified) {
-            lblPinStatus.setText("Transaction PIN: Set & Verified for active session");
+            String pinText = "Transaction PIN: Set & Verified for active session";
+            lblPinStatus.setText(pinText);
+            lblPinStatus.setToolTipText(pinText);
             lblPinStatus.setForeground(UiTheme.color(UiTheme.ColorRole.SUCCESS));
             if (btnPinSettings != null) {
                 btnPinSettings.setText("Change PIN");
             }
         } else {
-            lblPinStatus.setText("Transaction PIN: Set (enter PIN on outgoing payments)");
+            String pinText = "Transaction PIN: Set (enter PIN on outgoing payments)";
+            lblPinStatus.setText(pinText);
+            lblPinStatus.setToolTipText(pinText);
             lblPinStatus.setForeground(UiTheme.color(UiTheme.ColorRole.PRIMARY));
             if (btnPinSettings != null) {
                 btnPinSettings.setText("Change PIN");
             }
+        }
+        if (pnlBalanceAndActions != null) {
+            pnlBalanceAndActions.revalidate();
         }
     }
 
@@ -1308,60 +1327,50 @@ public class Main extends JFrame {
     private void $$$setupUI$$$() {
         OtogConfig config = OtogConfig.getInstance();
         pnlRoot = new JPanel();
-        pnlRoot.setLayout(new GridLayoutManager(3, 1, new Insets(14, 16, 14, 16), 12, 12));
+        pnlRoot.setLayout(new GridLayoutManager(3, 1, new Insets(12, 14, 12, 14), 12, 10));
 
         pnlHeader = new JPanel();
-        pnlHeader.setLayout(new GridLayoutManager(1, 3, new Insets(0, 0, 10, 0), 12, 6));
+        pnlHeader.setLayout(new GridLayoutManager(2, 2, new Insets(0, 0, 8, 0), 12, 6));
         pnlRoot.add(pnlHeader, new GridConstraints(0, 0, 1, 1,
                 GridConstraints.ANCHOR_CENTER, GridConstraints.FILL_BOTH,
-                GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_CAN_GROW,
+                GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_WANT_GROW,
                 GridConstraints.SIZEPOLICY_FIXED,
                 null, null, null, 0, false));
 
         pnlIdentity = new JPanel();
         pnlIdentity.setLayout(new GridLayoutManager(3, 1, new Insets(0, 0, 0, 0), 0, 2));
         pnlHeader.add(pnlIdentity, new GridConstraints(0, 0, 1, 1,
-                GridConstraints.ANCHOR_WEST, GridConstraints.FILL_VERTICAL,
-                GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_CAN_GROW,
+                GridConstraints.ANCHOR_WEST, GridConstraints.FILL_BOTH,
+                GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_WANT_GROW,
                 GridConstraints.SIZEPOLICY_FIXED,
                 null, null, null, 0, false));
 
         lblWelcome = new JLabel("Welcome");
         pnlIdentity.add(lblWelcome, new GridConstraints(0, 0, 1, 1,
-                GridConstraints.ANCHOR_WEST, GridConstraints.FILL_NONE,
-                GridConstraints.SIZEPOLICY_FIXED, GridConstraints.SIZEPOLICY_FIXED,
+                GridConstraints.ANCHOR_WEST, GridConstraints.FILL_HORIZONTAL,
+                GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_WANT_GROW,
+                GridConstraints.SIZEPOLICY_FIXED,
                 null, null, null, 0, false));
 
         lblWalletId = new JLabel("Wallet: --");
         pnlIdentity.add(lblWalletId, new GridConstraints(1, 0, 1, 1,
-                GridConstraints.ANCHOR_WEST, GridConstraints.FILL_NONE,
-                GridConstraints.SIZEPOLICY_FIXED, GridConstraints.SIZEPOLICY_FIXED,
+                GridConstraints.ANCHOR_WEST, GridConstraints.FILL_HORIZONTAL,
+                GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_WANT_GROW,
+                GridConstraints.SIZEPOLICY_FIXED,
                 null, null, null, 0, false));
 
         lblPinStatus = new JLabel("Transaction PIN: Checking...");
         pnlIdentity.add(lblPinStatus, new GridConstraints(2, 0, 1, 1,
-                GridConstraints.ANCHOR_WEST, GridConstraints.FILL_NONE,
-                GridConstraints.SIZEPOLICY_FIXED, GridConstraints.SIZEPOLICY_FIXED,
-                null, null, null, 0, false));
-
-        pnlHeader.add(new Spacer(), new GridConstraints(0, 1, 1, 1,
-                GridConstraints.ANCHOR_CENTER, GridConstraints.FILL_HORIZONTAL,
-                GridConstraints.SIZEPOLICY_WANT_GROW, 1,
-                null, null, null, 0, false));
-
-        pnlBalanceAndActions = new JPanel();
-        pnlBalanceAndActions.setLayout(new GridLayoutManager(1, 6, new Insets(0, 0, 0, 0), 8, 0));
-        pnlHeader.add(pnlBalanceAndActions, new GridConstraints(0, 2, 1, 1,
-                GridConstraints.ANCHOR_EAST, GridConstraints.FILL_VERTICAL,
-                GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_CAN_GROW,
+                GridConstraints.ANCHOR_WEST, GridConstraints.FILL_HORIZONTAL,
+                GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_WANT_GROW,
                 GridConstraints.SIZEPOLICY_FIXED,
                 null, null, null, 0, false));
 
         pnlBalanceBox = new JPanel();
-        pnlBalanceBox.setLayout(new GridLayoutManager(2, 1, new Insets(0, 0, 0, 8), 0, 1));
-        pnlBalanceAndActions.add(pnlBalanceBox, new GridConstraints(0, 0, 1, 1,
+        pnlBalanceBox.setLayout(new GridLayoutManager(2, 1, new Insets(0, 8, 0, 0), 0, 1));
+        pnlHeader.add(pnlBalanceBox, new GridConstraints(0, 1, 1, 1,
                 GridConstraints.ANCHOR_EAST, GridConstraints.FILL_VERTICAL,
-                GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_CAN_GROW,
+                GridConstraints.SIZEPOLICY_FIXED,
                 GridConstraints.SIZEPOLICY_FIXED,
                 null, null, null, 0, false));
 
@@ -1379,61 +1388,50 @@ public class Main extends JFrame {
                 GridConstraints.SIZEPOLICY_FIXED, GridConstraints.SIZEPOLICY_FIXED,
                 null, null, null, 0, false));
 
+        pnlBalanceAndActions = new JPanel();
+        pnlBalanceAndActions.setLayout(new FlowLayout(FlowLayout.RIGHT, 8, 4));
+        pnlHeader.add(pnlBalanceAndActions, new GridConstraints(1, 0, 1, 2,
+                GridConstraints.ANCHOR_CENTER, GridConstraints.FILL_HORIZONTAL,
+                GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_WANT_GROW,
+                GridConstraints.SIZEPOLICY_FIXED,
+                null, null, null, 0, false));
+
         btnBack = new JButton("\u2190 Back");
         btnBack.setEnabled(false);
-        pnlBalanceAndActions.add(btnBack, new GridConstraints(0, 1, 1, 1,
-                GridConstraints.ANCHOR_CENTER, GridConstraints.FILL_HORIZONTAL,
-                GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_CAN_GROW,
-                GridConstraints.SIZEPOLICY_FIXED,
-                null, null, null, 0, false));
+        pnlBalanceAndActions.add(btnBack);
 
         btnRefresh = new JButton("Refresh");
-        pnlBalanceAndActions.add(btnRefresh, new GridConstraints(0, 2, 1, 1,
-                GridConstraints.ANCHOR_CENTER, GridConstraints.FILL_HORIZONTAL,
-                GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_CAN_GROW,
-                GridConstraints.SIZEPOLICY_FIXED,
-                null, null, null, 0, false));
+        pnlBalanceAndActions.add(btnRefresh);
 
         btnNotifications = new JButton("Notifications (0)");
-        pnlBalanceAndActions.add(btnNotifications, new GridConstraints(0, 3, 1, 1,
-                GridConstraints.ANCHOR_CENTER, GridConstraints.FILL_HORIZONTAL,
-                GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_CAN_GROW,
-                GridConstraints.SIZEPOLICY_FIXED,
-                null, null, null, 0, false));
+        pnlBalanceAndActions.add(btnNotifications);
 
         btnPinSettings = new JButton("Transaction PIN");
-        pnlBalanceAndActions.add(btnPinSettings, new GridConstraints(0, 4, 1, 1,
-                GridConstraints.ANCHOR_CENTER, GridConstraints.FILL_HORIZONTAL,
-                GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_CAN_GROW,
-                GridConstraints.SIZEPOLICY_FIXED,
-                null, null, null, 0, false));
+        pnlBalanceAndActions.add(btnPinSettings);
 
         btnLogout = new JButton("Logout");
-        pnlBalanceAndActions.add(btnLogout, new GridConstraints(0, 5, 1, 1,
-                GridConstraints.ANCHOR_CENTER, GridConstraints.FILL_HORIZONTAL,
-                GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_CAN_GROW,
-                GridConstraints.SIZEPOLICY_FIXED,
-                null, null, null, 0, false));
+        pnlBalanceAndActions.add(btnLogout);
 
         tabs = new JTabbedPane();
         pnlRoot.add(tabs, new GridConstraints(1, 0, 1, 1,
                 GridConstraints.ANCHOR_CENTER, GridConstraints.FILL_BOTH,
                 GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_WANT_GROW,
                 GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_WANT_GROW,
-                null, new Dimension(860, 480), null, 0, false));
+                new Dimension(200, 200), null, null, 0, false));
 
         pnlFooter = new JPanel();
         pnlFooter.setLayout(new GridLayoutManager(1, 1, new Insets(6, 2, 2, 2), 0, 0));
         pnlRoot.add(pnlFooter, new GridConstraints(2, 0, 1, 1,
                 GridConstraints.ANCHOR_CENTER, GridConstraints.FILL_BOTH,
-                GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_CAN_GROW,
+                GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_WANT_GROW,
                 GridConstraints.SIZEPOLICY_FIXED,
                 null, null, null, 0, false));
 
         lblStatus = new JLabel("Initializing dashboard...");
         pnlFooter.add(lblStatus, new GridConstraints(0, 0, 1, 1,
-                GridConstraints.ANCHOR_WEST, GridConstraints.FILL_NONE,
-                GridConstraints.SIZEPOLICY_FIXED, GridConstraints.SIZEPOLICY_FIXED,
+                GridConstraints.ANCHOR_WEST, GridConstraints.FILL_HORIZONTAL,
+                GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_WANT_GROW,
+                GridConstraints.SIZEPOLICY_FIXED,
                 null, null, null, 0, false));
     }
 

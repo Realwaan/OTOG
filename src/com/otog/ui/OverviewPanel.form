@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <form xmlns="http://www.intellij.com/uidesigner/form/" version="1" bind-to-class="com.otog.ui.OverviewPanel">
-  <grid id="overviewRoot" binding="pnlRoot" layout-manager="GridLayoutManager" row-count="2" column-count="1" same-size-horizontally="false" same-size-vertically="false" hgap="10" vgap="12">
+  <grid id="overviewRoot" binding="pnlRoot" layout-manager="GridLayoutManager" row-count="2" column-count="1" same-size-horizontally="false" same-size-vertically="false" hgap="10" vgap="10">
     <margin top="10" left="8" bottom="6" right="8"/>
     <constraints>
       <xy x="20" y="20" width="880" height="500"/>
@@ -8,100 +8,76 @@
     <properties/>
     <border type="none"/>
     <children>
-      <grid id="quickActionsGrid" binding="pnlQuickActions" layout-manager="GridLayoutManager" row-count="1" column-count="10" same-size-horizontally="false" same-size-vertically="false" hgap="8" vgap="4">
-        <margin top="6" left="8" bottom="6" right="8"/>
+      <grid id="quickActionsGrid" binding="pnlQuickActions" layout-manager="FlowLayout" hgap="8" vgap="6" flow-align="0">
         <constraints>
-          <grid row="0" column="0" row-span="1" col-span="1" vsize-policy="0" hsize-policy="3" anchor="0" fill="3" indent="0" use-parent-layout="false"/>
+          <grid row="0" column="0" row-span="1" col-span="1" vsize-policy="0" hsize-policy="7" anchor="0" fill="3" indent="0" use-parent-layout="false"/>
         </constraints>
         <properties/>
         <border type="etched" title="Quick Actions &amp; Statement Files"/>
         <children>
           <component id="btnCashInId" class="javax.swing.JButton" binding="btnNavCashIn">
-            <constraints>
-              <grid row="0" column="0" row-span="1" col-span="1" vsize-policy="0" hsize-policy="3" anchor="0" fill="1" indent="0" use-parent-layout="false"/>
-            </constraints>
+            <constraints/>
             <properties>
               <font name="SansSerif" size="12" style="0"/>
               <text value="Cash In"/>
             </properties>
           </component>
           <component id="btnCashOutId" class="javax.swing.JButton" binding="btnNavCashOut">
-            <constraints>
-              <grid row="0" column="1" row-span="1" col-span="1" vsize-policy="0" hsize-policy="3" anchor="0" fill="1" indent="0" use-parent-layout="false"/>
-            </constraints>
+            <constraints/>
             <properties>
               <font name="SansSerif" size="12" style="0"/>
               <text value="Cash Out"/>
             </properties>
           </component>
           <component id="btnSendMoneyId" class="javax.swing.JButton" binding="btnNavSendMoney">
-            <constraints>
-              <grid row="0" column="2" row-span="1" col-span="1" vsize-policy="0" hsize-policy="3" anchor="0" fill="1" indent="0" use-parent-layout="false"/>
-            </constraints>
+            <constraints/>
             <properties>
               <font name="SansSerif" size="12" style="0"/>
               <text value="Send Money"/>
             </properties>
           </component>
           <component id="btnNavPayBillsId" class="javax.swing.JButton" binding="btnNavPayBills">
-            <constraints>
-              <grid row="0" column="3" row-span="1" col-span="1" vsize-policy="0" hsize-policy="3" anchor="0" fill="1" indent="0" use-parent-layout="false"/>
-            </constraints>
+            <constraints/>
             <properties>
               <font name="SansSerif" size="12" style="0"/>
               <text value="Pay Bills"/>
             </properties>
           </component>
           <component id="btnInvestId" class="javax.swing.JButton" binding="btnNavInvest">
-            <constraints>
-              <grid row="0" column="4" row-span="1" col-span="1" vsize-policy="0" hsize-policy="3" anchor="0" fill="1" indent="0" use-parent-layout="false"/>
-            </constraints>
+            <constraints/>
             <properties>
               <font name="SansSerif" size="12" style="0"/>
               <text value="Investments"/>
             </properties>
           </component>
           <component id="btnMerchantQrId" class="javax.swing.JButton" binding="btnNavMerchantQr">
-            <constraints>
-              <grid row="0" column="5" row-span="1" col-span="1" vsize-policy="0" hsize-policy="3" anchor="0" fill="1" indent="0" use-parent-layout="false"/>
-            </constraints>
+            <constraints/>
             <properties>
               <font name="SansSerif" size="12" style="0"/>
               <text value="Merchant QR"/>
             </properties>
           </component>
           <component id="btnPinSettingsId" class="javax.swing.JButton" binding="btnNavPinSettings">
-            <constraints>
-              <grid row="0" column="6" row-span="1" col-span="1" vsize-policy="0" hsize-policy="3" anchor="0" fill="1" indent="0" use-parent-layout="false"/>
-            </constraints>
+            <constraints/>
             <properties>
               <font name="SansSerif" size="12" style="0"/>
               <text value="Set / Change PIN"/>
             </properties>
           </component>
           <component id="btnExportStmtId" class="javax.swing.JButton" binding="btnExportStatement">
-            <constraints>
-              <grid row="0" column="7" row-span="1" col-span="1" vsize-policy="0" hsize-policy="3" anchor="0" fill="1" indent="0" use-parent-layout="false"/>
-            </constraints>
+            <constraints/>
             <properties>
               <font name="SansSerif" size="12" style="0"/>
               <text value="Export Statement"/>
             </properties>
           </component>
           <component id="btnLoadStmtId" class="javax.swing.JButton" binding="btnLoadStatement">
-            <constraints>
-              <grid row="0" column="8" row-span="1" col-span="1" vsize-policy="0" hsize-policy="3" anchor="0" fill="1" indent="0" use-parent-layout="false"/>
-            </constraints>
+            <constraints/>
             <properties>
               <font name="SansSerif" size="12" style="0"/>
               <text value="Load Statement"/>
             </properties>
           </component>
-          <hspacer id="quickSpacer">
-            <constraints>
-              <grid row="0" column="9" row-span="1" col-span="1" vsize-policy="1" hsize-policy="6" anchor="0" fill="1" indent="0" use-parent-layout="false"/>
-            </constraints>
-          </hspacer>
         </children>
       </grid>
       <grid id="recentActivityGrid" binding="pnlRecentActivity" layout-manager="GridLayoutManager" row-count="2" column-count="1" same-size-horizontally="false" same-size-vertically="false" hgap="8" vgap="8">
@@ -112,114 +88,120 @@
         <properties/>
         <border type="etched" title="Recent Activity &amp; History"/>
         <children>
-          <grid id="historyFiltersGrid" binding="pnlHistoryFilters" layout-manager="GridLayoutManager" row-count="1" column-count="11" same-size-horizontally="false" same-size-vertically="false" hgap="6" vgap="0">
-            <margin top="2" left="2" bottom="4" right="2"/>
+          <grid id="historyFiltersGrid" binding="pnlHistoryFilters" layout-manager="FlowLayout" hgap="6" vgap="4" flow-align="0">
             <constraints>
-              <grid row="0" column="0" row-span="1" col-span="1" vsize-policy="0" hsize-policy="3" anchor="0" fill="1" indent="0" use-parent-layout="false"/>
+              <grid row="0" column="0" row-span="1" col-span="1" vsize-policy="0" hsize-policy="7" anchor="0" fill="1" indent="0" use-parent-layout="false"/>
             </constraints>
             <properties/>
             <border type="none"/>
             <children>
-              <component id="lblFilterTypeId" class="javax.swing.JLabel">
-                <constraints>
-                  <grid row="0" column="0" row-span="1" col-span="1" vsize-policy="0" hsize-policy="0" anchor="8" fill="0" indent="0" use-parent-layout="false"/>
-                </constraints>
-                <properties>
-                  <font name="SansSerif" size="12" style="0"/>
-                  <text value="Type:"/>
-                </properties>
-              </component>
-              <component id="cmbFilterTypeId" class="javax.swing.JComboBox" binding="cmbFilterType">
-                <constraints>
-                  <grid row="0" column="1" row-span="1" col-span="1" vsize-policy="0" hsize-policy="3" anchor="8" fill="1" indent="0" use-parent-layout="false">
-                    <preferred-size width="130" height="-1"/>
-                  </grid>
-                </constraints>
+              <grid id="filterTypeGroup" layout-manager="FlowLayout" hgap="4" vgap="0" flow-align="0">
+                <constraints/>
                 <properties/>
-              </component>
-              <component id="lblFilterStatusId" class="javax.swing.JLabel">
-                <constraints>
-                  <grid row="0" column="2" row-span="1" col-span="1" vsize-policy="0" hsize-policy="0" anchor="8" fill="0" indent="0" use-parent-layout="false"/>
-                </constraints>
-                <properties>
-                  <font name="SansSerif" size="12" style="0"/>
-                  <text value="Status:"/>
-                </properties>
-              </component>
-              <component id="cmbFilterStatusId" class="javax.swing.JComboBox" binding="cmbFilterStatus">
-                <constraints>
-                  <grid row="0" column="3" row-span="1" col-span="1" vsize-policy="0" hsize-policy="3" anchor="8" fill="1" indent="0" use-parent-layout="false">
-                    <preferred-size width="110" height="-1"/>
-                  </grid>
-                </constraints>
+                <border type="none"/>
+                <children>
+                  <component id="lblFilterTypeId" class="javax.swing.JLabel">
+                    <constraints/>
+                    <properties>
+                      <font name="SansSerif" size="12" style="0"/>
+                      <text value="Type:"/>
+                    </properties>
+                  </component>
+                  <component id="cmbFilterTypeId" class="javax.swing.JComboBox" binding="cmbFilterType">
+                    <constraints/>
+                    <properties/>
+                  </component>
+                </children>
+              </grid>
+              <grid id="filterStatusGroup" layout-manager="FlowLayout" hgap="4" vgap="0" flow-align="0">
+                <constraints/>
                 <properties/>
-              </component>
-              <component id="lblFilterFromId" class="javax.swing.JLabel">
-                <constraints>
-                  <grid row="0" column="4" row-span="1" col-span="1" vsize-policy="0" hsize-policy="0" anchor="8" fill="0" indent="0" use-parent-layout="false"/>
-                </constraints>
-                <properties>
-                  <font name="SansSerif" size="12" style="0"/>
-                  <text value="From:"/>
-                </properties>
-              </component>
-              <component id="txtFilterFromId" class="javax.swing.JTextField" binding="txtFilterFromDate">
-                <constraints>
-                  <grid row="0" column="5" row-span="1" col-span="1" vsize-policy="0" hsize-policy="3" anchor="8" fill="1" indent="0" use-parent-layout="false">
-                    <preferred-size width="92" height="-1"/>
-                  </grid>
-                </constraints>
-                <properties>
-                  <toolTipText value="Start date (YYYY-MM-DD)"/>
-                </properties>
-              </component>
-              <component id="lblFilterToId" class="javax.swing.JLabel">
-                <constraints>
-                  <grid row="0" column="6" row-span="1" col-span="1" vsize-policy="0" hsize-policy="0" anchor="8" fill="0" indent="0" use-parent-layout="false"/>
-                </constraints>
-                <properties>
-                  <font name="SansSerif" size="12" style="0"/>
-                  <text value="To:"/>
-                </properties>
-              </component>
-              <component id="txtFilterToId" class="javax.swing.JTextField" binding="txtFilterToDate">
-                <constraints>
-                  <grid row="0" column="7" row-span="1" col-span="1" vsize-policy="0" hsize-policy="3" anchor="8" fill="1" indent="0" use-parent-layout="false">
-                    <preferred-size width="92" height="-1"/>
-                  </grid>
-                </constraints>
-                <properties>
-                  <toolTipText value="End date (YYYY-MM-DD)"/>
-                </properties>
-              </component>
-              <component id="btnApplyFiltersId" class="javax.swing.JButton" binding="btnApplyFilters">
-                <constraints>
-                  <grid row="0" column="8" row-span="1" col-span="1" vsize-policy="0" hsize-policy="3" anchor="0" fill="1" indent="0" use-parent-layout="false"/>
-                </constraints>
-                <properties>
-                  <font name="SansSerif" size="12" style="1"/>
-                  <text value="Filter"/>
-                </properties>
-              </component>
-              <component id="btnClearFiltersId" class="javax.swing.JButton" binding="btnClearFilters">
-                <constraints>
-                  <grid row="0" column="9" row-span="1" col-span="1" vsize-policy="0" hsize-policy="3" anchor="0" fill="1" indent="0" use-parent-layout="false"/>
-                </constraints>
-                <properties>
-                  <font name="SansSerif" size="12" style="0"/>
-                  <text value="Reset"/>
-                </properties>
-              </component>
-              <hspacer id="filterSpacer">
-                <constraints>
-                  <grid row="0" column="10" row-span="1" col-span="1" vsize-policy="1" hsize-policy="6" anchor="0" fill="1" indent="0" use-parent-layout="false"/>
-                </constraints>
-              </hspacer>
+                <border type="none"/>
+                <children>
+                  <component id="lblFilterStatusId" class="javax.swing.JLabel">
+                    <constraints/>
+                    <properties>
+                      <font name="SansSerif" size="12" style="0"/>
+                      <text value="Status:"/>
+                    </properties>
+                  </component>
+                  <component id="cmbFilterStatusId" class="javax.swing.JComboBox" binding="cmbFilterStatus">
+                    <constraints/>
+                    <properties/>
+                  </component>
+                </children>
+              </grid>
+              <grid id="filterFromGroup" layout-manager="FlowLayout" hgap="4" vgap="0" flow-align="0">
+                <constraints/>
+                <properties/>
+                <border type="none"/>
+                <children>
+                  <component id="lblFilterFromId" class="javax.swing.JLabel">
+                    <constraints/>
+                    <properties>
+                      <font name="SansSerif" size="12" style="0"/>
+                      <text value="From:"/>
+                    </properties>
+                  </component>
+                  <component id="txtFilterFromId" class="javax.swing.JTextField" binding="txtFilterFromDate">
+                    <constraints/>
+                    <properties>
+                      <columns value="9"/>
+                      <toolTipText value="Start date (YYYY-MM-DD)"/>
+                    </properties>
+                  </component>
+                </children>
+              </grid>
+              <grid id="filterToGroup" layout-manager="FlowLayout" hgap="4" vgap="0" flow-align="0">
+                <constraints/>
+                <properties/>
+                <border type="none"/>
+                <children>
+                  <component id="lblFilterToId" class="javax.swing.JLabel">
+                    <constraints/>
+                    <properties>
+                      <font name="SansSerif" size="12" style="0"/>
+                      <text value="To:"/>
+                    </properties>
+                  </component>
+                  <component id="txtFilterToId" class="javax.swing.JTextField" binding="txtFilterToDate">
+                    <constraints/>
+                    <properties>
+                      <columns value="9"/>
+                      <toolTipText value="End date (YYYY-MM-DD)"/>
+                    </properties>
+                  </component>
+                </children>
+              </grid>
+              <grid id="filterButtonsGroup" layout-manager="FlowLayout" hgap="6" vgap="0" flow-align="0">
+                <constraints/>
+                <properties/>
+                <border type="none"/>
+                <children>
+                  <component id="btnApplyFiltersId" class="javax.swing.JButton" binding="btnApplyFilters">
+                    <constraints/>
+                    <properties>
+                      <font name="SansSerif" size="12" style="1"/>
+                      <text value="Filter"/>
+                    </properties>
+                  </component>
+                  <component id="btnClearFiltersId" class="javax.swing.JButton" binding="btnClearFilters">
+                    <constraints/>
+                    <properties>
+                      <font name="SansSerif" size="12" style="0"/>
+                      <text value="Reset"/>
+                    </properties>
+                  </component>
+                </children>
+              </grid>
             </children>
           </grid>
           <grid id="activityCardsId" binding="activityCardPanel" layout-manager="CardLayout" hgap="0" vgap="0">
             <constraints>
-              <grid row="1" column="0" row-span="1" col-span="1" vsize-policy="7" hsize-policy="7" anchor="0" fill="3" indent="0" use-parent-layout="false"/>
+              <grid row="1" column="0" row-span="1" col-span="1" vsize-policy="7" hsize-policy="7" anchor="0" fill="3" indent="0" use-parent-layout="false">
+                <minimum-size width="200" height="150"/>
+                <preferred-size width="420" height="190"/>
+              </grid>
             </constraints>
             <properties/>
             <border type="none"/>
@@ -321,20 +303,20 @@
                       </component>
                     </children>
                   </scrollpane>
-                  <grid id="tableActionsGrid" binding="pnlTableActions" layout-manager="BorderLayout" hgap="8" vgap="0">
+                  <grid id="tableActionsGrid" binding="pnlTableActions" layout-manager="BorderLayout" hgap="6" vgap="4">
                     <constraints border-constraint="South"/>
                     <properties/>
                     <border type="none"/>
                     <children>
                       <component id="lblFeedbackId" class="javax.swing.JLabel" binding="lblActivityFeedback">
-                        <constraints border-constraint="West"/>
+                        <constraints border-constraint="North"/>
                         <properties>
                           <font name="SansSerif" size="12" style="0"/>
                           <text value=" "/>
                         </properties>
                       </component>
-                      <grid id="tableActionButtonsGrid" binding="pnlTableActionButtons" layout-manager="FlowLayout" hgap="8" vgap="0" flow-align="2">
-                        <constraints border-constraint="East"/>
+                      <grid id="tableActionButtonsGrid" binding="pnlTableActionButtons" layout-manager="FlowLayout" hgap="8" vgap="4" flow-align="2">
+                        <constraints border-constraint="Center"/>
                         <properties/>
                         <border type="none"/>
                         <children>

@@ -13,6 +13,7 @@ import com.otog.service.WalletService;
 import com.otog.ui.RegisterDialog;
 import com.otog.util.MoneyUtil;
 import com.otog.util.OtogConfig;
+import com.otog.util.SwingUiSupport;
 import com.otog.util.UiTheme;
 
 import javax.swing.*;
@@ -109,6 +110,15 @@ public class UserLogin extends JFrame {
         if (passwordFieldPasswordInput != null) {
             passwordFieldPasswordInput.setEchoChar('*');
         }
+        UiTheme.styleInputField(textFieldUsername);
+        UiTheme.styleInputField(passwordFieldPasswordInput);
+        UiTheme.styleInputField(textField2FA);
+        UiTheme.stylePrimaryButton(btnLogin);
+        UiTheme.styleSecondaryButton(btnRegister);
+        UiTheme.stylePrimaryButton(btnVerify2FA);
+        UiTheme.styleSecondaryButton(btnResendOtp);
+        UiTheme.styleSecondaryButton(btnBackToLogin);
+        SwingUiSupport.makeShrinkable(textFieldUsername, passwordFieldPasswordInput, textField2FA, twoFactorHeaderLabel);
 
         pnlPassword.setVisible(true);
         pnl2FA.setVisible(false);
@@ -398,9 +408,14 @@ public class UserLogin extends JFrame {
             UserLogin fresh = new UserLogin(sharedAuthService, sharedWalletService);
             frame.setContentPane(fresh.getMainPanel());
             frame.setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
-            frame.setSize(config.getUiDimension("ui.login.width", "ui.login.height", 750, 420));
+            frame.setResizable(true);
+            SwingUiSupport.applyFlexibleWindowBounds(
+                    frame,
+                    config.getUiDimension("ui.login.width", "ui.login.height", 750, 420),
+                    new Dimension(520, 340),
+                    true
+            );
             frame.setLocationRelativeTo(null);
-            frame.setResizable(false);
             frame.setVisible(true);
         });
         this.dashboardOpened = true;
@@ -669,7 +684,7 @@ public class UserLogin extends JFrame {
         textFieldUsername = new JTextField();
         pnlPassword.add(textFieldUsername, new GridConstraints(1, 1, 1, 1,
                 GridConstraints.ANCHOR_WEST, GridConstraints.FILL_HORIZONTAL,
-                GridConstraints.SIZEPOLICY_WANT_GROW,
+                GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_CAN_GROW | GridConstraints.SIZEPOLICY_WANT_GROW,
                 GridConstraints.SIZEPOLICY_FIXED,
                 null, new Dimension(260, -1), null, 0, false));
 
@@ -683,7 +698,7 @@ public class UserLogin extends JFrame {
         passwordFieldPasswordInput.setEchoChar('*');
         pnlPassword.add(passwordFieldPasswordInput, new GridConstraints(2, 1, 1, 1,
                 GridConstraints.ANCHOR_WEST, GridConstraints.FILL_HORIZONTAL,
-                GridConstraints.SIZEPOLICY_WANT_GROW,
+                GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_CAN_GROW | GridConstraints.SIZEPOLICY_WANT_GROW,
                 GridConstraints.SIZEPOLICY_FIXED,
                 null, new Dimension(260, -1), null, 0, false));
 
@@ -711,10 +726,11 @@ public class UserLogin extends JFrame {
                 GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_CAN_GROW,
                 null, null, null, 0, false));
 
-        twoFactorHeaderLabel = new JLabel("Login Successful! Complete Two-Factor Authentication (Simulated SMS):");
+        twoFactorHeaderLabel = new JLabel("Login Successful! Complete Two-Factor Authentication (Simulated SMS):", SwingConstants.CENTER);
         pnl2FA.add(twoFactorHeaderLabel, new GridConstraints(0, 0, 1, 2,
-                GridConstraints.ANCHOR_CENTER, GridConstraints.FILL_NONE,
-                GridConstraints.SIZEPOLICY_FIXED, GridConstraints.SIZEPOLICY_FIXED,
+                GridConstraints.ANCHOR_CENTER, GridConstraints.FILL_HORIZONTAL,
+                GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_CAN_GROW | GridConstraints.SIZEPOLICY_WANT_GROW,
+                GridConstraints.SIZEPOLICY_FIXED,
                 null, null, null, 0, false));
 
         JLabel twoFactorCodeLabel = new JLabel("2FA Code:");
@@ -726,7 +742,7 @@ public class UserLogin extends JFrame {
         textField2FA = new JTextField();
         pnl2FA.add(textField2FA, new GridConstraints(1, 1, 1, 1,
                 GridConstraints.ANCHOR_WEST, GridConstraints.FILL_HORIZONTAL,
-                GridConstraints.SIZEPOLICY_WANT_GROW,
+                GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_CAN_GROW | GridConstraints.SIZEPOLICY_WANT_GROW,
                 GridConstraints.SIZEPOLICY_FIXED,
                 null, null, null, 0, false));
 
@@ -813,9 +829,14 @@ public class UserLogin extends JFrame {
             JFrame frame = new JFrame("User Login - " + config.getAppTitle());
             frame.setContentPane(app.pnlMain);
             frame.setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
-            frame.setSize(config.getUiDimension("ui.login.width", "ui.login.height", 750, 420));
+            frame.setResizable(true);
+            SwingUiSupport.applyFlexibleWindowBounds(
+                    frame,
+                    config.getUiDimension("ui.login.width", "ui.login.height", 750, 420),
+                    new Dimension(520, 340),
+                    true
+            );
             frame.setLocationRelativeTo(null);
-            frame.setResizable(false);
             frame.setVisible(true);
         });
     }

@@ -2,10 +2,10 @@ package com.otog.ui;
 
 import com.intellij.uiDesigner.core.GridConstraints;
 import com.intellij.uiDesigner.core.GridLayoutManager;
-import com.intellij.uiDesigner.core.Spacer;
 import com.otog.model.User;
 import com.otog.service.AuthService;
 import com.otog.util.OtogConfig;
+import com.otog.util.SwingUiSupport;
 import com.otog.util.UiTheme;
 
 import javax.swing.*;
@@ -41,10 +41,27 @@ public class RegisterDialog extends JDialog {
         if (pnlForm != null) {
             pnlForm.setBorder(UiTheme.titledBorder("Account Details"));
         }
+        UiTheme.styleInputField(txtName);
+        UiTheme.styleInputField(txtMobile);
+        UiTheme.styleInputField(txtEmail);
+        UiTheme.styleInputField(txtPassword);
+        UiTheme.styleInputField(txtConfirmPassword);
+        UiTheme.styleSecondaryButton(btnCancel);
+        UiTheme.stylePrimaryButton(btnSubmit);
+        if (pnlButtons != null) {
+            SwingUiSupport.applyWrapLayout(pnlButtons, FlowLayout.RIGHT, 8, 4);
+        }
+        SwingUiSupport.makeShrinkable(txtName, txtMobile, txtEmail, txtPassword, txtConfirmPassword);
+
         setContentPane(pnlRoot);
-        setSize(OtogConfig.getInstance().getUiDimension("ui.register.width", "ui.register.height", 480, 350));
+        setResizable(true);
+        SwingUiSupport.applyFlexibleWindowBounds(
+                this,
+                OtogConfig.getInstance().getUiDimension("ui.register.width", "ui.register.height", 480, 350),
+                new Dimension(440, 320),
+                true
+        );
         setLocationRelativeTo(getParent());
-        setResizable(false);
 
         getRootPane().setDefaultButton(btnSubmit);
         getRootPane().registerKeyboardAction(
@@ -185,8 +202,9 @@ public class RegisterDialog extends JDialog {
         JLabel regHeader = new JLabel("Create Your " + config.getAppTitle() + " Account");
         regHeader.setFont(UiTheme.font(UiTheme.FontRole.TITLE));
         pnlRoot.add(regHeader, new GridConstraints(0, 0, 1, 1,
-                GridConstraints.ANCHOR_WEST, GridConstraints.FILL_NONE,
-                GridConstraints.SIZEPOLICY_FIXED, GridConstraints.SIZEPOLICY_FIXED,
+                GridConstraints.ANCHOR_WEST, GridConstraints.FILL_HORIZONTAL,
+                GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_CAN_GROW | GridConstraints.SIZEPOLICY_WANT_GROW,
+                GridConstraints.SIZEPOLICY_FIXED,
                 null, null, null, 0, false));
 
         pnlForm = new JPanel();
@@ -194,7 +212,7 @@ public class RegisterDialog extends JDialog {
         pnlForm.setBorder(UiTheme.titledBorder("Account Details"));
         pnlRoot.add(pnlForm, new GridConstraints(1, 0, 1, 1,
                 GridConstraints.ANCHOR_CENTER, GridConstraints.FILL_BOTH,
-                GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_CAN_GROW,
+                GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_CAN_GROW | GridConstraints.SIZEPOLICY_WANT_GROW,
                 GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_CAN_GROW,
                 null, null, null, 0, false));
 
@@ -205,7 +223,8 @@ public class RegisterDialog extends JDialog {
         txtName = new JTextField();
         pnlForm.add(txtName, new GridConstraints(0, 1, 1, 1,
                 GridConstraints.ANCHOR_WEST, GridConstraints.FILL_HORIZONTAL,
-                GridConstraints.SIZEPOLICY_WANT_GROW, GridConstraints.SIZEPOLICY_FIXED,
+                GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_CAN_GROW | GridConstraints.SIZEPOLICY_WANT_GROW,
+                GridConstraints.SIZEPOLICY_FIXED,
                 null, new Dimension(200, -1), null, 0, false));
 
         pnlForm.add(new JLabel("Mobile Number (e.g. 09171234567):"), new GridConstraints(1, 0, 1, 1,
@@ -215,7 +234,8 @@ public class RegisterDialog extends JDialog {
         txtMobile = new JTextField();
         pnlForm.add(txtMobile, new GridConstraints(1, 1, 1, 1,
                 GridConstraints.ANCHOR_WEST, GridConstraints.FILL_HORIZONTAL,
-                GridConstraints.SIZEPOLICY_WANT_GROW, GridConstraints.SIZEPOLICY_FIXED,
+                GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_CAN_GROW | GridConstraints.SIZEPOLICY_WANT_GROW,
+                GridConstraints.SIZEPOLICY_FIXED,
                 null, new Dimension(200, -1), null, 0, false));
 
         pnlForm.add(new JLabel("Email Address (Optional):"), new GridConstraints(2, 0, 1, 1,
@@ -225,7 +245,8 @@ public class RegisterDialog extends JDialog {
         txtEmail = new JTextField();
         pnlForm.add(txtEmail, new GridConstraints(2, 1, 1, 1,
                 GridConstraints.ANCHOR_WEST, GridConstraints.FILL_HORIZONTAL,
-                GridConstraints.SIZEPOLICY_WANT_GROW, GridConstraints.SIZEPOLICY_FIXED,
+                GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_CAN_GROW | GridConstraints.SIZEPOLICY_WANT_GROW,
+                GridConstraints.SIZEPOLICY_FIXED,
                 null, new Dimension(200, -1), null, 0, false));
 
         pnlForm.add(new JLabel("Password (min " + config.getMinPasswordLength() + " chars):"), new GridConstraints(3, 0, 1, 1,
@@ -235,7 +256,8 @@ public class RegisterDialog extends JDialog {
         txtPassword = new JPasswordField();
         pnlForm.add(txtPassword, new GridConstraints(3, 1, 1, 1,
                 GridConstraints.ANCHOR_WEST, GridConstraints.FILL_HORIZONTAL,
-                GridConstraints.SIZEPOLICY_WANT_GROW, GridConstraints.SIZEPOLICY_FIXED,
+                GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_CAN_GROW | GridConstraints.SIZEPOLICY_WANT_GROW,
+                GridConstraints.SIZEPOLICY_FIXED,
                 null, new Dimension(200, -1), null, 0, false));
 
         pnlForm.add(new JLabel("Confirm Password:"), new GridConstraints(4, 0, 1, 1,
@@ -245,35 +267,23 @@ public class RegisterDialog extends JDialog {
         txtConfirmPassword = new JPasswordField();
         pnlForm.add(txtConfirmPassword, new GridConstraints(4, 1, 1, 1,
                 GridConstraints.ANCHOR_WEST, GridConstraints.FILL_HORIZONTAL,
-                GridConstraints.SIZEPOLICY_WANT_GROW, GridConstraints.SIZEPOLICY_FIXED,
+                GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_CAN_GROW | GridConstraints.SIZEPOLICY_WANT_GROW,
+                GridConstraints.SIZEPOLICY_FIXED,
                 null, new Dimension(200, -1), null, 0, false));
 
         pnlButtons = new JPanel();
-        pnlButtons.setLayout(new GridLayoutManager(1, 3, new Insets(4, 0, 0, 0), 10, 0));
+        pnlButtons.setLayout(new FlowLayout(FlowLayout.RIGHT, 8, 4));
         pnlRoot.add(pnlButtons, new GridConstraints(2, 0, 1, 1,
                 GridConstraints.ANCHOR_CENTER, GridConstraints.FILL_BOTH,
-                GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_CAN_GROW,
+                GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_CAN_GROW | GridConstraints.SIZEPOLICY_WANT_GROW,
                 GridConstraints.SIZEPOLICY_FIXED,
-                null, null, null, 0, false));
-
-        pnlButtons.add(new Spacer(), new GridConstraints(0, 0, 1, 1,
-                GridConstraints.ANCHOR_CENTER, GridConstraints.FILL_HORIZONTAL,
-                GridConstraints.SIZEPOLICY_WANT_GROW, 1,
                 null, null, null, 0, false));
 
         btnCancel = new JButton("Back to Login");
-        pnlButtons.add(btnCancel, new GridConstraints(0, 1, 1, 1,
-                GridConstraints.ANCHOR_CENTER, GridConstraints.FILL_HORIZONTAL,
-                GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_CAN_GROW,
-                GridConstraints.SIZEPOLICY_FIXED,
-                null, null, null, 0, false));
+        pnlButtons.add(btnCancel);
 
         btnSubmit = new JButton("Register");
-        pnlButtons.add(btnSubmit, new GridConstraints(0, 2, 1, 1,
-                GridConstraints.ANCHOR_CENTER, GridConstraints.FILL_HORIZONTAL,
-                GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_CAN_GROW,
-                GridConstraints.SIZEPOLICY_FIXED,
-                null, null, null, 0, false));
+        pnlButtons.add(btnSubmit);
     }
 
     public JComponent $$$getRootComponent$$$() {

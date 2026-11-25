@@ -3,14 +3,14 @@
   <grid id="regRoot" binding="pnlRoot" layout-manager="GridLayoutManager" row-count="3" column-count="1" same-size-horizontally="false" same-size-vertically="false" hgap="10" vgap="10">
     <margin top="16" left="20" bottom="14" right="20"/>
     <constraints>
-      <xy x="20" y="20" width="460" height="340"/>
+      <xy x="20" y="20" width="480" height="360"/>
     </constraints>
     <properties/>
     <border type="none"/>
     <children>
       <component id="regHeader" class="javax.swing.JLabel">
         <constraints>
-          <grid row="0" column="0" row-span="1" col-span="1" vsize-policy="0" hsize-policy="0" anchor="8" fill="0" indent="0" use-parent-layout="false"/>
+          <grid row="0" column="0" row-span="1" col-span="1" vsize-policy="0" hsize-policy="7" anchor="8" fill="1" indent="0" use-parent-layout="false"/>
         </constraints>
         <properties>
           <font name="SansSerif" size="14" style="1"/>
@@ -20,7 +20,7 @@
       <grid id="regForm" binding="pnlForm" layout-manager="GridLayoutManager" row-count="5" column-count="2" same-size-horizontally="false" same-size-vertically="false" hgap="10" vgap="10">
         <margin top="10" left="12" bottom="10" right="12"/>
         <constraints>
-          <grid row="1" column="0" row-span="1" col-span="1" vsize-policy="3" hsize-policy="3" anchor="0" fill="3" indent="0" use-parent-layout="false"/>
+          <grid row="1" column="0" row-span="1" col-span="1" vsize-policy="3" hsize-policy="7" anchor="0" fill="3" indent="0" use-parent-layout="false"/>
         </constraints>
         <properties/>
         <border type="etched" title="Account Details"/>
@@ -35,7 +35,7 @@
           </component>
           <component id="txtNameField" class="javax.swing.JTextField" binding="txtName">
             <constraints>
-              <grid row="0" column="1" row-span="1" col-span="1" vsize-policy="0" hsize-policy="6" anchor="8" fill="1" indent="0" use-parent-layout="false">
+              <grid row="0" column="1" row-span="1" col-span="1" vsize-policy="0" hsize-policy="7" anchor="8" fill="1" indent="0" use-parent-layout="false">
                 <preferred-size width="200" height="-1"/>
               </grid>
             </constraints>
@@ -51,7 +51,7 @@
           </component>
           <component id="txtMobileField" class="javax.swing.JTextField" binding="txtMobile">
             <constraints>
-              <grid row="1" column="1" row-span="1" col-span="1" vsize-policy="0" hsize-policy="6" anchor="8" fill="1" indent="0" use-parent-layout="false">
+              <grid row="1" column="1" row-span="1" col-span="1" vsize-policy="0" hsize-policy="7" anchor="8" fill="1" indent="0" use-parent-layout="false">
                 <preferred-size width="200" height="-1"/>
               </grid>
             </constraints>
@@ -67,7 +67,7 @@
           </component>
           <component id="txtEmailField" class="javax.swing.JTextField" binding="txtEmail">
             <constraints>
-              <grid row="2" column="1" row-span="1" col-span="1" vsize-policy="0" hsize-policy="6" anchor="8" fill="1" indent="0" use-parent-layout="false">
+              <grid row="2" column="1" row-span="1" col-span="1" vsize-policy="0" hsize-policy="7" anchor="8" fill="1" indent="0" use-parent-layout="false">
                 <preferred-size width="200" height="-1"/>
               </grid>
             </constraints>
@@ -83,7 +83,7 @@
           </component>
           <component id="txtPasswordField" class="javax.swing.JPasswordField" binding="txtPassword">
             <constraints>
-              <grid row="3" column="1" row-span="1" col-span="1" vsize-policy="0" hsize-policy="6" anchor="8" fill="1" indent="0" use-parent-layout="false">
+              <grid row="3" column="1" row-span="1" col-span="1" vsize-policy="0" hsize-policy="7" anchor="8" fill="1" indent="0" use-parent-layout="false">
                 <preferred-size width="200" height="-1"/>
               </grid>
             </constraints>
@@ -99,7 +99,7 @@
           </component>
           <component id="txtConfirmPasswordField" class="javax.swing.JPasswordField" binding="txtConfirmPassword">
             <constraints>
-              <grid row="4" column="1" row-span="1" col-span="1" vsize-policy="0" hsize-policy="6" anchor="8" fill="1" indent="0" use-parent-layout="false">
+              <grid row="4" column="1" row-span="1" col-span="1" vsize-policy="0" hsize-policy="7" anchor="8" fill="1" indent="0" use-parent-layout="false">
                 <preferred-size width="200" height="-1"/>
               </grid>
             </constraints>
@@ -107,31 +107,21 @@
           </component>
         </children>
       </grid>
-      <grid id="regButtons" binding="pnlButtons" layout-manager="GridLayoutManager" row-count="1" column-count="3" same-size-horizontally="false" same-size-vertically="false" hgap="10" vgap="0">
-        <margin top="4" left="0" bottom="0" right="0"/>
+      <grid id="regButtons" binding="pnlButtons" layout-manager="FlowLayout" hgap="8" vgap="4" flow-align="2">
         <constraints>
-          <grid row="2" column="0" row-span="1" col-span="1" vsize-policy="0" hsize-policy="3" anchor="0" fill="3" indent="0" use-parent-layout="false"/>
+          <grid row="2" column="0" row-span="1" col-span="1" vsize-policy="0" hsize-policy="7" anchor="0" fill="3" indent="0" use-parent-layout="false"/>
         </constraints>
         <properties/>
         <border type="none"/>
         <children>
-          <hspacer id="regSpacer">
-            <constraints>
-              <grid row="0" column="0" row-span="1" col-span="1" vsize-policy="1" hsize-policy="6" anchor="0" fill="1" indent="0" use-parent-layout="false"/>
-            </constraints>
-          </hspacer>
           <component id="btnCancelBtn" class="javax.swing.JButton" binding="btnCancel">
-            <constraints>
-              <grid row="0" column="1" row-span="1" col-span="1" vsize-policy="0" hsize-policy="3" anchor="0" fill="1" indent="0" use-parent-layout="false"/>
-            </constraints>
+            <constraints/>
             <properties>
               <text value="Back to Login"/>
             </properties>
           </component>
           <component id="btnSubmitBtn" class="javax.swing.JButton" binding="btnSubmit">
-            <constraints>
-              <grid row="0" column="2" row-span="1" col-span="1" vsize-policy="0" hsize-policy="3" anchor="0" fill="1" indent="0" use-parent-layout="false"/>
-            </constraints>
+            <constraints/>
             <properties>
               <text value="Register"/>
             </properties>

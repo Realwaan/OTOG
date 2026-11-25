@@ -29,6 +29,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
 import javax.swing.*;
+import java.awt.*;
 import javax.xml.parsers.DocumentBuilderFactory;
 import org.w3c.dom.Document;
 import org.w3c.dom.Element;
@@ -575,6 +576,189 @@ public class SwingFormsAndFileHandlingTest {
         } finally {
             notifDialog.dispose();
         }
+    }
+
+    @Test
+    void testResponsiveLayoutsNeverClipButtonsOrInputsAcrossWindowSizes() throws Exception {
+        User admin = walletService.getUserRepository().findById("USR-ADMIN-01").orElseThrow();
+        Wallet adminWallet = walletService.getWalletByUserId(admin.getUserId());
+        walletService.cashIn("REQ-UI-LAYOUT-01", adminWallet.getWalletId(), null, new BigDecimal("250.00"), "Layout check");
+        SessionManager.getInstance().login(admin, walletService.getWalletByUserId(admin.getUserId()));
+
+        activeDashboard = new Main(walletService, authService, null, walletService);
+        activeDashboard.getInitialLoadFuture().get(5, TimeUnit.SECONDS);
+
+        Dimension[] testSizes = new Dimension[]{
+                new Dimension(1020, 680),
+                new Dimension(940, 640),
+                new Dimension(720, 520)
+        };
+
+        SwingUtilities.invokeAndWait(activeDashboard::addNotify);
+        for (Dimension size : testSizes) {
+            SwingUtilities.invokeAndWait(() -> {
+                activeDashboard.setSize(size);
+                activeDashboard.revalidate();
+                activeDashboard.validate();
+            });
+            // Flush queued WrapLayout revalidations
+            SwingUtilities.invokeAndWait(activeDashboard::validate);
+            SwingUtilities.invokeAndWait(activeDashboard::validate);
+
+            SwingUtilities.invokeAndWait(() -> {
+                Container contentPane = activeDashboard.getContentPane();
+                int viewportW = contentPane.getWidth();
+                int viewportH = contentPane.getHeight();
+                assertTrue(viewportW > 0 && viewportH > 0, "Content pane must have positive dimensions");
+
+                // All 5 header buttons (including Logout) must fit fully inside header and window bounds
+                Component headerPanel = activeDashboard.getRootPanel().getComponent(0);
+                assertAllVisibleControlsFitHorizontally(headerPanel, contentPane, "Main header @" + size.width + "x" + size.height);
+                for (JButton headerBtn : List.of(
+                        activeDashboard.getBackButton(),
+                        activeDashboard.getRefreshButton(),
+                        activeDashboard.getNotificationsButton(),
+                        activeDashboard.getPinSettingsButton()
+                )) {
+                    assertVisibleWithinContainerWidth(headerBtn, contentPane, "Main header @" + size.width + "x" + size.height);
+                }
+
+                // Every tab must fit buttons & inputs horizontally without clipping
+                JTabbedPane tabs = activeDashboard.getTabs();
+                for (int i = 0; i < tabs.getTabCount(); i++) {
+                    tabs.setSelectedIndex(i);
+                    activeDashboard.validate();
+                }
+            });
+
+            // Second pass after tab switching settles WrapLayout
+            for (int tabIdx = 0; tabIdx < activeDashboard.getTabs().getTabCount(); tabIdx++) {
+                final int idx = tabIdx;
+                SwingUtilities.invokeAndWait(() -> {
+                    activeDashboard.getTabs().setSelectedIndex(idx);
+                    activeDashboard.validate();
+                });
+                SwingUtilities.invokeAndWait(activeDashboard::validate);
+                SwingUtilities.invokeAndWait(() -> {
+                    Container contentPane = activeDashboard.getContentPane();
+                    Component tabComp = activeDashboard.getTabs().getComponentAt(idx);
+                    String tabTitle = activeDashboard.getTabs().getTitleAt(idx);
+                    assertAllVisibleControlsFitHorizontally(
+                            tabComp, contentPane, tabTitle + " @" + size.width + "x" + size.height);
+                    if (tabComp instanceof MerchantQrPanel qrPanel && qrPanel.getTabs().getTabCount() > 1) {
+                        qrPanel.getTabs().setSelectedIndex(1);
+                        activeDashboard.validate();
+                        assertAllVisibleControlsFitHorizontally(
+                                tabComp, contentPane, tabTitle + " (Merchant Subtab) @" + size.width + "x" + size.height);
+                        qrPanel.getTabs().setSelectedIndex(0);
+                    }
+                });
+            }
+        }
+
+        // Verify dialogs are resizable and do not clip their action buttons
+        SwingUtilities.invokeAndWait(() -> {
+            RegisterDialog reg = new RegisterDialog(null, authService);
+            try {
+                assertTrue(reg.isResizable(), "RegisterDialog should be resizable");
+                reg.getContentPane().setSize(reg.getSize());
+                layoutRecursively(reg.getContentPane());
+                assertVisibleWithinContainerWidth(reg.getCancelButton(), reg.getContentPane(), "RegisterDialog");
+                assertVisibleWithinContainerWidth(reg.getSubmitButton(), reg.getContentPane(), "RegisterDialog");
+            } finally {
+                reg.dispose();
+            }
+
+            PinSettingsDialog pin = new PinSettingsDialog(null, authService, admin.getUserId(), true, null, null, null);
+            try {
+                assertTrue(pin.isResizable(), "PinSettingsDialog should be resizable");
+                pin.getContentPane().setSize(pin.getSize());
+                layoutRecursively(pin.getContentPane());
+                assertVisibleWithinContainerWidth(pin.getCancelButton(), pin.getContentPane(), "PinSettingsDialog");
+                assertVisibleWithinContainerWidth(pin.getSavePinButton(), pin.getContentPane(), "PinSettingsDialog");
+            } finally {
+                pin.dispose();
+            }
+
+            NotificationInboxDialog notif = new NotificationInboxDialog(null, null, null, null, null);
+            try {
+                assertTrue(notif.isResizable(), "NotificationInboxDialog should be resizable");
+                Dimension compact = new Dimension(520, 400);
+                notif.setSize(compact);
+                notif.getContentPane().setSize(compact);
+                layoutRecursively(notif.getContentPane());
+                layoutRecursively(notif.getContentPane());
+                assertAllVisibleControlsFitHorizontally(notif.getContentPane(), notif.getContentPane(), "NotificationInboxDialog @520x400");
+            } finally {
+                notif.dispose();
+            }
+        });
+    }
+
+    private static void layoutRecursively(Component comp) {
+        if (comp instanceof Container container) {
+            container.doLayout();
+            for (Component child : container.getComponents()) {
+                if (child.isVisible()) {
+                    layoutRecursively(child);
+                }
+            }
+            container.doLayout();
+        }
+    }
+
+    private static void assertAllVisibleControlsFitHorizontally(Component root, Container boundsRoot, String context) {
+        if (root == null || !root.isVisible()) {
+            return;
+        }
+        if (root instanceof JButton || root instanceof JTextField || root instanceof JComboBox<?>) {
+            assertVisibleWithinContainerWidth(root, boundsRoot, context);
+            return;
+        }
+        if (root instanceof Container container) {
+            for (Component child : container.getComponents()) {
+                if (!child.isVisible()) {
+                    continue;
+                }
+                if (root instanceof JTabbedPane tp && child != tp.getSelectedComponent()) {
+                    continue;
+                }
+                assertAllVisibleControlsFitHorizontally(child, boundsRoot, context);
+            }
+        }
+    }
+
+    private static void assertVisibleWithinContainerWidth(Component comp, Container boundsRoot, String context) {
+        if (comp == null || !comp.isVisible()) {
+            return;
+        }
+        assertTrue(comp.getWidth() > 0 && comp.getHeight() > 0,
+                context + ": component has zero size: " + describe(comp));
+        Point pt = SwingUtilities.convertPoint(comp.getParent(), comp.getX(), comp.getY(), boundsRoot);
+        int rightEdge = pt.x + comp.getWidth();
+        int maxWidth = boundsRoot.getWidth();
+        assertTrue(pt.x >= -1, context + ": component clipped on left (" + pt.x + "): " + describe(comp));
+        assertTrue(rightEdge <= maxWidth + 2,
+                context + ": component clipped on right (" + rightEdge + " > " + maxWidth + "): " + describe(comp));
+        if (comp.getParent() != null) {
+            int parentH = comp.getParent().getHeight();
+            int bottomEdge = comp.getY() + comp.getHeight();
+            assertTrue(bottomEdge <= parentH + 2,
+                    context + ": component clipped vertically inside parent (" + bottomEdge + " > " + parentH + "): " + describe(comp));
+        }
+        if (SwingUtilities.getAncestorOfClass(JScrollPane.class, comp) == null) {
+            int bottomInWindow = pt.y + comp.getHeight();
+            int maxHeight = boundsRoot.getHeight();
+            assertTrue(bottomInWindow <= maxHeight + 2,
+                    context + ": non-scrollable component clipped at bottom (" + bottomInWindow + " > " + maxHeight + "): " + describe(comp));
+        }
+    }
+
+    private static String describe(Component comp) {
+        if (comp instanceof AbstractButton btn) {
+            return comp.getClass().getSimpleName() + "['" + btn.getText() + "']";
+        }
+        return comp.getClass().getSimpleName() + "[" + comp.getWidth() + "x" + comp.getHeight() + "]";
     }
 
     private static void setField(Object target, String fieldName, Object value) throws Exception {

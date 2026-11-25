@@ -89,7 +89,7 @@ public class CashInOutPanel extends JPanel {
             $$$setupUI$$$();
         }
         ensureComponentsInitialized(initialProviderMode);
-        add(pnlRoot, BorderLayout.CENTER);
+        add(SwingUiSupport.createResponsiveScrollPane(pnlRoot), BorderLayout.CENTER);
         initInteractions();
     }
 
@@ -149,9 +149,15 @@ public class CashInOutPanel extends JPanel {
         }
         UiTheme.stylePrimaryButton(btnSubmitCashOp);
         UiTheme.styleSecondaryButton(btnCashBackToOverview);
+        if (pnlActions != null) {
+            SwingUiSupport.applyWrapLayout(pnlActions, FlowLayout.LEFT, 8, 4);
+        }
         if (lblCashFeedback != null) {
             lblCashFeedback.setFont(UiTheme.font(UiTheme.FontRole.LABEL));
         }
+        SwingUiSupport.makeShrinkable(
+                cmbCashOperation, cmbPaymentMethod, cmbCashChannel, cmbProviderMode,
+                txtCashAmount, txtCashNote, txtCashPin, lblCashFeedback);
     }
 
     public void setOnBackToOverview(Runnable onBackToOverview) {
@@ -629,15 +635,15 @@ public class CashInOutPanel extends JPanel {
 
     private void $$$setupUI$$$() {
         pnlRoot = new JPanel();
-        pnlRoot.setLayout(new GridLayoutManager(2, 1, new Insets(16, 16, 16, 16), 10, 10));
+        pnlRoot.setLayout(new GridLayoutManager(2, 1, new Insets(12, 14, 12, 14), 10, 8));
 
         OtogConfig config = OtogConfig.getInstance();
         pnlForm = new JPanel();
-        pnlForm.setLayout(new GridLayoutManager(9, 2, new Insets(12, 14, 12, 14), 10, 10));
+        pnlForm.setLayout(new GridLayoutManager(9, 2, new Insets(10, 14, 10, 14), 10, 8));
         pnlForm.setBorder(UiTheme.titledBorder("Cash In / Cash Out via Linked Bank or Channel"));
         pnlRoot.add(pnlForm, new GridConstraints(0, 0, 1, 1,
                 GridConstraints.ANCHOR_CENTER, GridConstraints.FILL_BOTH,
-                GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_CAN_GROW,
+                GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_CAN_GROW | GridConstraints.SIZEPOLICY_WANT_GROW,
                 GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_CAN_GROW,
                 null, null, null, 0, false));
 
@@ -659,36 +665,23 @@ public class CashInOutPanel extends JPanel {
         addRow(pnlForm, 6, "Transaction PIN (Cash Out):", txtCashPin);
 
         pnlActions = new JPanel();
-        pnlActions.setLayout(new GridLayoutManager(1, 3, new Insets(4, 0, 0, 0), 8, 0));
+        pnlActions.setLayout(new FlowLayout(FlowLayout.LEFT, 8, 4));
         pnlForm.add(pnlActions, new GridConstraints(7, 1, 1, 1,
                 GridConstraints.ANCHOR_WEST, GridConstraints.FILL_HORIZONTAL,
-                GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_CAN_GROW,
+                GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_CAN_GROW | GridConstraints.SIZEPOLICY_WANT_GROW,
                 GridConstraints.SIZEPOLICY_FIXED,
                 null, null, null, 0, false));
 
         btnSubmitCashOp = new JButton("Submit Cash Transaction");
-        pnlActions.add(btnSubmitCashOp, new GridConstraints(0, 0, 1, 1,
-                GridConstraints.ANCHOR_CENTER, GridConstraints.FILL_HORIZONTAL,
-                GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_CAN_GROW,
-                GridConstraints.SIZEPOLICY_FIXED,
-                null, null, null, 0, false));
+        pnlActions.add(btnSubmitCashOp);
 
         btnCashBackToOverview = new JButton("\u2190 Back to Overview");
-        pnlActions.add(btnCashBackToOverview, new GridConstraints(0, 1, 1, 1,
-                GridConstraints.ANCHOR_CENTER, GridConstraints.FILL_HORIZONTAL,
-                GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_CAN_GROW,
-                GridConstraints.SIZEPOLICY_FIXED,
-                null, null, null, 0, false));
-
-        pnlActions.add(new Spacer(), new GridConstraints(0, 2, 1, 1,
-                GridConstraints.ANCHOR_CENTER, GridConstraints.FILL_HORIZONTAL,
-                GridConstraints.SIZEPOLICY_WANT_GROW, 1,
-                null, null, null, 0, false));
+        pnlActions.add(btnCashBackToOverview);
 
         lblCashFeedback = new JLabel(" ");
         pnlForm.add(lblCashFeedback, new GridConstraints(8, 0, 1, 2,
                 GridConstraints.ANCHOR_WEST, GridConstraints.FILL_HORIZONTAL,
-                GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_CAN_GROW,
+                GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_CAN_GROW | GridConstraints.SIZEPOLICY_WANT_GROW,
                 GridConstraints.SIZEPOLICY_FIXED,
                 null, null, null, 0, false));
 
@@ -707,7 +700,8 @@ public class CashInOutPanel extends JPanel {
                 null, null, null, 0, false));
         panel.add(field, new GridConstraints(row, 1, 1, 1,
                 GridConstraints.ANCHOR_WEST, GridConstraints.FILL_HORIZONTAL,
-                GridConstraints.SIZEPOLICY_WANT_GROW, GridConstraints.SIZEPOLICY_FIXED,
+                GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_CAN_GROW | GridConstraints.SIZEPOLICY_WANT_GROW,
+                GridConstraints.SIZEPOLICY_FIXED,
                 null, null, null, 0, false));
     }
 

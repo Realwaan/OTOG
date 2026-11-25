@@ -2,7 +2,6 @@ package com.otog.ui;
 
 import com.intellij.uiDesigner.core.GridConstraints;
 import com.intellij.uiDesigner.core.GridLayoutManager;
-import com.intellij.uiDesigner.core.Spacer;
 import com.otog.model.Transaction;
 import com.otog.model.TransactionFilter;
 import com.otog.model.TransactionStatus;
@@ -138,7 +137,7 @@ public class OverviewPanel extends JPanel {
             $$$setupUI$$$();
         }
         ensureComponentsInitialized();
-        add(pnlRoot, BorderLayout.CENTER);
+        add(SwingUiSupport.createResponsiveScrollPane(pnlRoot), BorderLayout.CENTER);
         initInteractions();
     }
 
@@ -150,11 +149,20 @@ public class OverviewPanel extends JPanel {
     private void ensureComponentsInitialized() {
         if (pnlQuickActions != null) {
             pnlQuickActions.setBorder(UiTheme.titledBorder("Quick Actions & Statement Files"));
+            SwingUiSupport.applyWrapLayout(pnlQuickActions, FlowLayout.LEFT, 8, 6);
         }
         if (pnlRecentActivity != null) {
             pnlRecentActivity.setBorder(UiTheme.titledBorder("Recent Activity & History"));
         }
+        if (pnlHistoryFilters != null) {
+            SwingUiSupport.applyWrapLayout(pnlHistoryFilters, FlowLayout.LEFT, 6, 4);
+        }
+        if (pnlTableActionButtons != null) {
+            SwingUiSupport.applyWrapLayout(pnlTableActionButtons, FlowLayout.RIGHT, 8, 4);
+        }
         if (activityCardPanel != null) {
+            activityCardPanel.setMinimumSize(new Dimension(200, 150));
+            activityCardPanel.setPreferredSize(new Dimension(420, 190));
             LayoutManager lm = activityCardPanel.getLayout();
             if (lm instanceof CardLayout cl) {
                 activityCardLayout = cl;
@@ -183,6 +191,7 @@ public class OverviewPanel extends JPanel {
                 }
             }
             UiTheme.styleInputField(cmbFilterType);
+            cmbFilterType.setPreferredSize(new Dimension(150, cmbFilterType.getPreferredSize().height));
         }
         if (cmbFilterStatus != null) {
             if (cmbFilterStatus.getItemCount() == 0) {
@@ -192,12 +201,15 @@ public class OverviewPanel extends JPanel {
                 }
             }
             UiTheme.styleInputField(cmbFilterStatus);
+            cmbFilterStatus.setPreferredSize(new Dimension(120, cmbFilterStatus.getPreferredSize().height));
         }
         if (txtFilterFromDate != null) {
+            txtFilterFromDate.setColumns(9);
             txtFilterFromDate.setToolTipText("Start date (YYYY-MM-DD)");
             UiTheme.styleInputField(txtFilterFromDate);
         }
         if (txtFilterToDate != null) {
+            txtFilterToDate.setColumns(9);
             txtFilterToDate.setToolTipText("End date (YYYY-MM-DD)");
             UiTheme.styleInputField(txtFilterToDate);
         }
@@ -213,6 +225,7 @@ public class OverviewPanel extends JPanel {
             if (tblTransactions.getModel() != transactionsTableModel) {
                 tblTransactions.setModel(transactionsTableModel);
             }
+            tblTransactions.setPreferredScrollableViewportSize(new Dimension(420, 130));
             UiTheme.styleTable(tblTransactions, 115, 130, 95, 70, 95, 75, 125, 120, 175);
             UiTheme.alignTableColumnsRight(tblTransactions, 4, 5);
         }
@@ -273,6 +286,7 @@ public class OverviewPanel extends JPanel {
         if (lblActivityFeedback != null) {
             lblActivityFeedback.setFont(UiTheme.font(UiTheme.FontRole.LABEL));
         }
+        SwingUiSupport.makeShrinkable(lblLoadingState, lblEmptyState, lblErrorState, lblActivityFeedback);
     }
 
     private Runnable onQuickNavMerchantQr;
@@ -305,6 +319,10 @@ public class OverviewPanel extends JPanel {
         this.investmentsEnabled = enabled;
         if (btnNavInvest != null) {
             btnNavInvest.setVisible(enabled);
+        }
+        if (pnlQuickActions != null) {
+            pnlQuickActions.revalidate();
+            pnlQuickActions.repaint();
         }
         updateTableActionButtonsState();
     }
@@ -1165,85 +1183,44 @@ public class OverviewPanel extends JPanel {
 
     private void $$$setupUI$$$() {
         pnlRoot = new JPanel();
-        pnlRoot.setLayout(new GridLayoutManager(2, 1, new Insets(10, 8, 6, 8), 10, 12));
+        pnlRoot.setLayout(new GridLayoutManager(2, 1, new Insets(10, 8, 6, 8), 10, 10));
 
         pnlQuickActions = new JPanel();
-        pnlQuickActions.setLayout(new GridLayoutManager(1, 10, new Insets(6, 8, 6, 8), 8, 4));
+        pnlQuickActions.setLayout(new FlowLayout(FlowLayout.LEFT, 8, 6));
         pnlQuickActions.setBorder(UiTheme.titledBorder("Quick Actions & Statement Files"));
         pnlRoot.add(pnlQuickActions, new GridConstraints(0, 0, 1, 1,
                 GridConstraints.ANCHOR_CENTER, GridConstraints.FILL_BOTH,
-                GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_CAN_GROW,
+                GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_WANT_GROW,
                 GridConstraints.SIZEPOLICY_FIXED,
                 null, null, null, 0, false));
 
         btnNavCashIn = new JButton("Cash In");
-        pnlQuickActions.add(btnNavCashIn, new GridConstraints(0, 0, 1, 1,
-                GridConstraints.ANCHOR_CENTER, GridConstraints.FILL_HORIZONTAL,
-                GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_CAN_GROW,
-                GridConstraints.SIZEPOLICY_FIXED,
-                null, null, null, 0, false));
+        pnlQuickActions.add(btnNavCashIn);
 
         btnNavCashOut = new JButton("Cash Out");
-        pnlQuickActions.add(btnNavCashOut, new GridConstraints(0, 1, 1, 1,
-                GridConstraints.ANCHOR_CENTER, GridConstraints.FILL_HORIZONTAL,
-                GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_CAN_GROW,
-                GridConstraints.SIZEPOLICY_FIXED,
-                null, null, null, 0, false));
+        pnlQuickActions.add(btnNavCashOut);
 
         btnNavSendMoney = new JButton("Send Money");
-        pnlQuickActions.add(btnNavSendMoney, new GridConstraints(0, 2, 1, 1,
-                GridConstraints.ANCHOR_CENTER, GridConstraints.FILL_HORIZONTAL,
-                GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_CAN_GROW,
-                GridConstraints.SIZEPOLICY_FIXED,
-                null, null, null, 0, false));
+        pnlQuickActions.add(btnNavSendMoney);
 
         btnNavPayBills = new JButton("Pay Bills");
-        pnlQuickActions.add(btnNavPayBills, new GridConstraints(0, 3, 1, 1,
-                GridConstraints.ANCHOR_CENTER, GridConstraints.FILL_HORIZONTAL,
-                GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_CAN_GROW,
-                GridConstraints.SIZEPOLICY_FIXED,
-                null, null, null, 0, false));
+        pnlQuickActions.add(btnNavPayBills);
 
         btnNavInvest = new JButton("Investments");
-        pnlQuickActions.add(btnNavInvest, new GridConstraints(0, 4, 1, 1,
-                GridConstraints.ANCHOR_CENTER, GridConstraints.FILL_HORIZONTAL,
-                GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_CAN_GROW,
-                GridConstraints.SIZEPOLICY_FIXED,
-                null, null, null, 0, false));
+        pnlQuickActions.add(btnNavInvest);
 
         btnNavMerchantQr = new JButton("Merchant QR");
         btnNavMerchantQr.setToolTipText("Pay merchants via QR image or open merchant QR terminal");
-        pnlQuickActions.add(btnNavMerchantQr, new GridConstraints(0, 5, 1, 1,
-                GridConstraints.ANCHOR_CENTER, GridConstraints.FILL_HORIZONTAL,
-                GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_CAN_GROW,
-                GridConstraints.SIZEPOLICY_FIXED,
-                null, null, null, 0, false));
+        pnlQuickActions.add(btnNavMerchantQr);
 
         btnNavPinSettings = new JButton("Set / Change PIN");
-        pnlQuickActions.add(btnNavPinSettings, new GridConstraints(0, 6, 1, 1,
-                GridConstraints.ANCHOR_CENTER, GridConstraints.FILL_HORIZONTAL,
-                GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_CAN_GROW,
-                GridConstraints.SIZEPOLICY_FIXED,
-                null, null, null, 0, false));
+        pnlQuickActions.add(btnNavPinSettings);
 
         btnExportStatement = new JButton("Export Statement");
-        pnlQuickActions.add(btnExportStatement, new GridConstraints(0, 7, 1, 1,
-                GridConstraints.ANCHOR_CENTER, GridConstraints.FILL_HORIZONTAL,
-                GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_CAN_GROW,
-                GridConstraints.SIZEPOLICY_FIXED,
-                null, null, null, 0, false));
+        pnlQuickActions.add(btnExportStatement);
 
         btnLoadStatement = new JButton("Load Statement");
-        pnlQuickActions.add(btnLoadStatement, new GridConstraints(0, 8, 1, 1,
-                GridConstraints.ANCHOR_CENTER, GridConstraints.FILL_HORIZONTAL,
-                GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_CAN_GROW,
-                GridConstraints.SIZEPOLICY_FIXED,
-                null, null, null, 0, false));
-
-        pnlQuickActions.add(new Spacer(), new GridConstraints(0, 9, 1, 1,
-                GridConstraints.ANCHOR_CENTER, GridConstraints.FILL_HORIZONTAL,
-                GridConstraints.SIZEPOLICY_WANT_GROW, 1,
-                null, null, null, 0, false));
+        pnlQuickActions.add(btnLoadStatement);
 
         pnlRecentActivity = new JPanel();
         pnlRecentActivity.setLayout(new GridLayoutManager(2, 1, new Insets(6, 8, 6, 8), 8, 8));
@@ -1255,87 +1232,32 @@ public class OverviewPanel extends JPanel {
                 null, null, null, 0, false));
 
         pnlHistoryFilters = new JPanel();
-        pnlHistoryFilters.setLayout(new GridLayoutManager(1, 11, new Insets(2, 2, 4, 2), 6, 0));
+        pnlHistoryFilters.setLayout(new FlowLayout(FlowLayout.LEFT, 6, 4));
         pnlRecentActivity.add(pnlHistoryFilters, new GridConstraints(0, 0, 1, 1,
                 GridConstraints.ANCHOR_CENTER, GridConstraints.FILL_HORIZONTAL,
-                GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_CAN_GROW,
+                GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_WANT_GROW,
                 GridConstraints.SIZEPOLICY_FIXED,
-                null, null, null, 0, false));
-
-        JLabel lblType = new JLabel("Type:");
-        UiTheme.styleFormLabel(lblType);
-        pnlHistoryFilters.add(lblType, new GridConstraints(0, 0, 1, 1,
-                GridConstraints.ANCHOR_WEST, GridConstraints.FILL_NONE,
-                GridConstraints.SIZEPOLICY_FIXED, GridConstraints.SIZEPOLICY_FIXED,
                 null, null, null, 0, false));
 
         cmbFilterType = new JComboBox<>();
-        pnlHistoryFilters.add(cmbFilterType, new GridConstraints(0, 1, 1, 1,
-                GridConstraints.ANCHOR_WEST, GridConstraints.FILL_HORIZONTAL,
-                GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_CAN_GROW,
-                GridConstraints.SIZEPOLICY_FIXED,
-                null, new Dimension(130, -1), null, 0, false));
-
-        JLabel lblStatus = new JLabel("Status:");
-        UiTheme.styleFormLabel(lblStatus);
-        pnlHistoryFilters.add(lblStatus, new GridConstraints(0, 2, 1, 1,
-                GridConstraints.ANCHOR_WEST, GridConstraints.FILL_NONE,
-                GridConstraints.SIZEPOLICY_FIXED, GridConstraints.SIZEPOLICY_FIXED,
-                null, null, null, 0, false));
+        pnlHistoryFilters.add(createInlineFilterGroup("Type:", cmbFilterType));
 
         cmbFilterStatus = new JComboBox<>();
-        pnlHistoryFilters.add(cmbFilterStatus, new GridConstraints(0, 3, 1, 1,
-                GridConstraints.ANCHOR_WEST, GridConstraints.FILL_HORIZONTAL,
-                GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_CAN_GROW,
-                GridConstraints.SIZEPOLICY_FIXED,
-                null, new Dimension(110, -1), null, 0, false));
-
-        JLabel lblFrom = new JLabel("From:");
-        UiTheme.styleFormLabel(lblFrom);
-        pnlHistoryFilters.add(lblFrom, new GridConstraints(0, 4, 1, 1,
-                GridConstraints.ANCHOR_WEST, GridConstraints.FILL_NONE,
-                GridConstraints.SIZEPOLICY_FIXED, GridConstraints.SIZEPOLICY_FIXED,
-                null, null, null, 0, false));
+        pnlHistoryFilters.add(createInlineFilterGroup("Status:", cmbFilterStatus));
 
         txtFilterFromDate = new JTextField(9);
-        pnlHistoryFilters.add(txtFilterFromDate, new GridConstraints(0, 5, 1, 1,
-                GridConstraints.ANCHOR_WEST, GridConstraints.FILL_HORIZONTAL,
-                GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_CAN_GROW,
-                GridConstraints.SIZEPOLICY_FIXED,
-                null, new Dimension(92, -1), null, 0, false));
-
-        JLabel lblTo = new JLabel("To:");
-        UiTheme.styleFormLabel(lblTo);
-        pnlHistoryFilters.add(lblTo, new GridConstraints(0, 6, 1, 1,
-                GridConstraints.ANCHOR_WEST, GridConstraints.FILL_NONE,
-                GridConstraints.SIZEPOLICY_FIXED, GridConstraints.SIZEPOLICY_FIXED,
-                null, null, null, 0, false));
+        pnlHistoryFilters.add(createInlineFilterGroup("From:", txtFilterFromDate));
 
         txtFilterToDate = new JTextField(9);
-        pnlHistoryFilters.add(txtFilterToDate, new GridConstraints(0, 7, 1, 1,
-                GridConstraints.ANCHOR_WEST, GridConstraints.FILL_HORIZONTAL,
-                GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_CAN_GROW,
-                GridConstraints.SIZEPOLICY_FIXED,
-                null, new Dimension(92, -1), null, 0, false));
+        pnlHistoryFilters.add(createInlineFilterGroup("To:", txtFilterToDate));
 
+        JPanel pnlFilterButtonsGroup = new JPanel(new FlowLayout(FlowLayout.LEFT, 6, 0));
+        pnlFilterButtonsGroup.setOpaque(false);
         btnApplyFilters = new JButton("Filter");
-        pnlHistoryFilters.add(btnApplyFilters, new GridConstraints(0, 8, 1, 1,
-                GridConstraints.ANCHOR_CENTER, GridConstraints.FILL_HORIZONTAL,
-                GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_CAN_GROW,
-                GridConstraints.SIZEPOLICY_FIXED,
-                null, null, null, 0, false));
-
         btnClearFilters = new JButton("Reset");
-        pnlHistoryFilters.add(btnClearFilters, new GridConstraints(0, 9, 1, 1,
-                GridConstraints.ANCHOR_CENTER, GridConstraints.FILL_HORIZONTAL,
-                GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_CAN_GROW,
-                GridConstraints.SIZEPOLICY_FIXED,
-                null, null, null, 0, false));
-
-        pnlHistoryFilters.add(new Spacer(), new GridConstraints(0, 10, 1, 1,
-                GridConstraints.ANCHOR_CENTER, GridConstraints.FILL_HORIZONTAL,
-                GridConstraints.SIZEPOLICY_WANT_GROW, 1,
-                null, null, null, 0, false));
+        pnlFilterButtonsGroup.add(btnApplyFilters);
+        pnlFilterButtonsGroup.add(btnClearFilters);
+        pnlHistoryFilters.add(pnlFilterButtonsGroup);
 
         activityCardPanel = new JPanel(new CardLayout());
 
@@ -1362,9 +1284,9 @@ public class OverviewPanel extends JPanel {
         pnlReadyCard = new JPanel(new BorderLayout(6, 6));
         pnlReadyCard.add(new JScrollPane(tblTransactions), BorderLayout.CENTER);
 
-        pnlTableActions = new JPanel(new BorderLayout(8, 0));
+        pnlTableActions = new JPanel(new BorderLayout(6, 4));
         lblActivityFeedback = new JLabel(" ");
-        pnlTableActionButtons = new JPanel(new FlowLayout(FlowLayout.RIGHT, 8, 0));
+        pnlTableActionButtons = new JPanel(new FlowLayout(FlowLayout.RIGHT, 8, 4));
         btnCheckStatus = new JButton("Lookup Status");
         btnRepeatDraft = new JButton("Repeat Draft");
         btnViewReceipt = new JButton("View Receipt");
@@ -1373,8 +1295,8 @@ public class OverviewPanel extends JPanel {
         pnlTableActionButtons.add(btnRepeatDraft);
         pnlTableActionButtons.add(btnViewReceipt);
         pnlTableActionButtons.add(btnExportReceipt);
-        pnlTableActions.add(lblActivityFeedback, BorderLayout.WEST);
-        pnlTableActions.add(pnlTableActionButtons, BorderLayout.EAST);
+        pnlTableActions.add(lblActivityFeedback, BorderLayout.NORTH);
+        pnlTableActions.add(pnlTableActionButtons, BorderLayout.CENTER);
         pnlReadyCard.add(pnlTableActions, BorderLayout.SOUTH);
 
         activityCardPanel.add(pnlLoadingCard, Main.DashboardState.LOADING.name());
@@ -1386,7 +1308,17 @@ public class OverviewPanel extends JPanel {
                 GridConstraints.ANCHOR_CENTER, GridConstraints.FILL_BOTH,
                 GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_WANT_GROW,
                 GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_WANT_GROW,
-                null, null, null, 0, false));
+                new Dimension(200, 150), new Dimension(420, 190), null, 0, false));
+    }
+
+    private static JPanel createInlineFilterGroup(String labelText, JComponent field) {
+        JPanel group = new JPanel(new FlowLayout(FlowLayout.LEFT, 4, 0));
+        group.setOpaque(false);
+        JLabel label = new JLabel(labelText);
+        UiTheme.styleFormLabel(label);
+        group.add(label);
+        group.add(field);
+        return group;
     }
 
     public JComponent $$$getRootComponent$$$() {

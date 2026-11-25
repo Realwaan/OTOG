@@ -2,10 +2,10 @@ package com.otog.ui;
 
 import com.intellij.uiDesigner.core.GridConstraints;
 import com.intellij.uiDesigner.core.GridLayoutManager;
-import com.intellij.uiDesigner.core.Spacer;
 import com.otog.service.AuthService;
 import com.otog.service.SessionManager;
 import com.otog.util.OtogConfig;
+import com.otog.util.SwingUiSupport;
 import com.otog.util.UiTheme;
 
 import javax.swing.*;
@@ -76,10 +76,21 @@ public class PinSettingsDialog extends JDialog {
         if (lblPinDialogFeedback != null) {
             lblPinDialogFeedback.setFont(UiTheme.font(UiTheme.FontRole.SMALL));
         }
+        UiTheme.styleInputField(txtSecret);
+        UiTheme.styleInputField(txtNewPin);
+        UiTheme.styleInputField(txtConfirmPin);
+        UiTheme.styleSecondaryButton(btnCancel);
+        UiTheme.stylePrimaryButton(btnSavePin);
+        if (pnlMode != null) {
+            SwingUiSupport.applyWrapLayout(pnlMode, FlowLayout.LEFT, 10, 2);
+        }
+        if (pnlButtons != null) {
+            SwingUiSupport.applyWrapLayout(pnlButtons, FlowLayout.RIGHT, 8, 4);
+        }
+        SwingUiSupport.makeShrinkable(txtSecret, txtNewPin, txtConfirmPin, lblPinDialogFeedback);
+
         setContentPane(pnlRoot);
-        setSize(OtogConfig.getInstance().getUiDimension("ui.pin.width", "ui.pin.height", 440, 290));
-        setLocationRelativeTo(getParent());
-        setResizable(false);
+        setResizable(true);
 
         ButtonGroup modeGroup = new ButtonGroup();
         modeGroup.add(rbChangePin);
@@ -94,6 +105,14 @@ public class PinSettingsDialog extends JDialog {
 
         rbChangePin.addActionListener(e -> lblSecret.setText("Current PIN:"));
         rbResetWithPassword.addActionListener(e -> lblSecret.setText("Account Password:"));
+
+        SwingUiSupport.applyFlexibleWindowBounds(
+                this,
+                OtogConfig.getInstance().getUiDimension("ui.pin.width", "ui.pin.height", 440, 290),
+                new Dimension(400, 260),
+                true
+        );
+        setLocationRelativeTo(getParent());
 
         setDefaultCloseOperation(WindowConstants.DISPOSE_ON_CLOSE);
         getRootPane().setDefaultButton(btnSavePin);
@@ -230,31 +249,23 @@ public class PinSettingsDialog extends JDialog {
         pnlForm.setBorder(UiTheme.titledBorder("Transaction PIN Security"));
         pnlRoot.add(pnlForm, new GridConstraints(0, 0, 1, 1,
                 GridConstraints.ANCHOR_CENTER, GridConstraints.FILL_BOTH,
-                GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_CAN_GROW,
+                GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_CAN_GROW | GridConstraints.SIZEPOLICY_WANT_GROW,
                 GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_CAN_GROW,
                 null, null, null, 0, false));
 
         pnlMode = new JPanel();
-        pnlMode.setLayout(new GridLayoutManager(1, 2, new Insets(0, 0, 4, 0), 10, 0));
+        pnlMode.setLayout(new FlowLayout(FlowLayout.LEFT, 10, 2));
         pnlForm.add(pnlMode, new GridConstraints(0, 0, 1, 2,
                 GridConstraints.ANCHOR_WEST, GridConstraints.FILL_HORIZONTAL,
-                GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_CAN_GROW,
+                GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_CAN_GROW | GridConstraints.SIZEPOLICY_WANT_GROW,
                 GridConstraints.SIZEPOLICY_FIXED,
                 null, null, null, 0, false));
 
         rbChangePin = new JRadioButton("Use Current PIN");
-        pnlMode.add(rbChangePin, new GridConstraints(0, 0, 1, 1,
-                GridConstraints.ANCHOR_WEST, GridConstraints.FILL_NONE,
-                GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_CAN_GROW,
-                GridConstraints.SIZEPOLICY_FIXED,
-                null, null, null, 0, false));
+        pnlMode.add(rbChangePin);
 
         rbResetWithPassword = new JRadioButton("Reset with Account Password");
-        pnlMode.add(rbResetWithPassword, new GridConstraints(0, 1, 1, 1,
-                GridConstraints.ANCHOR_WEST, GridConstraints.FILL_NONE,
-                GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_CAN_GROW,
-                GridConstraints.SIZEPOLICY_FIXED,
-                null, null, null, 0, false));
+        pnlMode.add(rbResetWithPassword);
 
         lblSecret = new JLabel("Account Password:");
         pnlForm.add(lblSecret, new GridConstraints(1, 0, 1, 1,
@@ -265,7 +276,8 @@ public class PinSettingsDialog extends JDialog {
         txtSecret = new JPasswordField(18);
         pnlForm.add(txtSecret, new GridConstraints(1, 1, 1, 1,
                 GridConstraints.ANCHOR_WEST, GridConstraints.FILL_HORIZONTAL,
-                GridConstraints.SIZEPOLICY_WANT_GROW, GridConstraints.SIZEPOLICY_FIXED,
+                GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_CAN_GROW | GridConstraints.SIZEPOLICY_WANT_GROW,
+                GridConstraints.SIZEPOLICY_FIXED,
                 null, new Dimension(180, -1), null, 0, false));
 
         pnlForm.add(new JLabel("New PIN (" + config.getPinMinLength() + "-" + config.getPinMaxLength() + " digits):"),
@@ -277,7 +289,8 @@ public class PinSettingsDialog extends JDialog {
         txtNewPin = new JPasswordField(18);
         pnlForm.add(txtNewPin, new GridConstraints(2, 1, 1, 1,
                 GridConstraints.ANCHOR_WEST, GridConstraints.FILL_HORIZONTAL,
-                GridConstraints.SIZEPOLICY_WANT_GROW, GridConstraints.SIZEPOLICY_FIXED,
+                GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_CAN_GROW | GridConstraints.SIZEPOLICY_WANT_GROW,
+                GridConstraints.SIZEPOLICY_FIXED,
                 null, new Dimension(180, -1), null, 0, false));
 
         pnlForm.add(new JLabel("Confirm New PIN:"), new GridConstraints(3, 0, 1, 1,
@@ -288,42 +301,31 @@ public class PinSettingsDialog extends JDialog {
         txtConfirmPin = new JPasswordField(18);
         pnlForm.add(txtConfirmPin, new GridConstraints(3, 1, 1, 1,
                 GridConstraints.ANCHOR_WEST, GridConstraints.FILL_HORIZONTAL,
-                GridConstraints.SIZEPOLICY_WANT_GROW, GridConstraints.SIZEPOLICY_FIXED,
+                GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_CAN_GROW | GridConstraints.SIZEPOLICY_WANT_GROW,
+                GridConstraints.SIZEPOLICY_FIXED,
                 null, new Dimension(180, -1), null, 0, false));
 
         lblPinDialogFeedback = new JLabel(" ");
         lblPinDialogFeedback.setFont(UiTheme.font(UiTheme.FontRole.SMALL));
         pnlForm.add(lblPinDialogFeedback, new GridConstraints(4, 0, 1, 2,
-                GridConstraints.ANCHOR_WEST, GridConstraints.FILL_NONE,
-                GridConstraints.SIZEPOLICY_FIXED, GridConstraints.SIZEPOLICY_FIXED,
+                GridConstraints.ANCHOR_WEST, GridConstraints.FILL_HORIZONTAL,
+                GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_CAN_GROW | GridConstraints.SIZEPOLICY_WANT_GROW,
+                GridConstraints.SIZEPOLICY_FIXED,
                 null, null, null, 0, false));
 
         pnlButtons = new JPanel();
-        pnlButtons.setLayout(new GridLayoutManager(1, 3, new Insets(2, 0, 0, 0), 8, 0));
+        pnlButtons.setLayout(new FlowLayout(FlowLayout.RIGHT, 8, 4));
         pnlRoot.add(pnlButtons, new GridConstraints(1, 0, 1, 1,
                 GridConstraints.ANCHOR_CENTER, GridConstraints.FILL_BOTH,
-                GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_CAN_GROW,
+                GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_CAN_GROW | GridConstraints.SIZEPOLICY_WANT_GROW,
                 GridConstraints.SIZEPOLICY_FIXED,
-                null, null, null, 0, false));
-
-        pnlButtons.add(new Spacer(), new GridConstraints(0, 0, 1, 1,
-                GridConstraints.ANCHOR_CENTER, GridConstraints.FILL_HORIZONTAL,
-                GridConstraints.SIZEPOLICY_WANT_GROW, 1,
                 null, null, null, 0, false));
 
         btnCancel = new JButton("Cancel");
-        pnlButtons.add(btnCancel, new GridConstraints(0, 1, 1, 1,
-                GridConstraints.ANCHOR_CENTER, GridConstraints.FILL_HORIZONTAL,
-                GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_CAN_GROW,
-                GridConstraints.SIZEPOLICY_FIXED,
-                null, null, null, 0, false));
+        pnlButtons.add(btnCancel);
 
         btnSavePin = new JButton("Save PIN");
-        pnlButtons.add(btnSavePin, new GridConstraints(0, 2, 1, 1,
-                GridConstraints.ANCHOR_CENTER, GridConstraints.FILL_HORIZONTAL,
-                GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_CAN_GROW,
-                GridConstraints.SIZEPOLICY_FIXED,
-                null, null, null, 0, false));
+        pnlButtons.add(btnSavePin);
     }
 
     public JComponent $$$getRootComponent$$$() {
