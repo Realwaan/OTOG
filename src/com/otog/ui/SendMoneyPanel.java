@@ -75,7 +75,7 @@ public class SendMoneyPanel extends JPanel {
             $$$setupUI$$$();
         }
         ensureComponentsInitialized();
-        add(pnlRoot, BorderLayout.CENTER);
+        add(SwingUiSupport.createResponsiveScrollPane(pnlRoot), BorderLayout.CENTER);
         initInteractions();
     }
 
@@ -94,9 +94,13 @@ public class SendMoneyPanel extends JPanel {
         }
         UiTheme.stylePrimaryButton(btnSubmitSendMoney);
         UiTheme.styleSecondaryButton(btnSendBackToOverview);
+        if (pnlActions != null) {
+            SwingUiSupport.applyWrapLayout(pnlActions, FlowLayout.LEFT, 8, 4);
+        }
         if (lblSendFeedback != null) {
             lblSendFeedback.setFont(UiTheme.font(UiTheme.FontRole.LABEL));
         }
+        SwingUiSupport.makeShrinkable(txtRecipient, txtSendAmount, txtSendNote, txtSendPin, lblSendFeedback);
     }
 
     public void setOnBackToOverview(Runnable onBackToOverview) {
@@ -525,7 +529,7 @@ public class SendMoneyPanel extends JPanel {
         pnlForm.setBorder(UiTheme.titledBorder("Wallet-to-Wallet Transfer"));
         pnlRoot.add(pnlForm, new GridConstraints(0, 0, 1, 1,
                 GridConstraints.ANCHOR_CENTER, GridConstraints.FILL_BOTH,
-                GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_CAN_GROW,
+                GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_CAN_GROW | GridConstraints.SIZEPOLICY_WANT_GROW,
                 GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_CAN_GROW,
                 null, null, null, 0, false));
 
@@ -540,36 +544,23 @@ public class SendMoneyPanel extends JPanel {
         addRow(pnlForm, 3, "Transaction PIN:", txtSendPin);
 
         pnlActions = new JPanel();
-        pnlActions.setLayout(new GridLayoutManager(1, 3, new Insets(4, 0, 0, 0), 8, 0));
+        pnlActions.setLayout(new FlowLayout(FlowLayout.LEFT, 8, 4));
         pnlForm.add(pnlActions, new GridConstraints(4, 1, 1, 1,
                 GridConstraints.ANCHOR_WEST, GridConstraints.FILL_HORIZONTAL,
-                GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_CAN_GROW,
+                GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_CAN_GROW | GridConstraints.SIZEPOLICY_WANT_GROW,
                 GridConstraints.SIZEPOLICY_FIXED,
                 null, null, null, 0, false));
 
         btnSubmitSendMoney = new JButton("Send Money");
-        pnlActions.add(btnSubmitSendMoney, new GridConstraints(0, 0, 1, 1,
-                GridConstraints.ANCHOR_CENTER, GridConstraints.FILL_HORIZONTAL,
-                GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_CAN_GROW,
-                GridConstraints.SIZEPOLICY_FIXED,
-                null, null, null, 0, false));
+        pnlActions.add(btnSubmitSendMoney);
 
         btnSendBackToOverview = new JButton("\u2190 Back to Overview");
-        pnlActions.add(btnSendBackToOverview, new GridConstraints(0, 1, 1, 1,
-                GridConstraints.ANCHOR_CENTER, GridConstraints.FILL_HORIZONTAL,
-                GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_CAN_GROW,
-                GridConstraints.SIZEPOLICY_FIXED,
-                null, null, null, 0, false));
-
-        pnlActions.add(new Spacer(), new GridConstraints(0, 2, 1, 1,
-                GridConstraints.ANCHOR_CENTER, GridConstraints.FILL_HORIZONTAL,
-                GridConstraints.SIZEPOLICY_WANT_GROW, 1,
-                null, null, null, 0, false));
+        pnlActions.add(btnSendBackToOverview);
 
         lblSendFeedback = new JLabel(" ");
         pnlForm.add(lblSendFeedback, new GridConstraints(5, 0, 1, 2,
                 GridConstraints.ANCHOR_WEST, GridConstraints.FILL_HORIZONTAL,
-                GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_CAN_GROW,
+                GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_CAN_GROW | GridConstraints.SIZEPOLICY_WANT_GROW,
                 GridConstraints.SIZEPOLICY_FIXED,
                 null, null, null, 0, false));
 
@@ -588,7 +579,8 @@ public class SendMoneyPanel extends JPanel {
                 null, null, null, 0, false));
         panel.add(field, new GridConstraints(row, 1, 1, 1,
                 GridConstraints.ANCHOR_WEST, GridConstraints.FILL_HORIZONTAL,
-                GridConstraints.SIZEPOLICY_WANT_GROW, GridConstraints.SIZEPOLICY_FIXED,
+                GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_CAN_GROW | GridConstraints.SIZEPOLICY_WANT_GROW,
+                GridConstraints.SIZEPOLICY_FIXED,
                 null, null, null, 0, false));
     }
 

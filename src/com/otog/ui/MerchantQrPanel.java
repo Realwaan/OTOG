@@ -2,7 +2,6 @@ package com.otog.ui;
 
 import com.intellij.uiDesigner.core.GridConstraints;
 import com.intellij.uiDesigner.core.GridLayoutManager;
-import com.intellij.uiDesigner.core.Spacer;
 import com.otog.model.MerchantQrPayload;
 import com.otog.model.ReceiptBuilder;
 import com.otog.model.Transaction;
@@ -17,6 +16,7 @@ import com.otog.service.WalletOperations;
 import com.otog.util.IdGenerator;
 import com.otog.util.MoneyUtil;
 import com.otog.util.OtogConfig;
+import com.otog.util.SwingUiSupport;
 import com.otog.util.UiTheme;
 
 import javax.imageio.ImageIO;
@@ -78,6 +78,8 @@ public class MerchantQrPanel extends JPanel {
 
     // Customer Pay Tab
     private JPanel pnlPayTab;
+    private JPanel pnlImportActions;
+    private JPanel pnlPayActionButtons;
     private JButton btnImportQr;
     private JLabel lblImportedFile;
     private JLabel lblQrThumbnail;
@@ -93,6 +95,8 @@ public class MerchantQrPanel extends JPanel {
 
     // Merchant Generator Tab
     private JPanel pnlMerchantTab;
+    private JPanel pnlGenButtons;
+    private JPanel pnlMerchantSalesActions;
     private JLabel lblGenAmount;
     private JTextField txtGenAmount;
     private JTextField txtGenNote;
@@ -131,7 +135,7 @@ public class MerchantQrPanel extends JPanel {
             $$$setupUI$$$();
         }
         ensureComponentsInitialized();
-        add(pnlRoot, BorderLayout.CENTER);
+        add(SwingUiSupport.createResponsiveScrollPane(pnlRoot), BorderLayout.CENTER);
         applyRoleAccessControl();
         initActions();
     }
@@ -201,6 +205,36 @@ public class MerchantQrPanel extends JPanel {
         if (lblMerchantFeedback != null) {
             lblMerchantFeedback.setFont(UiTheme.font(UiTheme.FontRole.LABEL));
         }
+        UiTheme.styleInputField(txtPayAmount);
+        UiTheme.styleInputField(txtPayPin);
+        UiTheme.styleInputField(txtGenAmount);
+        UiTheme.styleInputField(txtGenNote);
+        UiTheme.styleSecondaryButton(btnImportQr);
+        UiTheme.stylePrimaryButton(btnConfirmPay);
+        UiTheme.styleSecondaryButton(btnClearPay);
+        UiTheme.styleSecondaryButton(btnBackToOverview);
+        UiTheme.stylePrimaryButton(btnGenerateQr);
+        UiTheme.styleSecondaryButton(btnSaveQr);
+        UiTheme.styleSecondaryButton(btnViewMerchantReceipt);
+        UiTheme.styleSecondaryButton(btnRefreshSales);
+        if (pnlImportActions != null) {
+            SwingUiSupport.applyWrapLayout(pnlImportActions, FlowLayout.LEFT, 8, 2);
+        }
+        if (pnlPayActionButtons != null) {
+            SwingUiSupport.applyWrapLayout(pnlPayActionButtons, FlowLayout.LEFT, 8, 4);
+        }
+        if (pnlGenButtons != null) {
+            SwingUiSupport.applyWrapLayout(pnlGenButtons, FlowLayout.LEFT, 8, 4);
+        }
+        if (pnlMerchantSalesActions != null) {
+            SwingUiSupport.applyWrapLayout(pnlMerchantSalesActions, FlowLayout.LEFT, 8, 4);
+        }
+        if (tabsQr != null) {
+            tabsQr.setMinimumSize(new Dimension(200, 200));
+        }
+        SwingUiSupport.makeShrinkable(
+                lblImportedFile, txtPayAmount, txtPayPin, lblPayFeedback,
+                txtGenAmount, txtGenNote, lblMerchantFeedback);
     }
 
     /**
@@ -1208,9 +1242,9 @@ public class MerchantQrPanel extends JPanel {
         tabsQr = new JTabbedPane();
         pnlRoot.add(tabsQr, new GridConstraints(0, 0, 1, 1,
                 GridConstraints.ANCHOR_CENTER, GridConstraints.FILL_BOTH,
-                GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_CAN_GROW,
-                GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_CAN_GROW,
-                null, new Dimension(860, 540), null, 0, false));
+                GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_CAN_GROW | GridConstraints.SIZEPOLICY_WANT_GROW,
+                GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_CAN_GROW | GridConstraints.SIZEPOLICY_WANT_GROW,
+                new Dimension(200, 200), null, null, 0, false));
 
         // Pay Tab
         pnlPayTab = new JPanel();
@@ -1223,20 +1257,14 @@ public class MerchantQrPanel extends JPanel {
                 GridConstraints.SIZEPOLICY_FIXED, GridConstraints.SIZEPOLICY_FIXED,
                 null, null, null, 0, false));
 
-        JPanel pnlImportActions = new JPanel(new GridLayoutManager(1, 2, new Insets(0, 0, 0, 0), 8, 0));
+        pnlImportActions = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 2));
         btnImportQr = new JButton("Import QR Image (.png)...");
         lblImportedFile = new JLabel("No QR file loaded.");
-        pnlImportActions.add(btnImportQr, new GridConstraints(0, 0, 1, 1,
-                GridConstraints.ANCHOR_CENTER, GridConstraints.FILL_HORIZONTAL,
-                GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_CAN_GROW,
-                GridConstraints.SIZEPOLICY_FIXED, null, null, null, 0, false));
-        pnlImportActions.add(lblImportedFile, new GridConstraints(0, 1, 1, 1,
-                GridConstraints.ANCHOR_WEST, GridConstraints.FILL_NONE,
-                GridConstraints.SIZEPOLICY_FIXED, GridConstraints.SIZEPOLICY_FIXED,
-                null, null, null, 0, false));
+        pnlImportActions.add(btnImportQr);
+        pnlImportActions.add(lblImportedFile);
         pnlPayTab.add(pnlImportActions, new GridConstraints(0, 1, 1, 1,
                 GridConstraints.ANCHOR_WEST, GridConstraints.FILL_HORIZONTAL,
-                GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_CAN_GROW,
+                GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_CAN_GROW | GridConstraints.SIZEPOLICY_WANT_GROW,
                 GridConstraints.SIZEPOLICY_FIXED, null, null, null, 0, false));
 
         lblQrThumbnail = new JLabel("[ QR Image ]", SwingConstants.CENTER);
@@ -1256,9 +1284,9 @@ public class MerchantQrPanel extends JPanel {
         scrollConfirm.setBorder(UiTheme.titledBorder("Merchant Recipient Confirmation"));
         pnlPayTab.add(scrollConfirm, new GridConstraints(1, 1, 1, 1,
                 GridConstraints.ANCHOR_CENTER, GridConstraints.FILL_BOTH,
+                GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_CAN_GROW | GridConstraints.SIZEPOLICY_WANT_GROW,
                 GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_CAN_GROW,
-                GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_CAN_GROW,
-                null, new Dimension(450, 110), null, 0, false));
+                new Dimension(140, 90), new Dimension(260, 110), null, 0, false));
 
         lblPayAmount = new JLabel("Payment Amount (" + currency + "):");
         pnlPayTab.add(lblPayAmount, new GridConstraints(2, 0, 1, 1,
@@ -1268,7 +1296,7 @@ public class MerchantQrPanel extends JPanel {
         txtPayAmount = new JTextField();
         pnlPayTab.add(txtPayAmount, new GridConstraints(2, 1, 1, 1,
                 GridConstraints.ANCHOR_WEST, GridConstraints.FILL_HORIZONTAL,
-                GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_CAN_GROW,
+                GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_CAN_GROW | GridConstraints.SIZEPOLICY_WANT_GROW,
                 GridConstraints.SIZEPOLICY_FIXED, null, null, null, 0, false));
 
         JLabel lblPin = new JLabel("Transaction PIN:");
@@ -1279,39 +1307,26 @@ public class MerchantQrPanel extends JPanel {
         txtPayPin = new JPasswordField();
         pnlPayTab.add(txtPayPin, new GridConstraints(3, 1, 1, 1,
                 GridConstraints.ANCHOR_WEST, GridConstraints.FILL_HORIZONTAL,
-                GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_CAN_GROW,
+                GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_CAN_GROW | GridConstraints.SIZEPOLICY_WANT_GROW,
                 GridConstraints.SIZEPOLICY_FIXED, null, null, null, 0, false));
 
-        JPanel pnlPayBtns = new JPanel(new GridLayoutManager(1, 4, new Insets(4, 0, 4, 0), 8, 0));
+        pnlPayActionButtons = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 4));
         btnConfirmPay = new JButton("Confirm & Pay");
         btnConfirmPay.setEnabled(false);
         btnClearPay = new JButton("Clear");
         btnBackToOverview = new JButton("\u2190 Back to Overview");
-        pnlPayBtns.add(btnConfirmPay, new GridConstraints(0, 0, 1, 1,
-                GridConstraints.ANCHOR_CENTER, GridConstraints.FILL_HORIZONTAL,
-                GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_CAN_GROW,
-                GridConstraints.SIZEPOLICY_FIXED, null, null, null, 0, false));
-        pnlPayBtns.add(btnClearPay, new GridConstraints(0, 1, 1, 1,
-                GridConstraints.ANCHOR_CENTER, GridConstraints.FILL_HORIZONTAL,
-                GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_CAN_GROW,
-                GridConstraints.SIZEPOLICY_FIXED, null, null, null, 0, false));
-        pnlPayBtns.add(btnBackToOverview, new GridConstraints(0, 2, 1, 1,
-                GridConstraints.ANCHOR_CENTER, GridConstraints.FILL_HORIZONTAL,
-                GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_CAN_GROW,
-                GridConstraints.SIZEPOLICY_FIXED, null, null, null, 0, false));
-        pnlPayBtns.add(new Spacer(), new GridConstraints(0, 3, 1, 1,
-                GridConstraints.ANCHOR_CENTER, GridConstraints.FILL_HORIZONTAL,
-                GridConstraints.SIZEPOLICY_WANT_GROW, GridConstraints.SIZEPOLICY_FIXED,
-                null, null, null, 0, false));
-        pnlPayTab.add(pnlPayBtns, new GridConstraints(4, 1, 1, 1,
+        pnlPayActionButtons.add(btnConfirmPay);
+        pnlPayActionButtons.add(btnClearPay);
+        pnlPayActionButtons.add(btnBackToOverview);
+        pnlPayTab.add(pnlPayActionButtons, new GridConstraints(4, 1, 1, 1,
                 GridConstraints.ANCHOR_WEST, GridConstraints.FILL_HORIZONTAL,
-                GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_CAN_GROW,
+                GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_CAN_GROW | GridConstraints.SIZEPOLICY_WANT_GROW,
                 GridConstraints.SIZEPOLICY_FIXED, null, null, null, 0, false));
 
         lblPayFeedback = new JLabel(" ");
         pnlPayTab.add(lblPayFeedback, new GridConstraints(5, 0, 1, 2,
                 GridConstraints.ANCHOR_WEST, GridConstraints.FILL_HORIZONTAL,
-                GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_CAN_GROW,
+                GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_CAN_GROW | GridConstraints.SIZEPOLICY_WANT_GROW,
                 GridConstraints.SIZEPOLICY_FIXED, null, null, null, 0, false));
 
         txtReceipt = new JTextArea();
@@ -1323,9 +1338,9 @@ public class MerchantQrPanel extends JPanel {
         scrollReceipt.setBorder(UiTheme.titledBorder("Payment Receipt"));
         pnlPayTab.add(scrollReceipt, new GridConstraints(6, 0, 1, 2,
                 GridConstraints.ANCHOR_CENTER, GridConstraints.FILL_BOTH,
-                GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_CAN_GROW,
-                GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_CAN_GROW,
-                null, new Dimension(700, 130), null, 0, false));
+                GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_CAN_GROW | GridConstraints.SIZEPOLICY_WANT_GROW,
+                GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_CAN_GROW | GridConstraints.SIZEPOLICY_WANT_GROW,
+                new Dimension(180, 90), new Dimension(320, 120), null, 0, false));
 
         // Merchant Terminal Tab
         pnlMerchantTab = new JPanel();
@@ -1340,7 +1355,7 @@ public class MerchantQrPanel extends JPanel {
         txtGenAmount = new JTextField();
         pnlMerchantTab.add(txtGenAmount, new GridConstraints(0, 1, 1, 1,
                 GridConstraints.ANCHOR_WEST, GridConstraints.FILL_HORIZONTAL,
-                GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_CAN_GROW,
+                GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_CAN_GROW | GridConstraints.SIZEPOLICY_WANT_GROW,
                 GridConstraints.SIZEPOLICY_FIXED, null, null, null, 0, false));
 
         JLabel lblGenNote = new JLabel("Order / Note (Optional):");
@@ -1351,28 +1366,18 @@ public class MerchantQrPanel extends JPanel {
         txtGenNote = new JTextField();
         pnlMerchantTab.add(txtGenNote, new GridConstraints(1, 1, 1, 1,
                 GridConstraints.ANCHOR_WEST, GridConstraints.FILL_HORIZONTAL,
-                GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_CAN_GROW,
+                GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_CAN_GROW | GridConstraints.SIZEPOLICY_WANT_GROW,
                 GridConstraints.SIZEPOLICY_FIXED, null, null, null, 0, false));
 
-        JPanel pnlGenBtns = new JPanel(new GridLayoutManager(1, 3, new Insets(2, 0, 2, 0), 8, 0));
+        pnlGenButtons = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 4));
         btnGenerateQr = new JButton("Generate Merchant QR");
         btnSaveQr = new JButton("Export / Save QR Image...");
         btnSaveQr.setEnabled(false);
-        pnlGenBtns.add(btnGenerateQr, new GridConstraints(0, 0, 1, 1,
-                GridConstraints.ANCHOR_CENTER, GridConstraints.FILL_HORIZONTAL,
-                GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_CAN_GROW,
-                GridConstraints.SIZEPOLICY_FIXED, null, null, null, 0, false));
-        pnlGenBtns.add(btnSaveQr, new GridConstraints(0, 1, 1, 1,
-                GridConstraints.ANCHOR_CENTER, GridConstraints.FILL_HORIZONTAL,
-                GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_CAN_GROW,
-                GridConstraints.SIZEPOLICY_FIXED, null, null, null, 0, false));
-        pnlGenBtns.add(new Spacer(), new GridConstraints(0, 2, 1, 1,
-                GridConstraints.ANCHOR_CENTER, GridConstraints.FILL_HORIZONTAL,
-                GridConstraints.SIZEPOLICY_WANT_GROW, GridConstraints.SIZEPOLICY_FIXED,
-                null, null, null, 0, false));
-        pnlMerchantTab.add(pnlGenBtns, new GridConstraints(2, 1, 1, 1,
+        pnlGenButtons.add(btnGenerateQr);
+        pnlGenButtons.add(btnSaveQr);
+        pnlMerchantTab.add(pnlGenButtons, new GridConstraints(2, 1, 1, 1,
                 GridConstraints.ANCHOR_WEST, GridConstraints.FILL_HORIZONTAL,
-                GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_CAN_GROW,
+                GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_CAN_GROW | GridConstraints.SIZEPOLICY_WANT_GROW,
                 GridConstraints.SIZEPOLICY_FIXED, null, null, null, 0, false));
 
         lblGeneratedQr = new JLabel("[ Generated QR Preview ]", SwingConstants.CENTER);
@@ -1388,35 +1393,25 @@ public class MerchantQrPanel extends JPanel {
         scrollSales.setBorder(UiTheme.titledBorder("Received Merchant Payments"));
         pnlMerchantTab.add(scrollSales, new GridConstraints(3, 1, 1, 1,
                 GridConstraints.ANCHOR_CENTER, GridConstraints.FILL_BOTH,
-                GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_CAN_GROW,
-                GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_CAN_GROW,
-                null, new Dimension(520, 160), null, 0, false));
+                GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_CAN_GROW | GridConstraints.SIZEPOLICY_WANT_GROW,
+                GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_CAN_GROW | GridConstraints.SIZEPOLICY_WANT_GROW,
+                new Dimension(180, 120), new Dimension(320, 160), null, 0, false));
 
-        JPanel pnlSalesBtns = new JPanel(new GridLayoutManager(1, 3, new Insets(4, 0, 0, 0), 8, 0));
+        pnlMerchantSalesActions = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 4));
         btnViewMerchantReceipt = new JButton("View Merchant Receipt");
         btnViewMerchantReceipt.setEnabled(false);
         btnRefreshSales = new JButton("Refresh Sales");
-        pnlSalesBtns.add(btnViewMerchantReceipt, new GridConstraints(0, 0, 1, 1,
-                GridConstraints.ANCHOR_CENTER, GridConstraints.FILL_HORIZONTAL,
-                GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_CAN_GROW,
-                GridConstraints.SIZEPOLICY_FIXED, null, null, null, 0, false));
-        pnlSalesBtns.add(btnRefreshSales, new GridConstraints(0, 1, 1, 1,
-                GridConstraints.ANCHOR_CENTER, GridConstraints.FILL_HORIZONTAL,
-                GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_CAN_GROW,
-                GridConstraints.SIZEPOLICY_FIXED, null, null, null, 0, false));
-        pnlSalesBtns.add(new Spacer(), new GridConstraints(0, 2, 1, 1,
-                GridConstraints.ANCHOR_CENTER, GridConstraints.FILL_HORIZONTAL,
-                GridConstraints.SIZEPOLICY_WANT_GROW, GridConstraints.SIZEPOLICY_FIXED,
-                null, null, null, 0, false));
-        pnlMerchantTab.add(pnlSalesBtns, new GridConstraints(4, 1, 1, 1,
+        pnlMerchantSalesActions.add(btnViewMerchantReceipt);
+        pnlMerchantSalesActions.add(btnRefreshSales);
+        pnlMerchantTab.add(pnlMerchantSalesActions, new GridConstraints(4, 1, 1, 1,
                 GridConstraints.ANCHOR_WEST, GridConstraints.FILL_HORIZONTAL,
-                GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_CAN_GROW,
+                GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_CAN_GROW | GridConstraints.SIZEPOLICY_WANT_GROW,
                 GridConstraints.SIZEPOLICY_FIXED, null, null, null, 0, false));
 
         lblMerchantFeedback = new JLabel(" ");
         pnlMerchantTab.add(lblMerchantFeedback, new GridConstraints(5, 0, 1, 2,
                 GridConstraints.ANCHOR_WEST, GridConstraints.FILL_HORIZONTAL,
-                GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_CAN_GROW,
+                GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_CAN_GROW | GridConstraints.SIZEPOLICY_WANT_GROW,
                 GridConstraints.SIZEPOLICY_FIXED, null, null, null, 0, false));
     }
 

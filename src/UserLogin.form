@@ -37,7 +37,7 @@
           </component>
           <component id="usernameTextField" class="javax.swing.JTextField" binding="textFieldUsername">
             <constraints>
-              <grid row="1" column="1" row-span="1" col-span="1" vsize-policy="0" hsize-policy="6" anchor="8" fill="1" indent="0" use-parent-layout="false">
+              <grid row="1" column="1" row-span="1" col-span="1" vsize-policy="0" hsize-policy="7" anchor="8" fill="1" indent="0" use-parent-layout="false">
                 <preferred-size width="260" height="-1"/>
               </grid>
             </constraints>
@@ -53,7 +53,7 @@
           </component>
           <component id="passwordTextField" class="javax.swing.JPasswordField" binding="passwordFieldPasswordInput">
             <constraints>
-              <grid row="2" column="1" row-span="1" col-span="1" vsize-policy="0" hsize-policy="6" anchor="8" fill="1" indent="0" use-parent-layout="false">
+              <grid row="2" column="1" row-span="1" col-span="1" vsize-policy="0" hsize-policy="7" anchor="8" fill="1" indent="0" use-parent-layout="false">
                 <preferred-size width="260" height="-1"/>
               </grid>
             </constraints>
@@ -91,9 +91,10 @@
         <children>
           <component id="bd7cb" class="javax.swing.JLabel" binding="twoFactorHeaderLabel">
             <constraints>
-              <grid row="0" column="0" row-span="1" col-span="2" vsize-policy="0" hsize-policy="0" anchor="0" fill="0" indent="0" use-parent-layout="false"/>
+              <grid row="0" column="0" row-span="1" col-span="2" vsize-policy="0" hsize-policy="7" anchor="0" fill="1" indent="0" use-parent-layout="false"/>
             </constraints>
             <properties>
+              <horizontalAlignment value="0"/>
               <text value="Login Successful! Complete Two-Factor Authentication (Simulated SMS):"/>
             </properties>
           </component>
@@ -107,7 +108,7 @@
           </component>
           <component id="2faTextField" class="javax.swing.JTextField" binding="textField2FA">
             <constraints>
-              <grid row="1" column="1" row-span="1" col-span="1" vsize-policy="0" hsize-policy="6" anchor="8" fill="1" indent="0" use-parent-layout="false"/>
+              <grid row="1" column="1" row-span="1" col-span="1" vsize-policy="0" hsize-policy="7" anchor="8" fill="1" indent="0" use-parent-layout="false"/>
             </constraints>
             <properties/>
           </component>

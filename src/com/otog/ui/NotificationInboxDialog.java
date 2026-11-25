@@ -2,11 +2,11 @@ package com.otog.ui;
 
 import com.intellij.uiDesigner.core.GridConstraints;
 import com.intellij.uiDesigner.core.GridLayoutManager;
-import com.intellij.uiDesigner.core.Spacer;
 import com.otog.model.Notification;
 import com.otog.service.SessionManager;
 import com.otog.service.WalletOperations;
 import com.otog.util.OtogConfig;
+import com.otog.util.SwingUiSupport;
 import com.otog.util.UiTheme;
 
 import javax.swing.*;
@@ -72,8 +72,14 @@ public class NotificationInboxDialog extends JDialog {
     private void initUI() {
         ensureComponentsInitialized();
         setContentPane(pnlRoot);
-        setSize(OtogConfig.getInstance().getUiDimension(
-                "ui.notifications.width", "ui.notifications.height", 720, 480));
+        setResizable(true);
+        SwingUiSupport.applyFlexibleWindowBounds(
+                this,
+                OtogConfig.getInstance().getUiDimension(
+                        "ui.notifications.width", "ui.notifications.height", 720, 480),
+                new Dimension(520, 400),
+                false
+        );
         setLocationRelativeTo(getParent());
         setDefaultCloseOperation(WindowConstants.DISPOSE_ON_CLOSE);
 
@@ -145,6 +151,16 @@ public class NotificationInboxDialog extends JDialog {
             lblInboxFeedback.setFont(UiTheme.font(UiTheme.FontRole.SMALL));
             lblInboxFeedback.setForeground(UiTheme.color(UiTheme.ColorRole.MUTED));
         }
+        UiTheme.styleSecondaryButton(btnRefreshInbox);
+        UiTheme.styleSecondaryButton(btnMarkRead);
+        UiTheme.styleSecondaryButton(btnMarkUnread);
+        UiTheme.styleSecondaryButton(btnMarkAllRead);
+        UiTheme.styleSecondaryButton(btnViewLinkedReceipt);
+        UiTheme.styleSecondaryButton(btnClose);
+        if (pnlActions != null) {
+            SwingUiSupport.applyWrapLayout(pnlActions, FlowLayout.LEFT, 8, 4);
+        }
+        SwingUiSupport.makeShrinkable(lblUnreadSummary, lblInboxFeedback);
     }
 
     public CompletableFuture<List<Notification>> loadNotificationsAsync() {
@@ -447,33 +463,29 @@ public class NotificationInboxDialog extends JDialog {
         pnlRoot.setLayout(new GridLayoutManager(5, 1, new Insets(12, 14, 12, 14), 8, 8));
 
         pnlTopBar = new JPanel();
-        pnlTopBar.setLayout(new GridLayoutManager(1, 4, new Insets(0, 0, 4, 0), 8, 0));
+        pnlTopBar.setLayout(new GridLayoutManager(1, 3, new Insets(0, 0, 4, 0), 8, 0));
         pnlRoot.add(pnlTopBar, new GridConstraints(0, 0, 1, 1,
                 GridConstraints.ANCHOR_CENTER, GridConstraints.FILL_BOTH,
-                GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_CAN_GROW,
+                GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_CAN_GROW | GridConstraints.SIZEPOLICY_WANT_GROW,
                 GridConstraints.SIZEPOLICY_FIXED,
                 null, null, null, 0, false));
 
         lblUnreadSummary = new JLabel("Unread notifications: 0");
         lblUnreadSummary.setFont(UiTheme.font(UiTheme.FontRole.SECTION_HEADER));
         pnlTopBar.add(lblUnreadSummary, new GridConstraints(0, 0, 1, 1,
-                GridConstraints.ANCHOR_WEST, GridConstraints.FILL_NONE,
-                GridConstraints.SIZEPOLICY_FIXED, GridConstraints.SIZEPOLICY_FIXED,
-                null, null, null, 0, false));
-
-        pnlTopBar.add(new Spacer(), new GridConstraints(0, 1, 1, 1,
-                GridConstraints.ANCHOR_CENTER, GridConstraints.FILL_HORIZONTAL,
-                GridConstraints.SIZEPOLICY_WANT_GROW, 1,
+                GridConstraints.ANCHOR_WEST, GridConstraints.FILL_HORIZONTAL,
+                GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_CAN_GROW | GridConstraints.SIZEPOLICY_WANT_GROW,
+                GridConstraints.SIZEPOLICY_FIXED,
                 null, null, null, 0, false));
 
         chkUnreadOnly = new JCheckBox("Unread Only");
-        pnlTopBar.add(chkUnreadOnly, new GridConstraints(0, 2, 1, 1,
+        pnlTopBar.add(chkUnreadOnly, new GridConstraints(0, 1, 1, 1,
                 GridConstraints.ANCHOR_EAST, GridConstraints.FILL_NONE,
                 GridConstraints.SIZEPOLICY_FIXED, GridConstraints.SIZEPOLICY_FIXED,
                 null, null, null, 0, false));
 
         btnRefreshInbox = new JButton("Refresh");
-        pnlTopBar.add(btnRefreshInbox, new GridConstraints(0, 3, 1, 1,
+        pnlTopBar.add(btnRefreshInbox, new GridConstraints(0, 2, 1, 1,
                 GridConstraints.ANCHOR_EAST, GridConstraints.FILL_NONE,
                 GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_CAN_GROW,
                 GridConstraints.SIZEPOLICY_FIXED,
@@ -496,7 +508,7 @@ public class NotificationInboxDialog extends JDialog {
                 GridConstraints.ANCHOR_CENTER, GridConstraints.FILL_BOTH,
                 GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_WANT_GROW,
                 GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_WANT_GROW,
-                null, new Dimension(680, 210), null, 0, false));
+                new Dimension(200, 110), new Dimension(480, 200), null, 0, false));
 
         txtNotificationDetail = new JTextArea(5, 60);
         txtNotificationDetail.setEditable(false);
@@ -510,65 +522,41 @@ public class NotificationInboxDialog extends JDialog {
                 GridConstraints.ANCHOR_CENTER, GridConstraints.FILL_BOTH,
                 GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_WANT_GROW,
                 GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_CAN_GROW,
-                null, new Dimension(680, 110), null, 0, false));
+                new Dimension(200, 80), new Dimension(480, 105), null, 0, false));
 
         pnlActions = new JPanel();
-        pnlActions.setLayout(new GridLayoutManager(1, 6, new Insets(2, 0, 0, 0), 8, 0));
+        pnlActions.setLayout(new FlowLayout(FlowLayout.LEFT, 8, 4));
         pnlRoot.add(pnlActions, new GridConstraints(3, 0, 1, 1,
                 GridConstraints.ANCHOR_CENTER, GridConstraints.FILL_BOTH,
-                GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_CAN_GROW,
+                GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_CAN_GROW | GridConstraints.SIZEPOLICY_WANT_GROW,
                 GridConstraints.SIZEPOLICY_FIXED,
                 null, null, null, 0, false));
 
         btnMarkRead = new JButton("Mark Read");
         btnMarkRead.setEnabled(false);
-        pnlActions.add(btnMarkRead, new GridConstraints(0, 0, 1, 1,
-                GridConstraints.ANCHOR_CENTER, GridConstraints.FILL_HORIZONTAL,
-                GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_CAN_GROW,
-                GridConstraints.SIZEPOLICY_FIXED,
-                null, null, null, 0, false));
+        pnlActions.add(btnMarkRead);
 
         btnMarkUnread = new JButton("Mark Unread");
         btnMarkUnread.setEnabled(false);
-        pnlActions.add(btnMarkUnread, new GridConstraints(0, 1, 1, 1,
-                GridConstraints.ANCHOR_CENTER, GridConstraints.FILL_HORIZONTAL,
-                GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_CAN_GROW,
-                GridConstraints.SIZEPOLICY_FIXED,
-                null, null, null, 0, false));
+        pnlActions.add(btnMarkUnread);
 
         btnMarkAllRead = new JButton("Mark All Read");
-        pnlActions.add(btnMarkAllRead, new GridConstraints(0, 2, 1, 1,
-                GridConstraints.ANCHOR_CENTER, GridConstraints.FILL_HORIZONTAL,
-                GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_CAN_GROW,
-                GridConstraints.SIZEPOLICY_FIXED,
-                null, null, null, 0, false));
+        pnlActions.add(btnMarkAllRead);
 
         btnViewLinkedReceipt = new JButton("View Receipt");
         btnViewLinkedReceipt.setEnabled(false);
-        pnlActions.add(btnViewLinkedReceipt, new GridConstraints(0, 3, 1, 1,
-                GridConstraints.ANCHOR_CENTER, GridConstraints.FILL_HORIZONTAL,
-                GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_CAN_GROW,
-                GridConstraints.SIZEPOLICY_FIXED,
-                null, null, null, 0, false));
-
-        pnlActions.add(new Spacer(), new GridConstraints(0, 4, 1, 1,
-                GridConstraints.ANCHOR_CENTER, GridConstraints.FILL_HORIZONTAL,
-                GridConstraints.SIZEPOLICY_WANT_GROW, 1,
-                null, null, null, 0, false));
+        pnlActions.add(btnViewLinkedReceipt);
 
         btnClose = new JButton("Close");
-        pnlActions.add(btnClose, new GridConstraints(0, 5, 1, 1,
-                GridConstraints.ANCHOR_CENTER, GridConstraints.FILL_HORIZONTAL,
-                GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_CAN_GROW,
-                GridConstraints.SIZEPOLICY_FIXED,
-                null, null, null, 0, false));
+        pnlActions.add(btnClose);
 
         lblInboxFeedback = new JLabel(" ");
         lblInboxFeedback.setFont(UiTheme.font(UiTheme.FontRole.SMALL));
         lblInboxFeedback.setForeground(UiTheme.color(UiTheme.ColorRole.MUTED));
         pnlRoot.add(lblInboxFeedback, new GridConstraints(4, 0, 1, 1,
-                GridConstraints.ANCHOR_WEST, GridConstraints.FILL_NONE,
-                GridConstraints.SIZEPOLICY_FIXED, GridConstraints.SIZEPOLICY_FIXED,
+                GridConstraints.ANCHOR_WEST, GridConstraints.FILL_HORIZONTAL,
+                GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_CAN_GROW | GridConstraints.SIZEPOLICY_WANT_GROW,
+                GridConstraints.SIZEPOLICY_FIXED,
                 null, null, null, 0, false));
     }
 
