@@ -285,6 +285,14 @@ public class ProtectedWalletOperationsProxy implements WalletOperations, Investm
     }
 
     @Override
+    public MerchantQrService createMerchantQrService(AuthService authService) {
+        if (delegate instanceof WalletService ws) {
+            return new MerchantQrService(this, ws.getUserRepository(), authService);
+        }
+        return delegate.createMerchantQrService(authService);
+    }
+
+    @Override
     public SimulatedProduct getSeededProduct() {
         return requireInvestmentDelegate().getSeededProduct();
     }

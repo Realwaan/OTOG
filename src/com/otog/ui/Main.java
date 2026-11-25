@@ -7,6 +7,7 @@ import com.otog.database.DatabaseManager;
 import com.otog.exception.WalletException;
 import com.otog.model.BillPaymentTransaction;
 import com.otog.model.CashInOutTransaction;
+import com.otog.model.CompositeFeePolicy;
 import com.otog.model.InvestMoneyTransaction;
 import com.otog.model.PaymentMethod;
 import com.otog.model.PaymentMethodStatus;
@@ -30,6 +31,7 @@ import com.otog.service.SessionManager;
 import com.otog.service.StatementFileService;
 import com.otog.service.WalletOperations;
 import com.otog.service.WalletService;
+import com.otog.service.MerchantQrService;
 import com.otog.util.IdGenerator;
 import com.otog.util.MoneyUtil;
 import com.otog.util.OtogConfig;
@@ -110,6 +112,7 @@ public class Main extends JFrame {
     private OverviewPanel overviewPanel;
     private CashInOutPanel cashInOutPanel;
     private SendMoneyPanel sendMoneyPanel;
+    private MerchantQrPanel merchantQrPanel;
     private InvestmentPanel investmentPanel;
     private AdminControlsPanel adminControlsPanel;
     private final StatementFileService statementFileService = new StatementFileService();
@@ -311,6 +314,11 @@ public class Main extends JFrame {
         cashInOutPanel = new CashInOutPanel(walletService.getCurrentProviderMode());
         sendMoneyPanel = new SendMoneyPanel();
         payBillsPanel = new PayBillsPanel(walletService, authService);
+        MerchantQrService merchantQrService = walletService.createMerchantQrService(authService);
+        merchantQrPanel = new MerchantQrPanel(merchantQrService, walletService, authService,
+                () -> navigateToTab("Overview"),
+                this::refreshDashboardAsync);
+        wireMerchantQrPanel();
 
         wireOverviewPanel();
         wireCashInOutPanel();
@@ -321,6 +329,7 @@ public class Main extends JFrame {
         registerTab("Cash In / Out", cashInOutPanel);
         registerTab("Send Money", sendMoneyPanel);
         registerTab("Pay Bills", payBillsPanel);
+        registerTab("Merchant QR", merchantQrPanel);
 
         // Hide unfinished modules unless an implementation is explicitly provided
         if (loanService != null) {
@@ -349,6 +358,22 @@ public class Main extends JFrame {
         // Record every tab switch (manual click or programmatic) on the LIFO back-stack.
         tabs.addChangeListener(e -> onTabSelectionChanged());
         return tabs;
+    }
+
+    private void wireMerchantQrPanel() {
+        if (merchantQrPanel == null) {
+            return;
+        }
+        merchantQrPanel.setBeforeInteractiveSubmit(this::ensureActiveSessionForInteraction);
+        merchantQrPanel.setPinConfiguredSupplier(() -> cachedHasPin);
+        merchantQrPanel.setOnPinNotSet(() ->
+                promptPinSetupIfMissing("A Transaction PIN is required before paying via Merchant QR."));
+        merchantQrPanel.setOffEdtObserver(offEdt -> lastPaymentExecutedOffEdt = offEdt);
+        merchantQrPanel.setOnPaymentError(err -> {
+            String msg = extractErrorMessage(err);
+            lblStatus.setText("Merchant QR error: " + msg);
+            checkSessionTerminatedOnError(msg);
+        });
     }
 
     private void wireOverviewPanel() {
@@ -415,6 +440,11 @@ public class Main extends JFrame {
                     txtInvestUnits.requestFocusInWindow();
                 }
             });
+        }
+
+        JButton btnNavMerchantQr = overviewPanel.getNavMerchantQrButton();
+        if (btnNavMerchantQr != null) {
+            btnNavMerchantQr.addActionListener(e -> navigateToTab("Merchant QR"));
         }
 
         btnNavPinSettings.setEnabled(authService != null);
@@ -737,7 +767,7 @@ public class Main extends JFrame {
         }
         boolean pinVerified = SessionManager.getInstance().isPinVerified();
         if (!hasPin) {
-            lblPinStatus.setText("Transaction PIN: Not Set (required for Cash Out, Send Money, Pay Bills & Investments)");
+            lblPinStatus.setText("Transaction PIN: Not Set (required for Cash Out, Send Money, Pay Bills, Merchant QR & Investments)");
             lblPinStatus.setForeground(UiTheme.color(UiTheme.ColorRole.WARNING));
             if (btnPinSettings != null) {
                 btnPinSettings.setText("Set PIN");
@@ -819,6 +849,10 @@ public class Main extends JFrame {
                     if (investmentPanel != null) {
                         investmentPanel.updateProductAndHoldings(snapshot.investProduct, snapshot.investHolding);
                         investmentPanel.updateActivityTable(snapshot.investActivities);
+                    }
+                    if (merchantQrPanel != null) {
+                        merchantQrPanel.applyRoleAccessControl();
+                        merchantQrPanel.refreshMerchantSalesIfAuthorized();
                     }
                     boolean filtered = activeHistoryFilter != null && !activeHistoryFilter.isEmpty();
                     if (snapshot.transactions.isEmpty()) {
@@ -1070,9 +1104,13 @@ public class Main extends JFrame {
         }
 
         txtCashPin.setText("");
+        String selectedPmId = getSelectedPaymentMethodId();
+        String selectedSourceLabel = (selectedPmId != null && cmbPaymentMethod != null && cmbPaymentMethod.getSelectedItem() != null)
+                ? cmbPaymentMethod.getSelectedItem().toString()
+                : (channel != null ? channel : "OTOG Partner");
         StringBuilder confirmMsg = new StringBuilder();
         confirmMsg.append("Operation: ").append(opLabel).append("\n");
-        confirmMsg.append("Channel: ").append(channel != null ? channel : "OTOG Partner").append("\n");
+        confirmMsg.append(selectedPmId != null ? "Bank Account: " : "Channel: ").append(selectedSourceLabel).append("\n");
         confirmMsg.append("Amount: ").append(MoneyUtil.format(parsedAmount, config.getDefaultCurrency()));
         if (!note.isEmpty()) {
             confirmMsg.append("\nNote: ").append(note);
@@ -1090,21 +1128,41 @@ public class Main extends JFrame {
             return;
         }
 
-        submitCashOperationAsync(op, channel, amountText, note, pin).whenComplete((txn, err) -> runOnEdt(() -> {
+        submitCashOperationAsync(op, channel, selectedPmId, amountText, note, pin).whenComplete((txn, err) -> runOnEdt(() -> {
             if (err != null) {
                 if (!logoutHandled) {
                     Throwable cause = unwrapCause(err);
                     showDialogMessage(this, opLabel + " Failed", extractErrorMessage(cause), JOptionPane.ERROR_MESSAGE);
                 }
             } else if (txn != null) {
-                showDialogMessage(
-                        this,
-                        opLabel + " Complete",
-                        opLabel + " successful!\nAmount: "
-                                + MoneyUtil.format(txn.getAmount(), txn.getCurrency())
-                                + "\nReference: " + txn.getReferenceNumber(),
-                        JOptionPane.INFORMATION_MESSAGE
-                );
+                if (txn.getStatus() == TransactionStatus.COMPLETED) {
+                    showDialogMessage(
+                            this,
+                            opLabel + " Complete",
+                            opLabel + " successful!\nAmount: "
+                                    + MoneyUtil.format(txn.getAmount(), txn.getCurrency())
+                                    + "\nReference: " + txn.getReferenceNumber(),
+                            JOptionPane.INFORMATION_MESSAGE
+                    );
+                } else if (txn.getStatus() == TransactionStatus.FAILED) {
+                    showDialogMessage(
+                            this,
+                            opLabel + " Failed",
+                            opLabel + " was rejected by the bank provider.\nAmount: "
+                                    + MoneyUtil.format(txn.getAmount(), txn.getCurrency())
+                                    + "\nReference: " + txn.getReferenceNumber(),
+                            JOptionPane.ERROR_MESSAGE
+                    );
+                } else {
+                    showDialogMessage(
+                            this,
+                            opLabel + " Pending Settlement",
+                            opLabel + " is pending bank confirmation.\nUse 'Lookup Status' on Overview to check settlement.\nAmount: "
+                                    + MoneyUtil.format(txn.getAmount(), txn.getCurrency())
+                                    + "\nReference: " + txn.getReferenceNumber(),
+                            JOptionPane.WARNING_MESSAGE
+                    );
+                }
             }
         }));
     }
@@ -1376,6 +1434,7 @@ public class Main extends JFrame {
                     throw new IllegalArgumentException("Recipient identifier is required.");
                 }
                 BigDecimal amount = MoneyUtil.validatePositiveAmount(MoneyUtil.parse(amountText));
+                BigDecimal fee = CompositeFeePolicy.fromConfig().calculate(amount);
                 String ref = (explicitReference != null && !explicitReference.trim().isEmpty())
                         ? explicitReference.trim()
                         : IdGenerator.nextReferenceNumber();
@@ -1384,13 +1443,13 @@ public class Main extends JFrame {
                     if (authService != null && user != null) {
                         verifyPinOrThrow(user.getUserId(), cleanPin);
                         return walletService.sendMoneyToRecipient(
-                                ref, wallet.getWalletId(), recipient.trim(), amount, MoneyUtil.ZERO, note);
+                                ref, wallet.getWalletId(), recipient.trim(), amount, fee, note);
                     }
                     return walletService.sendMoneyToRecipientWithPin(
-                            ref, wallet.getWalletId(), recipient.trim(), amount, MoneyUtil.ZERO, note, cleanPin);
+                            ref, wallet.getWalletId(), recipient.trim(), amount, fee, note, cleanPin);
                 }
                 return walletService.sendMoneyToRecipient(
-                        ref, wallet.getWalletId(), recipient.trim(), amount, MoneyUtil.ZERO, note);
+                        ref, wallet.getWalletId(), recipient.trim(), amount, fee, note);
             }
 
             @Override
@@ -2810,6 +2869,10 @@ public class Main extends JFrame {
 
     public AdminControlsPanel getAdminControlsPanel() {
         return adminControlsPanel;
+    }
+
+    public MerchantQrPanel getMerchantQrPanel() {
+        return merchantQrPanel;
     }
 
     public JButton getExportStatementButton() {
