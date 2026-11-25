@@ -8,7 +8,10 @@ import com.otog.exception.InvalidAmountException;
 import com.otog.exception.MalformedQrException;
 import com.otog.exception.WalletException;
 import com.otog.model.MerchantQrPayload;
+import com.otog.model.Notification;
+import com.otog.model.NotificationType;
 import com.otog.model.ReceiptBuilder;
+import com.otog.model.SendMoneyTransaction;
 import com.otog.model.Transaction;
 import com.otog.model.TransactionStatus;
 import com.otog.model.User;
@@ -21,9 +24,13 @@ import com.otog.repository.WalletRepository;
 import com.otog.service.AuthServiceImpl;
 import com.otog.service.MerchantQrService;
 import com.otog.service.MerchantQrService.MerchantPaymentPreview;
+import com.otog.service.ProtectedWalletOperationsProxy;
 import com.otog.service.SessionManager;
+import com.otog.service.StatementFileService;
+import com.otog.service.WalletOperations;
 import com.otog.service.WalletService;
-import com.otog.util.IdGenerator;
+import com.otog.ui.Main;
+import com.otog.ui.MerchantQrPanel;
 import com.otog.util.OtogConfig;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -31,16 +38,25 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
 import javax.imageio.ImageIO;
-import java.awt.Color;
-import java.awt.Graphics2D;
+import javax.swing.SwingUtilities;
 import java.awt.image.BufferedImage;
-import java.io.File;
 import java.io.IOException;
 import java.math.BigDecimal;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
+import java.util.concurrent.Callable;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.zip.CRC32;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -586,5 +602,550 @@ public class MerchantQrPaymentTest {
         // Enter incorrect PIN "9999" (customer PIN is "1234")
         assertThrows(WalletException.class, () ->
                 merchantQrService.confirmAndPay(preview, "9999"));
+    }
+
+    // --- 7. Delimiter Escaping, Strict Grammar & Image Bounds ---
+
+    @Test
+    void testDelimiterEscapingRoundTripAndStrictPayloadRejections(@TempDir Path tempDir) {
+        MerchantQrPayload specialPayload = new MerchantQrPayload(
+                seededMerchant.getUserId(),
+                seededMerchantWallet.getWalletId(),
+                "Cafe | Bean = 100%",
+                new BigDecimal("125.00"),
+                "PHP",
+                "REF-DELIM-01",
+                "Coffee | Large = Extra 50%"
+        );
+
+        Path qrFile = tempDir.resolve("delim_qr.png");
+        merchantQrService.exportQrImage(specialPayload, qrFile);
+        MerchantQrPayload imported = merchantQrService.importQrImage(qrFile);
+        assertEquals("Cafe | Bean = 100%", imported.getMerchantName());
+        assertEquals("Coffee | Large = Extra 50%", imported.getNote());
+        assertEquals(0, new BigDecimal("125.00").compareTo(imported.getAmount()));
+
+        String validEncoded = specialPayload.encode();
+        // Trailing garbage or unknown key must be rejected
+        assertThrows(MalformedQrException.class,
+                () -> MerchantQrPayload.parse(validEncoded + "|garbage|evil=injected"));
+
+        // Unknown key even with recalculated valid CRC must be rejected
+        String withUnknownKey = buildSignedPayload(
+                "mid=" + seededMerchant.getUserId()
+                        + "|mwid=" + seededMerchantWallet.getWalletId()
+                        + "|name=Store|amt=50.00|curr=PHP|ref=REF-UNK-1|evil=1");
+        assertThrows(MalformedQrException.class, () -> MerchantQrPayload.parse(withUnknownKey));
+
+        // Duplicate key even with valid CRC must be rejected
+        String withDupKey = buildSignedPayload(
+                "mid=" + seededMerchant.getUserId()
+                        + "|mwid=" + seededMerchantWallet.getWalletId()
+                        + "|name=Store|amt=50.00|amt=60.00|curr=PHP|ref=REF-DUPK-1");
+        assertThrows(MalformedQrException.class, () -> MerchantQrPayload.parse(withDupKey));
+
+        // Missing curr even with valid CRC must be rejected
+        String missingCurr = buildSignedPayload(
+                "mid=" + seededMerchant.getUserId()
+                        + "|mwid=" + seededMerchantWallet.getWalletId()
+                        + "|name=Store|amt=50.00|ref=REF-NOCURR-1");
+        assertThrows(MalformedQrException.class, () -> MerchantQrPayload.parse(missingCurr));
+
+        // Missing name even with valid CRC must be rejected
+        String missingName = buildSignedPayload(
+                "mid=" + seededMerchant.getUserId()
+                        + "|mwid=" + seededMerchantWallet.getWalletId()
+                        + "|amt=50.00|curr=PHP|ref=REF-NONAME-1");
+        assertThrows(MalformedQrException.class, () -> MerchantQrPayload.parse(missingName));
+
+        // Over-precision amount (scale > 2) even with valid CRC must be rejected
+        String overScale = buildSignedPayload(
+                "mid=" + seededMerchant.getUserId()
+                        + "|mwid=" + seededMerchantWallet.getWalletId()
+                        + "|name=Store|amt=100.004|curr=PHP|ref=REF-SCALE-2");
+        assertThrows(MalformedQrException.class, () -> MerchantQrPayload.parse(overScale));
+    }
+
+    @Test
+    void testSmallCraftedPngAndOversizedPayloadRejectedCleanly(@TempDir Path tempDir) throws IOException {
+        // Craft a 20x20 PNG (400 pixels) declaring OTOGQR + len=500 -> must throw MalformedQrException, not AIOOBE
+        BufferedImage small = new BufferedImage(20, 20, BufferedImage.TYPE_INT_RGB);
+        byte[] headerAndLen = new byte[]{'O', 'T', 'O', 'G', 'Q', 'R', 0x00, 0x00, 0x01, (byte) 0xF4};
+        for (int i = 0; i < headerAndLen.length; i++) {
+            int x = i % small.getWidth();
+            int y = (small.getHeight() - 1) - (i / small.getWidth());
+            int v = headerAndLen[i] & 0xFF;
+            small.setRGB(x, y, (0xFF << 24) | (v << 16) | (v << 8) | v);
+        }
+        Path smallFile = tempDir.resolve("crafted_small.png");
+        ImageIO.write(small, "PNG", smallFile.toFile());
+        assertThrows(MalformedQrException.class, () -> merchantQrService.importQrImage(smallFile));
+
+        // Oversized payload > MAX_PAYLOAD_BYTES rejected consistently on creation
+        String hugeNote = "A".repeat(MerchantQrPayload.MAX_PAYLOAD_BYTES + 200);
+        assertThrows(MalformedQrException.class, () -> new MerchantQrPayload(
+                seededMerchant.getUserId(),
+                seededMerchantWallet.getWalletId(),
+                seededMerchant.getName(),
+                new BigDecimal("10.00"),
+                "PHP",
+                "REF-HUGE-01",
+                hugeNote
+        ));
+    }
+
+    // --- 8. Customer Status, Wallet Currency, Fixed-Amount Conflict, Duplicate Preview & Padded PIN ---
+
+    @Test
+    void testCustomerStatusCurrencyFixedAmountConflictDuplicatePreviewAndTrimmedPin() {
+        MerchantQrPayload fixedPayload = new MerchantQrPayload(
+                seededMerchant.getUserId(),
+                seededMerchantWallet.getWalletId(),
+                seededMerchant.getName(),
+                new BigDecimal("100.00"),
+                "PHP",
+                "REF-VAL-01",
+                "Validated order"
+        );
+
+        // Conflicting inputAmount on fixed QR must be rejected
+        assertThrows(InvalidAmountException.class, () ->
+                merchantQrService.previewPayment(customer.getUserId(), fixedPayload, new BigDecimal("50.00")));
+        assertThrows(InvalidAmountException.class, () ->
+                merchantQrService.previewPayment(customer.getUserId(), fixedPayload, new BigDecimal("-10.00")));
+
+        // Padded PIN " 1234 " succeeds cleanly
+        MerchantPaymentPreview preview = merchantQrService.previewPayment(
+                customer.getUserId(), fixedPayload, new BigDecimal("100.00"));
+        String confirmText = preview.toConfirmationText();
+        assertFalse(confirmText.contains(seededMerchant.getUserId()),
+                "Confirmation preview must mask raw merchant user ID");
+        Transaction settled = merchantQrService.confirmAndPay(preview, " 1234 ");
+        assertEquals(TransactionStatus.COMPLETED, settled.getStatus());
+
+        // Duplicate pre-check rejects already-settled QR BEFORE PIN entry
+        assertThrows(DuplicateTransactionException.class, () ->
+                merchantQrService.previewPayment(customer.getUserId(), fixedPayload, null));
+
+        // Customer wallet currency mismatch rejected
+        User usdUser = authService.registerUser("USD Customer", "09173334455", "usd@otog.ph", "Pass1234");
+        Wallet usdWallet = walletService.getWalletByUserId(usdUser.getUserId());
+        databaseManager.executeInTransaction(conn -> {
+            usdWallet.setCurrency("USD");
+            walletRepository.update(usdWallet, conn);
+            return null;
+        });
+        MerchantQrPayload phpPayload = new MerchantQrPayload(
+                seededMerchant.getUserId(), seededMerchantWallet.getWalletId(), seededMerchant.getName(),
+                new BigDecimal("25.00"), "PHP", "REF-CURR-01", "Order");
+        WalletException currEx = assertThrows(WalletException.class, () ->
+                merchantQrService.previewPayment(usdUser.getUserId(), phpPayload, null));
+        assertTrue(currEx.getMessage().contains("Currency mismatch"));
+
+        // LOCKED customer account rejected even with ACTIVE wallet
+        databaseManager.executeInTransaction(conn -> {
+            userRepository.updateStatus(customer.getUserId(), UserStatus.LOCKED, conn);
+            return null;
+        });
+        MerchantQrPayload lockPayload = new MerchantQrPayload(
+                seededMerchant.getUserId(), seededMerchantWallet.getWalletId(), seededMerchant.getName(),
+                new BigDecimal("25.00"), "PHP", "REF-LOCK-01", "Order");
+        WalletException lockEx = assertThrows(WalletException.class, () ->
+                merchantQrService.previewPayment(customer.getUserId(), lockPayload, null));
+        assertTrue(lockEx.getMessage().contains("not active") || lockEx.getMessage().contains("LOCKED"));
+    }
+
+    // --- 9. ReceiptBuilder Fee Formula, QR Counterparty & Cached Image Export ---
+
+    @Test
+    void testReceiptBuilderNetCreditedWithFeeAndWalletServiceQrReceipt(@TempDir Path tempDir) {
+        SendMoneyTransaction feeTxn = new SendMoneyTransaction(
+                "TXN-QR-FEE", "REQ-QR-FEE01", customerWallet.getWalletId(), seededMerchantWallet.getWalletId(),
+                new BigDecimal("100.00"), new BigDecimal("5.00"),
+                seededMerchantWallet.getWalletId(), "QR Pay: OTOG Merchant Store - Order");
+        feeTxn.setStatus(TransactionStatus.COMPLETED);
+
+        String merchantReceipt = ReceiptBuilder.forMerchantPayment(
+                feeTxn, "OTOG Merchant Store", "FEE01", true).build();
+        assertTrue(merchantReceipt.contains("Net Credited"), "Merchant receipt must show Net Credited");
+        assertTrue(merchantReceipt.contains("PHP 100.00"), "Net Credited must equal amount (100.00), not total (105.00)");
+        assertFalse(merchantReceipt.contains("PHP 105.00"), "Merchant Net Credited must not include customer fee");
+
+        String customerReceipt = ReceiptBuilder.forMerchantPayment(
+                feeTxn, "OTOG Merchant Store", "FEE01", false).build();
+        assertTrue(customerReceipt.contains("Total Paid"));
+        assertTrue(customerReceipt.contains("PHP 105.00"));
+
+        // QR counterparty branch is reachable even for SendMoneyTransaction
+        String genericReceipt = feeTxn.getReceipt(customerWallet.getWalletId(), null);
+        assertTrue(genericReceipt.contains("Counterparty") && genericReceipt.contains("OTOG Merchant Store"),
+                "QR Pay description must populate merchant counterparty before generic SendMoney fallback");
+
+        // Real settled QR payment returns merchant-formatted receipt via WalletService.getTransactionReceipt
+        MerchantQrPayload payload = new MerchantQrPayload(
+                seededMerchant.getUserId(), seededMerchantWallet.getWalletId(), seededMerchant.getName(),
+                new BigDecimal("88.50"), "PHP", "REF-WSREC-01", "Pastry");
+        BufferedImage rendered = merchantQrService.generateQrImage(payload);
+        Path exportedCached = tempDir.resolve("cached_export.png");
+        merchantQrService.exportQrImage(rendered, exportedCached);
+        assertEquals("REF-WSREC-01", merchantQrService.importQrImage(exportedCached).getQrReference());
+
+        MerchantPaymentPreview preview = merchantQrService.previewPayment(customer.getUserId(), payload, null);
+        Transaction txn = merchantQrService.confirmAndPay(preview, "1234");
+        String wsMerchantRec = walletService.getTransactionReceipt(seededMerchantWallet.getWalletId(), txn.getReferenceNumber());
+        assertTrue(wsMerchantRec.contains("OTOG MERCHANT PAYMENT RECEIPT"));
+        assertTrue(wsMerchantRec.contains("REF-WSREC-01"));
+        String wsCustomerRec = walletService.getTransactionReceipt(customerWallet.getWalletId(), txn.getReferenceNumber());
+        assertTrue(wsCustomerRec.contains("OTOG MERCHANT PURCHASE RECEIPT"));
+    }
+
+    // --- 10. Concurrency (Duplicate QR Race & Balance Race) ---
+
+    @Test
+    void testConcurrentDuplicateQrAndBalanceRaceProtection(@TempDir Path tempDir) throws Exception {
+        Path dbFile = tempDir.resolve("merchant-qr-race.db");
+        DatabaseManager fileDb = new DatabaseManager("jdbc:sqlite:" + dbFile.toAbsolutePath());
+        try {
+            AuthServiceImpl raceAuth = new AuthServiceImpl(fileDb);
+            WalletService raceWallet = new WalletService(fileDb, raceAuth);
+            UserRepository raceUsers = new UserRepository(fileDb);
+            MerchantQrService raceQr = new MerchantQrService(raceWallet, raceUsers, raceAuth);
+
+            OtogConfig.MerchantSeedConfig seed = OtogConfig.getInstance().getMerchantSeedConfig();
+            User raceMerchant = raceUsers.findById(seed.userId()).orElseThrow();
+            Wallet raceMerchantWallet = raceWallet.getWallet(seed.walletId());
+            BigDecimal merchantStart = raceMerchantWallet.getBalance();
+
+            User raceCust = raceAuth.registerUser("Race Cust", "09178881122", "race@otog.ph", "RacePass123");
+            Wallet raceCustWallet = raceWallet.getWalletByUserId(raceCust.getUserId());
+            raceWallet.cashIn("REQ-RACE-SEED", raceCustWallet.getWalletId(), null,
+                    new BigDecimal("150.00"), "Seed 150");
+            SessionManager.getInstance().login(raceCust, raceWallet.getWallet(raceCustWallet.getWalletId()));
+            raceAuth.setPin(raceCust.getUserId(), "RacePass123", "1234");
+
+            MerchantQrPayload sameQr = new MerchantQrPayload(
+                    raceMerchant.getUserId(), raceMerchantWallet.getWalletId(), raceMerchant.getName(),
+                    new BigDecimal("100.00"), "PHP", "REF-RACE-SAME", "Race test");
+            MerchantPaymentPreview samePreview = raceQr.previewPayment(raceCust.getUserId(), sameQr, null);
+
+            ExecutorService pool = Executors.newFixedThreadPool(4);
+            try {
+                CountDownLatch startSame = new CountDownLatch(1);
+                List<Callable<Boolean>> sameTasks = new ArrayList<>();
+                AtomicInteger sameSuccess = new AtomicInteger();
+                AtomicInteger sameDup = new AtomicInteger();
+                for (int i = 0; i < 4; i++) {
+                    sameTasks.add(() -> {
+                        startSame.await(5, TimeUnit.SECONDS);
+                        try {
+                            raceQr.confirmAndPay(samePreview, "1234");
+                            sameSuccess.incrementAndGet();
+                            return true;
+                        } catch (DuplicateTransactionException ex) {
+                            sameDup.incrementAndGet();
+                            return false;
+                        }
+                    });
+                }
+                List<Future<Boolean>> sameFutures = new ArrayList<>();
+                for (Callable<Boolean> task : sameTasks) {
+                    sameFutures.add(pool.submit(task));
+                }
+                startSame.countDown();
+                for (Future<Boolean> f : sameFutures) {
+                    f.get(15, TimeUnit.SECONDS);
+                }
+                assertEquals(1, sameSuccess.get(), "Exactly 1 thread may settle a single-use QR");
+                assertEquals(3, sameDup.get(), "3 racing threads must receive DuplicateTransactionException");
+                assertEquals(0, new BigDecimal("50.00").compareTo(raceWallet.getBalance(raceCustWallet.getWalletId())));
+                assertEquals(0, merchantStart.add(new BigDecimal("100.00"))
+                        .compareTo(raceWallet.getBalance(raceMerchantWallet.getWalletId())));
+
+                // Now 4 distinct 50.00 QRs race for the remaining 50.00 balance
+                CountDownLatch startBal = new CountDownLatch(1);
+                AtomicInteger balSuccess = new AtomicInteger();
+                AtomicInteger balInsufficient = new AtomicInteger();
+                List<Future<Boolean>> balFutures = new ArrayList<>();
+                for (int i = 0; i < 4; i++) {
+                    final int idx = i;
+                    MerchantQrPayload p = new MerchantQrPayload(
+                            raceMerchant.getUserId(), raceMerchantWallet.getWalletId(), raceMerchant.getName(),
+                            new BigDecimal("50.00"), "PHP", "REF-RACE-BAL-" + idx, "Balance race " + idx);
+                    MerchantPaymentPreview prev = raceQr.previewPayment(raceCust.getUserId(), p, null);
+                    balFutures.add(pool.submit(() -> {
+                        startBal.await(15, TimeUnit.SECONDS);
+                        try {
+                            raceQr.confirmAndPay(prev, "1234");
+                            balSuccess.incrementAndGet();
+                            return true;
+                        } catch (InsufficientFundsException ex) {
+                            balInsufficient.incrementAndGet();
+                            return false;
+                        }
+                    }));
+                }
+                startBal.countDown();
+                for (Future<Boolean> f : balFutures) {
+                    f.get(15, TimeUnit.SECONDS);
+                }
+                assertEquals(1, balSuccess.get(), "Exactly 1 thread may consume remaining PHP 50.00");
+                assertEquals(3, balInsufficient.get(), "3 racing threads must receive InsufficientFundsException");
+                assertEquals(0, BigDecimal.ZERO.compareTo(raceWallet.getBalance(raceCustWallet.getWalletId())));
+                assertEquals(0, merchantStart.add(new BigDecimal("150.00"))
+                        .compareTo(raceWallet.getBalance(raceMerchantWallet.getWalletId())));
+            } finally {
+                pool.shutdownNow();
+            }
+        } finally {
+            SessionManager.getInstance().reset();
+            fileDb.close();
+        }
+    }
+
+    // --- 11. File-Backed Restart Persistence & CAP-08 Notifications + Statements ---
+
+    @Test
+    void testFileBackedRestartPersistenceAndCap08NotificationsAndStatements(@TempDir Path tempDir) throws Exception {
+        Path dbFile = tempDir.resolve("merchant-qr-restart.db");
+        String jdbcUrl = "jdbc:sqlite:" + dbFile.toAbsolutePath();
+
+        String custUserId;
+        String custWalletId;
+        String merchUserId;
+        String merchWalletId;
+        BigDecimal merchBalanceBefore;
+
+        DatabaseManager db1 = new DatabaseManager(jdbcUrl);
+        try {
+            AuthServiceImpl auth1 = new AuthServiceImpl(db1);
+            WalletService ws1 = new WalletService(db1, auth1);
+            UserRepository ur1 = new UserRepository(db1);
+            MerchantQrService qr1 = new MerchantQrService(ws1, ur1, auth1);
+
+            OtogConfig.MerchantSeedConfig seed = OtogConfig.getInstance().getMerchantSeedConfig();
+            merchUserId = seed.userId();
+            merchWalletId = seed.walletId();
+            merchBalanceBefore = ws1.getBalance(merchWalletId);
+
+            User c = auth1.registerUser("Persist Cust", "09174445566", "persist@otog.ph", "Secret123");
+            custUserId = c.getUserId();
+            Wallet cw = ws1.getWalletByUserId(custUserId);
+            custWalletId = cw.getWalletId();
+            ws1.cashIn("REQ-PERSIST-CI", custWalletId, null, new BigDecimal("600.00"), "Top up");
+            SessionManager.getInstance().login(c, ws1.getWallet(custWalletId));
+            auth1.setPin(custUserId, "Secret123", "2468");
+
+            MerchantQrPayload payload = new MerchantQrPayload(
+                    merchUserId, merchWalletId, seed.username(),
+                    new BigDecimal("125.00"), "PHP", "REF-PERSIST-QR", "Persistent order");
+            MerchantPaymentPreview prev = qr1.previewPayment(custUserId, payload, null);
+            qr1.confirmAndPay(prev, "2468");
+        } finally {
+            SessionManager.getInstance().reset();
+            db1.close();
+        }
+
+        // Reopen database from disk
+        DatabaseManager db2 = new DatabaseManager(jdbcUrl);
+        try {
+            AuthServiceImpl auth2 = new AuthServiceImpl(db2);
+            WalletService ws2 = new WalletService(db2, auth2);
+            UserRepository ur2 = new UserRepository(db2);
+
+            assertEquals(0, new BigDecimal("475.00").compareTo(ws2.getBalance(custWalletId)));
+            assertEquals(0, merchBalanceBefore.add(new BigDecimal("125.00")).compareTo(ws2.getBalance(merchWalletId)));
+
+            List<Notification> custNotifs = ws2.getNotifications(custUserId, false);
+            assertTrue(custNotifs.stream().anyMatch(n -> n.getType() == NotificationType.TRANSFER_SENT),
+                    "Customer must have persisted TRANSFER_SENT notification");
+            List<Notification> merchNotifs = ws2.getNotifications(merchUserId, false);
+            assertTrue(merchNotifs.stream().anyMatch(n -> n.getType() == NotificationType.TRANSFER_RECEIVED),
+                    "Merchant must have persisted TRANSFER_RECEIVED notification");
+
+            // CAP-08 Statement export & import round-trip (.txt and .csv)
+            StatementFileService sfs = new StatementFileService();
+            User reloadedCust = ur2.findById(custUserId).orElseThrow();
+            Wallet reloadedCustWallet = ws2.getWallet(custWalletId);
+            List<Transaction> txns = ws2.getRecentTransactions(custWalletId, 20);
+            Path txtStmt = tempDir.resolve("qr-statement.txt");
+            Path csvStmt = tempDir.resolve("qr-statement.csv");
+            sfs.exportWalletStatement(reloadedCust, reloadedCustWallet, txns, txtStmt);
+            sfs.exportWalletStatement(reloadedCust, reloadedCustWallet, txns, csvStmt);
+            assertEquals(new BigDecimal("475.00"), sfs.importWalletStatement(txtStmt).getBalance());
+            assertEquals(new BigDecimal("475.00"), sfs.importWalletStatement(csvStmt).getBalance());
+        } finally {
+            db2.close();
+        }
+    }
+
+    // --- 12. MerchantQrPanel & Main Dashboard UI Flows + CAP-09 Role Isolation + PIN Lockout ---
+
+    @Test
+    void testProtectedProxyRoleIsolationUiFlowsAndPinLockout(@TempDir Path tempDir) throws Exception {
+        WalletOperations protectedOps = ProtectedWalletOperationsProxy.wrap(walletService);
+
+        // 1. Standard USER session on Main dashboard
+        SessionManager.getInstance().login(customer, walletService.getWallet(customerWallet.getWalletId()));
+        Main customerDashboard = new Main(protectedOps, authService);
+        try {
+            customerDashboard.getInitialLoadFuture().get(5, TimeUnit.SECONDS);
+            MerchantQrPanel qrPanel = customerDashboard.getMerchantQrPanel();
+            assertNotNull(qrPanel);
+            assertFalse(qrPanel.isMerchantTerminalVisible(),
+                    "CAP-09: Standard USER must not see Merchant Terminal & Sales tab");
+
+            // Capture confirmation previews without blocking on modal Swing dialogs
+            List<String> shownConfirmations = new ArrayList<>();
+            qrPanel.setConfirmDialogCallback((title, msg) -> {
+                shownConfirmations.add(title + "\n" + msg);
+                return javax.swing.JOptionPane.OK_OPTION;
+            });
+
+            // Even programmatic refreshMerchantSalesAsync must be blocked for USER
+            ExecutionException denied = assertThrows(ExecutionException.class, () ->
+                    qrPanel.refreshMerchantSalesAsync().get(5, TimeUnit.SECONDS));
+            assertInstanceOf(SecurityException.class, denied.getCause());
+
+            // Generate a QR with a SPOOFED merchant name in the payload
+            MerchantQrPayload spoofedNamePayload = new MerchantQrPayload(
+                    seededMerchant.getUserId(), seededMerchantWallet.getWalletId(),
+                    "EVIL SPOOFED NAME", null, "PHP", "REF-UI-SPOOF-01", "UI Open Order");
+            Path spoofedQrFile = tempDir.resolve("spoofed_qr.png");
+            merchantQrService.exportQrImage(spoofedNamePayload, spoofedQrFile);
+
+            // Import validates against DB and displays DB-verified merchant name, NOT spoofed payload name
+            qrPanel.importQrFileAsync(spoofedQrFile).get(5, TimeUnit.SECONDS);
+            SwingUtilities.invokeAndWait(() -> { });
+            assertTrue(qrPanel.isLastOperationExecutedOffEdt(), "QR import must execute off EDT");
+            assertTrue(qrPanel.getConfirmPayButton().isEnabled());
+            String confirmText = qrPanel.getConfirmationArea().getText();
+            assertTrue(confirmText.contains(seededMerchant.getName()), "Must display DB-verified merchant name");
+            assertFalse(confirmText.contains("EVIL SPOOFED NAME"), "Must never display untrusted spoofed merchant name");
+
+            // Cancelling confirmation dialog aborts cleanly without debiting
+            qrPanel.setConfirmDialogCallback((title, msg) -> {
+                shownConfirmations.add("CANCEL:" + msg);
+                return javax.swing.JOptionPane.CANCEL_OPTION;
+            });
+            assertNull(qrPanel.submitPaymentAsync("110.00", "1234").get(5, TimeUnit.SECONDS));
+            assertEquals(0, new BigDecimal("5000.00").compareTo(walletService.getBalance(customerWallet.getWalletId())));
+            assertTrue(shownConfirmations.stream().anyMatch(s -> s.contains("MERCHANT PAYMENT CONFIRMATION")));
+
+            // Confirming open-amount QR runs off-EDT -> single-use payload cleared & button disabled
+            qrPanel.setConfirmDialogCallback((title, msg) -> {
+                shownConfirmations.add("OK:" + msg);
+                return javax.swing.JOptionPane.OK_OPTION;
+            });
+            Transaction paid = qrPanel.submitPaymentAsync("110.00", "1234").get(5, TimeUnit.SECONDS);
+            assertNotNull(paid);
+            assertEquals(TransactionStatus.COMPLETED, paid.getStatus());
+            assertTrue(qrPanel.isLastOperationExecutedOffEdt(), "QR payment must execute off EDT");
+            SwingUtilities.invokeAndWait(() -> { });
+            assertFalse(qrPanel.getConfirmPayButton().isEnabled(),
+                    "Confirm & Pay button must be disabled after single-use settlement");
+            assertNull(qrPanel.getLoadedPayload(), "Loaded payload must be cleared after settlement");
+
+            // Inactive/suspended merchant QR rejected immediately during import
+            databaseManager.executeInTransaction(conn -> {
+                userRepository.updateStatus(seededMerchant.getUserId(), UserStatus.SUSPENDED, conn);
+                return null;
+            });
+            MerchantQrPayload inactivePayload = new MerchantQrPayload(
+                    seededMerchant.getUserId(), seededMerchantWallet.getWalletId(),
+                    seededMerchant.getName(), new BigDecimal("20.00"), "PHP", "REF-UI-SUSP-01", "Test");
+            Path inactiveFile = tempDir.resolve("inactive_qr.png");
+            merchantQrService.exportQrImage(inactivePayload, inactiveFile);
+            ExecutionException suspEx = assertThrows(ExecutionException.class, () ->
+                    qrPanel.importQrFileAsync(inactiveFile).get(5, TimeUnit.SECONDS));
+            assertInstanceOf(WalletException.class, suspEx.getCause());
+            SwingUtilities.invokeAndWait(() -> { });
+            assertFalse(qrPanel.getConfirmPayButton().isEnabled());
+
+            // Reactivate merchant and test 3-attempt PIN lockout triggering Main logout callback
+            databaseManager.executeInTransaction(conn -> {
+                userRepository.updateStatus(seededMerchant.getUserId(), UserStatus.ACTIVE, conn);
+                return null;
+            });
+            MerchantQrPayload lockoutQr = new MerchantQrPayload(
+                    seededMerchant.getUserId(), seededMerchantWallet.getWalletId(),
+                    seededMerchant.getName(), new BigDecimal("25.00"), "PHP", "REF-UI-LOCKOUT", "Lockout test");
+            Path lockoutFile = tempDir.resolve("lockout_qr.png");
+            merchantQrService.exportQrImage(lockoutQr, lockoutFile);
+            qrPanel.importQrFileAsync(lockoutFile).get(5, TimeUnit.SECONDS);
+
+            CountDownLatch logoutLatch = new CountDownLatch(1);
+            customerDashboard.setOnLogoutCallback(logoutLatch::countDown);
+            for (int attempt = 0; attempt < 3; attempt++) {
+                ExecutionException badPin = assertThrows(ExecutionException.class, () ->
+                        qrPanel.submitPaymentAsync("25.00", "9999").get(5, TimeUnit.SECONDS));
+                assertInstanceOf(WalletException.class, badPin.getCause());
+            }
+            assertTrue(logoutLatch.await(5, TimeUnit.SECONDS),
+                    "3 failed PIN attempts in MerchantQrPanel must trigger Main session termination");
+            assertTrue(SessionManager.getInstance().isLockedOutByPin());
+            assertFalse(SessionManager.getInstance().isLoggedIn());
+        } finally {
+            customerDashboard.dispose();
+        }
+
+        // 2. Custom MERCHANT session on Main dashboard: auto-loads QR-only sales, filters CASH_IN, real merchant name
+        User customMerchant = authService.registerUser(
+                "Bistro Uno", "09175556677", "bistro@otog.ph", "MerchPass123", UserRole.MERCHANT);
+        Wallet customMerchantWallet = walletService.getWalletByUserId(customMerchant.getUserId());
+        walletService.cashIn("REQ-MERCH-NONQR-CI", customMerchantWallet.getWalletId(), null,
+                new BigDecimal("500.00"), "Merchant non-QR top-up");
+
+        // Another active customer pays customMerchant via QR
+        User payer = authService.registerUser("Payer Two", "09176667788", "payer2@otog.ph", "PayerPass123");
+        Wallet payerWallet = walletService.getWalletByUserId(payer.getUserId());
+        walletService.cashIn("REQ-PAYER2-CI", payerWallet.getWalletId(), null, new BigDecimal("1000.00"), "Seed");
+        SessionManager.getInstance().login(payer, walletService.getWallet(payerWallet.getWalletId()));
+        authService.setPin(payer.getUserId(), "PayerPass123", "1111");
+        MerchantQrPayload customQr = new MerchantQrPayload(
+                customMerchant.getUserId(), customMerchantWallet.getWalletId(),
+                customMerchant.getName(), new BigDecimal("199.00"), "PHP", "REF-BISTRO-01", "Latte");
+        merchantQrService.confirmAndPay(merchantQrService.previewPayment(payer.getUserId(), customQr, null), "1111");
+
+        // Log in as customMerchant and open Main dashboard
+        SessionManager.getInstance().login(customMerchant, walletService.getWallet(customMerchantWallet.getWalletId()));
+        Main merchantDashboard = new Main(protectedOps, authService);
+        try {
+            merchantDashboard.getInitialLoadFuture().get(5, TimeUnit.SECONDS);
+            MerchantQrPanel merchantPanel = merchantDashboard.getMerchantQrPanel();
+            assertTrue(merchantPanel.isMerchantTerminalVisible(),
+                    "MERCHANT user must see Merchant Terminal & Sales tab");
+
+            // Wait briefly for auto-triggered sales refresh or run explicitly to verify QR-only filter
+            List<Transaction> sales = merchantPanel.refreshMerchantSalesAsync().get(5, TimeUnit.SECONDS);
+            assertEquals(1, sales.size(), "Non-QR CASH_IN deposits must be filtered out of Merchant Sales");
+            assertEquals("REQ-QR-REF-BISTRO-01", sales.get(0).getReferenceNumber());
+
+            SwingUtilities.invokeAndWait(() -> merchantPanel.getMerchantSalesTable().setRowSelectionInterval(0, 0));
+            String selectedReceipt = merchantPanel.buildSelectedSaleReceiptText();
+            assertNotNull(selectedReceipt);
+            assertTrue(selectedReceipt.contains("Bistro Uno"),
+                    "Merchant sale receipt must use the active merchant's real name, not hardcoded seed name");
+            assertTrue(selectedReceipt.contains("QR Ref") && selectedReceipt.contains("REF-BISTRO-01"));
+            assertFalse(selectedReceipt.contains("QR Ref         : REQ-QR-"),
+                    "QR Ref must strip REQ-QR- prefix");
+
+            // Generate & export QR off EDT
+            MerchantQrPayload gen = merchantPanel.generateQrAsync("75.00", "Muffin | Fresh").get(5, TimeUnit.SECONDS);
+            assertTrue(merchantPanel.isLastOperationExecutedOffEdt());
+            assertEquals("Bistro Uno", gen.getMerchantName());
+            Path savedPng = tempDir.resolve("bistro_exported.png");
+            merchantPanel.exportGeneratedQrAsync(savedPng).get(5, TimeUnit.SECONDS);
+            assertTrue(Files.isRegularFile(savedPng));
+            assertEquals("Muffin | Fresh", merchantQrService.importQrImage(savedPng).getNote());
+        } finally {
+            merchantDashboard.dispose();
+        }
+    }
+
+    private static String buildSignedPayload(String canonicalBody) {
+        CRC32 crc = new CRC32();
+        crc.update(canonicalBody.getBytes(StandardCharsets.UTF_8));
+        String hex = Long.toHexString(crc.getValue()).toUpperCase(java.util.Locale.ROOT);
+        return MerchantQrPayload.QR_HEADER + "|" + canonicalBody + "|crc=" + hex;
     }
 }

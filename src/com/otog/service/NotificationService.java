@@ -1,5 +1,6 @@
 package com.otog.service;
 
+import com.otog.model.InvestMoneyTransaction;
 import com.otog.model.Notification;
 import com.otog.model.NotificationType;
 import com.otog.model.Transaction;
@@ -45,6 +46,8 @@ public interface NotificationService {
     void notifyTransferCommitted(Transaction txn, User sender, User recipient);
 
     void notifyCashOperationCommitted(Transaction txn, String ownerUserId, String channel);
+
+    void notifyInvestmentCommitted(InvestMoneyTransaction txn, String ownerUserId);
 
     void notifyBillPaymentCommitted(Transaction txn, String ownerUserId, String billerName, String billerReference);
 

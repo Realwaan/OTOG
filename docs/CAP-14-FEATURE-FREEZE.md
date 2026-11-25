@@ -28,14 +28,14 @@ All financial integrations (banks, OTP SMS delivery, biller settlements, and mer
 | CAP-09 | Role-based Admin Controls, suspend/reactivate, traceable secret-free audit log | Integrated & Verified | **Included** |
 | CAP-10 | Pay Bills with seeded billers, masked biller refs, fee policy, notifications | Integrated & Verified | **Included** |
 | CAP-11 | Merchant QR PNG generation/import, validation, PIN payment, merchant terminal | Integrated & Verified (PR #16 merged in CAP-14) | **Included** |
+| CAP-13 | Basic simulated investment workflow (PR #15) | Integrated & Verified (PR #15 merged to `main`) | **Included** |
 | CAP-19..21 | Bound IntelliJ `.form` panels, `StatementFileService` file I/O, GoF design patterns & externalized config | Integrated & Verified | **Included** |
-| CAP-13 | Basic simulated investment workflow (PR #15) | Open (`CHANGES_REQUESTED`) | **Deferred unless QA-approved before Nov 29** (`Investments` tab remains hidden) |
 | CAP-12 | Simulated loans workflow (`LoanService` contract only) | No PR / unimplemented | **Explicitly Deferred** (`Loans` tab remains hidden) |
 
 ### Post-Freeze Change Control (After November 29, 2026)
 1. **No new features, tabs, or schema expansions** may be merged after November 29, 2026.
-2. Any defect discovered in CAP-01 through CAP-11 or CAP-19 through CAP-21 is tracked and fixed strictly as a **bug** with regression test coverage.
-3. Unfinished or unapproved optional modules (**CAP-12 Loans**, and **CAP-13 Investments** if not QA-approved by Nov 29) remain **explicitly deferred** and hidden from the dashboard UI.
+2. Any defect discovered in CAP-01 through CAP-11, CAP-13, or CAP-19 through CAP-21 is tracked and fixed strictly as a **bug** with regression test coverage.
+3. Unfinished optional modules (**CAP-12 Loans**) remain **explicitly deferred** and hidden from the dashboard UI.
 
 ---
 
