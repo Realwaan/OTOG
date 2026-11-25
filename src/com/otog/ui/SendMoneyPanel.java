@@ -81,6 +81,9 @@ public class SendMoneyPanel extends JPanel {
 
     private void ensureComponentsInitialized() {
         OtogConfig config = OtogConfig.getInstance();
+        if (pnlForm != null) {
+            pnlForm.setBorder(UiTheme.titledBorder("Wallet-to-Wallet Transfer"));
+        }
         UiTheme.styleInputField(txtRecipient);
         UiTheme.styleInputField(txtSendAmount);
         UiTheme.styleInputField(txtSendNote);

@@ -117,6 +117,15 @@ public class InvestmentPanel extends JPanel {
     private void ensureInteractiveComponentsInitialized() {
         OtogConfig config = OtogConfig.getInstance();
         String defaultCurrency = config.getDefaultCurrency();
+        if (pnlProductSummary != null) {
+            pnlProductSummary.setBorder(UiTheme.titledBorder("Seeded Simulated Investment Product"));
+        }
+        if (pnlOrderForm != null) {
+            pnlOrderForm.setBorder(UiTheme.titledBorder("Simulated Purchase & Redemption"));
+        }
+        if (pnlActivity != null) {
+            pnlActivity.setBorder(UiTheme.titledBorder("Persisted Investment Activity"));
+        }
         if (cmbInvestOperation != null) {
             if (cmbInvestOperation.getItemCount() == 0) {
                 cmbInvestOperation.addItem("BUY");
@@ -151,6 +160,7 @@ public class InvestmentPanel extends JPanel {
         }
         if (lblProductName != null) {
             lblProductName.setFont(UiTheme.font(UiTheme.FontRole.SECTION_HEADER));
+            lblProductName.setText(config.getInvestmentProductName() + " (" + config.getInvestmentProductCode() + ")");
         }
         if (lblSimulatedPrice != null) {
             lblSimulatedPrice.setFont(UiTheme.font(UiTheme.FontRole.LABEL));

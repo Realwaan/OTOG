@@ -93,12 +93,19 @@ public class CashInOutPanel extends JPanel {
         initInteractions();
     }
 
+    private void ensureComponentsInitialized() {
+        ensureComponentsInitialized(null);
+    }
+
     /**
      * Populates combo boxes and applies runtime styling outside {@code $$$setupUI$$$()} so
      * IntelliJ GUI Designer bytecode instrumentation preserves runtime models and theme tokens.
      */
     private void ensureComponentsInitialized(BankResponseStatus initialProviderMode) {
         OtogConfig config = OtogConfig.getInstance();
+        if (pnlForm != null) {
+            pnlForm.setBorder(UiTheme.titledBorder("Cash In / Cash Out via Linked Bank or Channel"));
+        }
         if (cmbCashOperation != null) {
             if (cmbCashOperation.getItemCount() == 0) {
                 for (String op : config.getCashOperations()) {

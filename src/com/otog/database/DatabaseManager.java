@@ -232,6 +232,8 @@ public class DatabaseManager implements AutoCloseable {
             seedSimulatedInvestmentProduct(conn);
             ensureInvestmentHoldingsSchema(conn);
             seedDefaultAdmin(conn);
+            seedDefaultMerchant(conn);
+            seedDemoUsers(conn);
             seedDemoPaymentMethods(conn);
         } catch (SQLException e) {
             throw new OtogException("Failed to initialize database schema", e);
@@ -379,42 +381,28 @@ public class DatabaseManager implements AutoCloseable {
         OtogConfig config = OtogConfig.getInstance();
         List<OtogConfig.DemoBankAccount> demoAccounts = config.getDemoPaymentMethods();
         OtogConfig.AdminSeedConfig adminSeed = config.getAdminSeedConfig();
+        OtogConfig.MerchantSeedConfig merchantSeed = config.getMerchantSeedConfig();
+        List<OtogConfig.DemoUserSeedConfig> demoUsers = config.getDemoUserSeeds();
 
-        String checkSql = "SELECT payment_method_id FROM payment_methods WHERE user_id = ?";
         String insertSql = "INSERT OR IGNORE INTO payment_methods (payment_method_id, user_id, type, provider_name, " +
                 "account_name, account_number, is_default, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)";
 
         if (adminSeed.enabled()) {
-            try (PreparedStatement checkPs = conn.prepareStatement(checkSql)) {
-                checkPs.setString(1, adminSeed.userId());
-                try (ResultSet rs = checkPs.executeQuery()) {
-                    if (!rs.next()) {
-                        String now = java.time.LocalDateTime.now().toString();
-                        try (PreparedStatement ps = conn.prepareStatement(insertSql)) {
-                            for (OtogConfig.DemoBankAccount demo : demoAccounts) {
-                                ps.setString(1, "PM-DEMO-" + demo.idSuffix());
-                                ps.setString(2, adminSeed.userId());
-                                ps.setString(3, "BANK_ACCOUNT");
-                                ps.setString(4, demo.providerName());
-                                ps.setString(5, "Admin " + demo.accountSuffix());
-                                ps.setString(6, demo.maskedNumber());
-                                ps.setInt(7, demo.isDefault() ? 1 : 0);
-                                ps.setString(8, "ACTIVE");
-                                ps.setString(9, now);
-                                ps.addBatch();
-                            }
-                            ps.executeBatch();
-                        }
-                    }
-                }
-            } catch (SQLException e) {
-                if (e.getMessage() == null || !e.getMessage().toUpperCase().contains("CONSTRAINT")) {
-                    throw new OtogException("Failed to seed admin demo payment methods", e);
-                }
-            }
+            seedDeterministicPaymentMethodsForUser(
+                    conn, insertSql, adminSeed.userId(), "Admin", "PM-DEMO-", demoAccounts);
+        }
+        if (merchantSeed.enabled()) {
+            seedDeterministicPaymentMethodsForUser(
+                    conn, insertSql, merchantSeed.userId(), merchantSeed.username(),
+                    "PM-DEMO-" + merchantSeed.userId() + "-", demoAccounts);
+        }
+        for (OtogConfig.DemoUserSeedConfig demoUser : demoUsers) {
+            seedDeterministicPaymentMethodsForUser(
+                    conn, insertSql, demoUser.userId(), demoUser.username(),
+                    "PM-DEMO-" + demoUser.userId() + "-", demoAccounts);
         }
 
-        // Backfill demo bank methods for any pre-existing users lacking payment methods
+        // Backfill demo bank methods for any pre-existing non-seeded users lacking payment methods
         String missingUsersSql = "SELECT u.user_id, u.name FROM users u " +
                 "WHERE NOT EXISTS (SELECT 1 FROM payment_methods pm WHERE pm.user_id = u.user_id)";
         try (Statement stmt = conn.createStatement();
@@ -447,35 +435,128 @@ public class DatabaseManager implements AutoCloseable {
         }
     }
 
+    private void seedDeterministicPaymentMethodsForUser(Connection conn,
+                                                        String insertSql,
+                                                        String userId,
+                                                        String displayName,
+                                                        String idPrefix,
+                                                        List<OtogConfig.DemoBankAccount> demoAccounts) {
+        if (userId == null || userId.trim().isEmpty()) {
+            return;
+        }
+        String checkUserSql = "SELECT user_id FROM users WHERE user_id = ?";
+        String checkPmSql = "SELECT payment_method_id FROM payment_methods WHERE user_id = ?";
+        try (PreparedStatement userPs = conn.prepareStatement(checkUserSql)) {
+            userPs.setString(1, userId);
+            try (ResultSet userRs = userPs.executeQuery()) {
+                if (!userRs.next()) {
+                    return;
+                }
+            }
+            try (PreparedStatement checkPs = conn.prepareStatement(checkPmSql)) {
+                checkPs.setString(1, userId);
+                try (ResultSet rs = checkPs.executeQuery()) {
+                    if (!rs.next()) {
+                        String now = java.time.LocalDateTime.now().toString();
+                        String label = (displayName != null && !displayName.trim().isEmpty())
+                                ? displayName.trim() : "Demo User";
+                        try (PreparedStatement ps = conn.prepareStatement(insertSql)) {
+                            for (OtogConfig.DemoBankAccount demo : demoAccounts) {
+                                ps.setString(1, idPrefix + demo.idSuffix());
+                                ps.setString(2, userId);
+                                ps.setString(3, "BANK_ACCOUNT");
+                                ps.setString(4, demo.providerName());
+                                ps.setString(5, label + " " + demo.accountSuffix());
+                                ps.setString(6, demo.maskedNumber());
+                                ps.setInt(7, demo.isDefault() ? 1 : 0);
+                                ps.setString(8, "ACTIVE");
+                                ps.setString(9, now);
+                                ps.addBatch();
+                            }
+                            ps.executeBatch();
+                        }
+                    }
+                }
+            }
+        } catch (SQLException e) {
+            if (e.getMessage() == null || !e.getMessage().toUpperCase().contains("CONSTRAINT")) {
+                throw new OtogException("Failed to seed deterministic demo payment methods for " + userId, e);
+            }
+        }
+    }
+
     private void seedDefaultAdmin(Connection conn) {
         OtogConfig config = OtogConfig.getInstance();
         OtogConfig.AdminSeedConfig seed = config.getAdminSeedConfig();
         if (!seed.enabled()) {
             return;
         }
-        String checkSql = "SELECT user_id FROM users WHERE user_id = ? OR LOWER(name) = LOWER(?)";
+        seedAccountIfMissing(conn, seed.userId(), seed.walletId(), seed.username(), seed.mobile(),
+                seed.email(), seed.password(), seed.pin(), "ADMIN", seed.initialBalance(),
+                "default administrator");
+    }
+
+    private void seedDefaultMerchant(Connection conn) {
+        OtogConfig config = OtogConfig.getInstance();
+        OtogConfig.MerchantSeedConfig seed = config.getMerchantSeedConfig();
+        if (!seed.enabled()) {
+            return;
+        }
+        seedAccountIfMissing(conn, seed.userId(), seed.walletId(), seed.username(), seed.mobile(),
+                seed.email(), seed.password(), seed.pin(), "MERCHANT", seed.initialBalance(),
+                "default merchant");
+    }
+
+    private void seedDemoUsers(Connection conn) {
+        OtogConfig config = OtogConfig.getInstance();
+        for (OtogConfig.DemoUserSeedConfig seed : config.getDemoUserSeeds()) {
+            seedAccountIfMissing(conn, seed.userId(), seed.walletId(), seed.username(), seed.mobile(),
+                    seed.email(), seed.password(), seed.pin(), seed.role(), seed.initialBalance(),
+                    "demo user " + seed.userId());
+        }
+    }
+
+    private void seedAccountIfMissing(Connection conn,
+                                      String userId,
+                                      String walletId,
+                                      String username,
+                                      String mobile,
+                                      String email,
+                                      String rawPassword,
+                                      String rawPin,
+                                      String role,
+                                      java.math.BigDecimal initialBalance,
+                                      String label) {
+        OtogConfig config = OtogConfig.getInstance();
+        String checkSql = "SELECT user_id FROM users WHERE user_id = ? OR LOWER(name) = LOWER(?) OR mobile_number = ?";
         try (PreparedStatement checkPs = conn.prepareStatement(checkSql)) {
-            checkPs.setString(1, seed.userId());
-            checkPs.setString(2, seed.username());
+            checkPs.setString(1, userId);
+            checkPs.setString(2, username);
+            checkPs.setString(3, mobile);
             try (ResultSet rs = checkPs.executeQuery()) {
                 if (!rs.next()) {
                     String salt = PasswordUtil.generateSalt();
-                    String hash = PasswordUtil.hashPassword(seed.password(), salt);
-                    String pinSalt = PasswordUtil.generateSalt();
-                    String pinHash = PasswordUtil.hashPassword(seed.pin(), pinSalt);
+                    String hash = PasswordUtil.hashPassword(rawPassword, salt);
+                    String pinSalt = (rawPin != null && !rawPin.trim().isEmpty()) ? PasswordUtil.generateSalt() : null;
+                    String pinHash = (pinSalt != null) ? PasswordUtil.hashPassword(rawPin.trim(), pinSalt) : null;
                     String now = java.time.LocalDateTime.now().toString();
                     String currency = MoneyUtil.validateCurrency(config.getDefaultCurrency());
+                    String effectiveRole = (role != null && !role.trim().isEmpty()) ? role.trim().toUpperCase() : "USER";
+                    java.math.BigDecimal safeBalance = initialBalance != null
+                            ? MoneyUtil.validateNonNegativeAmount(initialBalance)
+                            : MoneyUtil.ZERO;
 
                     String insertUserSql = "INSERT OR IGNORE INTO users " +
                             "(user_id, name, mobile_number, email, role, status, created_at, updated_at) " +
-                            "VALUES (?, ?, ?, ?, 'ADMIN', 'ACTIVE', ?, ?)";
+                            "VALUES (?, ?, ?, ?, ?, 'ACTIVE', ?, ?)";
                     try (PreparedStatement ps = conn.prepareStatement(insertUserSql)) {
-                        ps.setString(1, seed.userId());
-                        ps.setString(2, seed.username());
-                        ps.setString(3, seed.mobile());
-                        ps.setString(4, seed.email());
-                        ps.setString(5, now);
+                        ps.setString(1, userId);
+                        ps.setString(2, username);
+                        ps.setString(3, mobile);
+                        ps.setString(4, email);
+                        ps.setString(5, effectiveRole);
                         ps.setString(6, now);
+                        ps.setString(7, now);
                         ps.executeUpdate();
                     }
 
@@ -483,7 +564,7 @@ public class DatabaseManager implements AutoCloseable {
                             "(user_id, password_hash, salt, failed_attempts, locked_until, pin_hash, pin_salt, pin_failed_attempts, updated_at) " +
                             "VALUES (?, ?, ?, 0, NULL, ?, ?, 0, ?)";
                     try (PreparedStatement ps = conn.prepareStatement(insertCredSql)) {
-                        ps.setString(1, seed.userId());
+                        ps.setString(1, userId);
                         ps.setString(2, hash);
                         ps.setString(3, salt);
                         ps.setString(4, pinHash);
@@ -496,9 +577,9 @@ public class DatabaseManager implements AutoCloseable {
                             "(wallet_id, user_id, balance, currency, status, created_at, updated_at) " +
                             "VALUES (?, ?, ?, ?, 'ACTIVE', ?, ?)";
                     try (PreparedStatement ps = conn.prepareStatement(insertWalletSql)) {
-                        ps.setString(1, seed.walletId());
-                        ps.setString(2, seed.userId());
-                        ps.setString(3, seed.initialBalance().toPlainString());
+                        ps.setString(1, walletId);
+                        ps.setString(2, userId);
+                        ps.setString(3, safeBalance.toPlainString());
                         ps.setString(4, currency);
                         ps.setString(5, now);
                         ps.setString(6, now);
@@ -508,7 +589,7 @@ public class DatabaseManager implements AutoCloseable {
             }
         } catch (SQLException e) {
             if (e.getMessage() == null || !e.getMessage().toUpperCase().contains("CONSTRAINT")) {
-                throw new OtogException("Failed to seed default administrator account", e);
+                throw new OtogException("Failed to seed " + label + " account", e);
             }
         }
     }

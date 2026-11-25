@@ -99,6 +99,10 @@ public class AdminControlsPanel extends JPanel {
         if (lblTitle != null) {
             lblTitle.setFont(UiTheme.font(UiTheme.FontRole.TITLE));
         }
+        if (splitPane != null) {
+            splitPane.setOrientation(JSplitPane.VERTICAL_SPLIT);
+            splitPane.setResizeWeight(0.55);
+        }
         if (userModel == null) {
             userModel = new DefaultTableModel(USER_COLUMNS, 0) {
                 @Override

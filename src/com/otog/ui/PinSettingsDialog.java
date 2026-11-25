@@ -70,6 +70,12 @@ public class PinSettingsDialog extends JDialog {
     }
 
     private void initUI() {
+        if (pnlForm != null) {
+            pnlForm.setBorder(UiTheme.titledBorder("Transaction PIN Security"));
+        }
+        if (lblPinDialogFeedback != null) {
+            lblPinDialogFeedback.setFont(UiTheme.font(UiTheme.FontRole.SMALL));
+        }
         setContentPane(pnlRoot);
         setSize(OtogConfig.getInstance().getUiDimension("ui.pin.width", "ui.pin.height", 440, 290));
         setLocationRelativeTo(getParent());

@@ -110,6 +110,9 @@ public class PayBillsPanel extends JPanel {
 
     private void populateBillersIfEmpty() {
         OtogConfig config = OtogConfig.getInstance();
+        if (pnlForm != null) {
+            pnlForm.setBorder(UiTheme.titledBorder("Pay Utility & Service Bills"));
+        }
         if (cmbBiller != null) {
             if (cmbBiller.getItemCount() == 0) {
                 List<String> billers = config.getSeededBillers();
@@ -140,6 +143,7 @@ public class PayBillsPanel extends JPanel {
         if (lblBillFeedback != null) {
             lblBillFeedback.setFont(UiTheme.font(UiTheme.FontRole.LABEL));
         }
+        updateFeePreview();
     }
 
     public void setWalletService(WalletOperations walletService) {

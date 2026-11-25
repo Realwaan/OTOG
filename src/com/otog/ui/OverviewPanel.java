@@ -73,6 +73,7 @@ public class OverviewPanel extends JPanel {
     private JButton btnNavPinSettings;
     private JButton btnExportStatement;
     private JButton btnLoadStatement;
+    private JButton btnNavMerchantQr;
 
     private JComboBox<String> cmbFilterType;
     private JComboBox<String> cmbFilterStatus;
@@ -147,6 +148,12 @@ public class OverviewPanel extends JPanel {
      * leaves {@code activityCardLayout} or {@code transactionsTableModel} null or drops table styles.
      */
     private void ensureComponentsInitialized() {
+        if (pnlQuickActions != null) {
+            pnlQuickActions.setBorder(UiTheme.titledBorder("Quick Actions & Statement Files"));
+        }
+        if (pnlRecentActivity != null) {
+            pnlRecentActivity.setBorder(UiTheme.titledBorder("Recent Activity & History"));
+        }
         if (activityCardPanel != null) {
             LayoutManager lm = activityCardPanel.getLayout();
             if (lm instanceof CardLayout cl) {
@@ -218,6 +225,10 @@ public class OverviewPanel extends JPanel {
             btnNavInvest.setVisible(investmentsEnabled);
             UiTheme.styleSecondaryButton(btnNavInvest);
         }
+        if (btnNavMerchantQr != null) {
+            btnNavMerchantQr.setToolTipText("Pay merchants via QR image or open merchant QR terminal");
+            UiTheme.styleSecondaryButton(btnNavMerchantQr);
+        }
         UiTheme.styleSecondaryButton(btnNavPinSettings);
         if (btnExportStatement != null) {
             btnExportStatement.setToolTipText("Export wallet statement and recent activity to a file");
@@ -264,6 +275,8 @@ public class OverviewPanel extends JPanel {
         }
     }
 
+    private Runnable onQuickNavMerchantQr;
+
     public void setOnQuickNavCashIn(Runnable onQuickNavCashIn) {
         this.onQuickNavCashIn = onQuickNavCashIn;
     }
@@ -282,6 +295,10 @@ public class OverviewPanel extends JPanel {
 
     public void setOnQuickNavInvest(Runnable onQuickNavInvest) {
         this.onQuickNavInvest = onQuickNavInvest;
+    }
+
+    public void setOnQuickNavMerchantQr(Runnable onQuickNavMerchantQr) {
+        this.onQuickNavMerchantQr = onQuickNavMerchantQr;
     }
 
     public void setInvestmentsEnabled(boolean enabled) {
@@ -369,6 +386,13 @@ public class OverviewPanel extends JPanel {
             btnNavInvest.addActionListener(e -> {
                 if (onQuickNavInvest != null) {
                     onQuickNavInvest.run();
+                }
+            });
+        }
+        if (btnNavMerchantQr != null) {
+            btnNavMerchantQr.addActionListener(e -> {
+                if (onQuickNavMerchantQr != null) {
+                    onQuickNavMerchantQr.run();
                 }
             });
         }
@@ -1059,6 +1083,10 @@ public class OverviewPanel extends JPanel {
         return btnLoadStatement;
     }
 
+    public JButton getNavMerchantQrButton() {
+        return btnNavMerchantQr;
+    }
+
     public JComboBox<String> getFilterTypeComboBox() {
         return cmbFilterType;
     }
@@ -1140,7 +1168,7 @@ public class OverviewPanel extends JPanel {
         pnlRoot.setLayout(new GridLayoutManager(2, 1, new Insets(10, 8, 6, 8), 10, 12));
 
         pnlQuickActions = new JPanel();
-        pnlQuickActions.setLayout(new GridLayoutManager(1, 9, new Insets(6, 8, 6, 8), 8, 4));
+        pnlQuickActions.setLayout(new GridLayoutManager(1, 10, new Insets(6, 8, 6, 8), 8, 4));
         pnlQuickActions.setBorder(UiTheme.titledBorder("Quick Actions & Statement Files"));
         pnlRoot.add(pnlQuickActions, new GridConstraints(0, 0, 1, 1,
                 GridConstraints.ANCHOR_CENTER, GridConstraints.FILL_BOTH,
@@ -1183,28 +1211,36 @@ public class OverviewPanel extends JPanel {
                 GridConstraints.SIZEPOLICY_FIXED,
                 null, null, null, 0, false));
 
+        btnNavMerchantQr = new JButton("Merchant QR");
+        btnNavMerchantQr.setToolTipText("Pay merchants via QR image or open merchant QR terminal");
+        pnlQuickActions.add(btnNavMerchantQr, new GridConstraints(0, 5, 1, 1,
+                GridConstraints.ANCHOR_CENTER, GridConstraints.FILL_HORIZONTAL,
+                GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_CAN_GROW,
+                GridConstraints.SIZEPOLICY_FIXED,
+                null, null, null, 0, false));
+
         btnNavPinSettings = new JButton("Set / Change PIN");
-        pnlQuickActions.add(btnNavPinSettings, new GridConstraints(0, 5, 1, 1,
+        pnlQuickActions.add(btnNavPinSettings, new GridConstraints(0, 6, 1, 1,
                 GridConstraints.ANCHOR_CENTER, GridConstraints.FILL_HORIZONTAL,
                 GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_CAN_GROW,
                 GridConstraints.SIZEPOLICY_FIXED,
                 null, null, null, 0, false));
 
         btnExportStatement = new JButton("Export Statement");
-        pnlQuickActions.add(btnExportStatement, new GridConstraints(0, 6, 1, 1,
+        pnlQuickActions.add(btnExportStatement, new GridConstraints(0, 7, 1, 1,
                 GridConstraints.ANCHOR_CENTER, GridConstraints.FILL_HORIZONTAL,
                 GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_CAN_GROW,
                 GridConstraints.SIZEPOLICY_FIXED,
                 null, null, null, 0, false));
 
         btnLoadStatement = new JButton("Load Statement");
-        pnlQuickActions.add(btnLoadStatement, new GridConstraints(0, 7, 1, 1,
+        pnlQuickActions.add(btnLoadStatement, new GridConstraints(0, 8, 1, 1,
                 GridConstraints.ANCHOR_CENTER, GridConstraints.FILL_HORIZONTAL,
                 GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_CAN_GROW,
                 GridConstraints.SIZEPOLICY_FIXED,
                 null, null, null, 0, false));
 
-        pnlQuickActions.add(new Spacer(), new GridConstraints(0, 8, 1, 1,
+        pnlQuickActions.add(new Spacer(), new GridConstraints(0, 9, 1, 1,
                 GridConstraints.ANCHOR_CENTER, GridConstraints.FILL_HORIZONTAL,
                 GridConstraints.SIZEPOLICY_WANT_GROW, 1,
                 null, null, null, 0, false));

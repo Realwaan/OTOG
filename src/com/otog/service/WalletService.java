@@ -138,6 +138,12 @@ public class WalletService implements WalletOperations, InvestmentService {
         return new SendMoneyService(this, this.userRepository, effectiveAuthService);
     }
 
+    @Override
+    public MerchantQrService createMerchantQrService(AuthService effectiveAuthService) {
+        return new MerchantQrService(this, this.userRepository,
+                effectiveAuthService != null ? effectiveAuthService : this.authService);
+    }
+
     public AdminActionRepository getAdminActionRepository() {
         return adminActionRepository;
     }
@@ -363,8 +369,49 @@ public class WalletService implements WalletOperations, InvestmentService {
                     "Access denied: Transaction " + key + " does not belong to wallet " + cleanWalletId);
         }
 
+        if (isMerchantQrTransaction(txn)) {
+            boolean isMerchantView = cleanWalletId.equals(txn.getTargetWalletId());
+            String qrRef = txn.getReferenceNumber() != null && txn.getReferenceNumber().startsWith("REQ-QR-")
+                    ? txn.getReferenceNumber().substring("REQ-QR-".length())
+                    : txn.getReferenceNumber();
+            String merchantName = resolveMerchantNameForReceipt(txn);
+            return ReceiptBuilder.forMerchantPayment(txn, merchantName, qrRef, isMerchantView).build();
+        }
+
         String counterpartyDisplay = resolveMaskedCounterpartyForReceipt(cleanWalletId, txn);
         return txn.getReceipt(cleanWalletId, counterpartyDisplay);
+    }
+
+    private boolean isMerchantQrTransaction(Transaction txn) {
+        if (txn == null) {
+            return false;
+        }
+        boolean hasQrRef = txn.getReferenceNumber() != null && txn.getReferenceNumber().startsWith("REQ-QR-");
+        boolean hasQrDesc = txn.getDescription() != null && txn.getDescription().startsWith("QR Pay:");
+        return hasQrRef || hasQrDesc;
+    }
+
+    private String resolveMerchantNameForReceipt(Transaction txn) {
+        if (txn.getTargetWalletId() != null) {
+            Optional<Wallet> targetWallet = walletRepository.findById(txn.getTargetWalletId());
+            if (targetWallet.isPresent()) {
+                Optional<User> merchant = userRepository.findById(targetWallet.get().getUserId());
+                if (merchant.isPresent() && merchant.get().getName() != null && !merchant.get().getName().isBlank()) {
+                    return merchant.get().getName().trim();
+                }
+            }
+        }
+        if (txn.getDescription() != null && txn.getDescription().startsWith("QR Pay:")) {
+            int colonIdx = txn.getDescription().indexOf(':');
+            int dashIdx = txn.getDescription().indexOf(" - ", colonIdx);
+            String parsed = dashIdx > colonIdx
+                    ? txn.getDescription().substring(colonIdx + 1, dashIdx).trim()
+                    : txn.getDescription().substring(colonIdx + 1).trim();
+            if (!parsed.isEmpty()) {
+                return parsed;
+            }
+        }
+        return "OTOG Merchant";
     }
 
     @Override

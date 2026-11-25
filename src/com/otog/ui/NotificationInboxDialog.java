@@ -70,6 +70,7 @@ public class NotificationInboxDialog extends JDialog {
     }
 
     private void initUI() {
+        ensureComponentsInitialized();
         setContentPane(pnlRoot);
         setSize(OtogConfig.getInstance().getUiDimension(
                 "ui.notifications.width", "ui.notifications.height", 720, 480));
@@ -98,6 +99,51 @@ public class NotificationInboxDialog extends JDialog {
 
         if (walletService != null && userId != null && !userId.trim().isEmpty()) {
             loadNotificationsAsync();
+        }
+    }
+
+    private void ensureComponentsInitialized() {
+        if (lblUnreadSummary != null) {
+            lblUnreadSummary.setFont(UiTheme.font(UiTheme.FontRole.SECTION_HEADER));
+        }
+        if (notificationsTableModel == null) {
+            String[] columns = {"Status", "Date", "Title", "Reference", "Message"};
+            notificationsTableModel = new DefaultTableModel(columns, 0) {
+                @Override
+                public boolean isCellEditable(int row, int column) {
+                    return false;
+                }
+            };
+        }
+        if (tblNotifications != null) {
+            if (tblNotifications.getModel() != notificationsTableModel) {
+                tblNotifications.setModel(notificationsTableModel);
+            }
+            tblNotifications.setSelectionMode(ListSelectionModel.SINGLE_SELECTION);
+            tblNotifications.setRowHeight(OtogConfig.getInstance().getTableRowHeight());
+            tblNotifications.getTableHeader().setReorderingAllowed(false);
+        }
+        if (txtNotificationDetail != null) {
+            txtNotificationDetail.setEditable(false);
+            txtNotificationDetail.setLineWrap(true);
+            txtNotificationDetail.setWrapStyleWord(true);
+            txtNotificationDetail.setFont(UiTheme.font(UiTheme.FontRole.MONO));
+            if (txtNotificationDetail.getText() == null || txtNotificationDetail.getText().isEmpty()) {
+                txtNotificationDetail.setText("Select a notification above to inspect its full details.");
+            }
+        }
+        if (btnMarkRead != null) {
+            btnMarkRead.setEnabled(false);
+        }
+        if (btnMarkUnread != null) {
+            btnMarkUnread.setEnabled(false);
+        }
+        if (btnViewLinkedReceipt != null) {
+            btnViewLinkedReceipt.setEnabled(false);
+        }
+        if (lblInboxFeedback != null) {
+            lblInboxFeedback.setFont(UiTheme.font(UiTheme.FontRole.SMALL));
+            lblInboxFeedback.setForeground(UiTheme.color(UiTheme.ColorRole.MUTED));
         }
     }
 

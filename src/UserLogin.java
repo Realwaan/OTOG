@@ -100,6 +100,15 @@ public class UserLogin extends JFrame {
         if (pnlMain == null) {
             $$$setupUI$$$();
         }
+        if (pnlPassword != null) {
+            pnlPassword.setBorder(UiTheme.titledBorder(OtogConfig.getInstance().getAppTitle() + " \u2014 Sign In"));
+        }
+        if (pnl2FA != null) {
+            pnl2FA.setBorder(UiTheme.titledBorder("Two-Factor Verification"));
+        }
+        if (passwordFieldPasswordInput != null) {
+            passwordFieldPasswordInput.setEchoChar('*');
+        }
 
         pnlPassword.setVisible(true);
         pnl2FA.setVisible(false);
@@ -756,6 +765,22 @@ public class UserLogin extends JFrame {
                 }
                 System.out.println("UserLogin initialized successfully.");
                 app.dispose();
+                return;
+            }
+            if ("--seed-demo".equals(arg)) {
+                try (DatabaseManager db = new DatabaseManager()) {
+                    com.otog.service.DemoDataSeeder.DemoSeedSummary summary =
+                            com.otog.service.DemoDataSeeder.ensureSeeded(db);
+                    System.out.println(com.otog.service.DemoDataSeeder.formatDemoGuide(summary));
+                }
+                return;
+            }
+            if ("--reset-demo".equals(arg)) {
+                java.nio.file.Path dbPath = java.nio.file.Paths.get(OtogConfig.getInstance().getDefaultDbPath());
+                com.otog.service.DemoDataSeeder.DemoSeedSummary summary =
+                        com.otog.service.DemoDataSeeder.resetAndSeed(dbPath);
+                System.out.println("Demo database reset cleanly.");
+                System.out.println(com.otog.service.DemoDataSeeder.formatDemoGuide(summary));
                 return;
             }
         }
