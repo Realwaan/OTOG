@@ -232,6 +232,7 @@ public class DatabaseManager implements AutoCloseable {
             seedSimulatedInvestmentProduct(conn);
             ensureInvestmentHoldingsSchema(conn);
             seedDefaultAdmin(conn);
+            seedDefaultMerchant(conn);
             seedDemoPaymentMethods(conn);
         } catch (SQLException e) {
             throw new OtogException("Failed to initialize database schema", e);
@@ -509,6 +510,72 @@ public class DatabaseManager implements AutoCloseable {
         } catch (SQLException e) {
             if (e.getMessage() == null || !e.getMessage().toUpperCase().contains("CONSTRAINT")) {
                 throw new OtogException("Failed to seed default administrator account", e);
+            }
+        }
+    }
+
+    private void seedDefaultMerchant(Connection conn) {
+        OtogConfig config = OtogConfig.getInstance();
+        OtogConfig.MerchantSeedConfig seed = config.getMerchantSeedConfig();
+        if (!seed.enabled()) {
+            return;
+        }
+        String checkSql = "SELECT user_id FROM users WHERE user_id = ? OR LOWER(name) = LOWER(?)";
+        try (PreparedStatement checkPs = conn.prepareStatement(checkSql)) {
+            checkPs.setString(1, seed.userId());
+            checkPs.setString(2, seed.username());
+            try (ResultSet rs = checkPs.executeQuery()) {
+                if (!rs.next()) {
+                    String salt = PasswordUtil.generateSalt();
+                    String hash = PasswordUtil.hashPassword(seed.password(), salt);
+                    String pinSalt = PasswordUtil.generateSalt();
+                    String pinHash = PasswordUtil.hashPassword(seed.pin(), pinSalt);
+                    String now = java.time.LocalDateTime.now().toString();
+                    String currency = MoneyUtil.validateCurrency(config.getDefaultCurrency());
+
+                    String insertUserSql = "INSERT OR IGNORE INTO users " +
+                            "(user_id, name, mobile_number, email, role, status, created_at, updated_at) " +
+                            "VALUES (?, ?, ?, ?, 'MERCHANT', 'ACTIVE', ?, ?)";
+                    try (PreparedStatement ps = conn.prepareStatement(insertUserSql)) {
+                        ps.setString(1, seed.userId());
+                        ps.setString(2, seed.username());
+                        ps.setString(3, seed.mobile());
+                        ps.setString(4, seed.email());
+                        ps.setString(5, now);
+                        ps.setString(6, now);
+                        ps.executeUpdate();
+                    }
+
+                    String insertCredSql = "INSERT OR IGNORE INTO credentials " +
+                            "(user_id, password_hash, salt, failed_attempts, locked_until, pin_hash, pin_salt, pin_failed_attempts, updated_at) " +
+                            "VALUES (?, ?, ?, 0, NULL, ?, ?, 0, ?)";
+                    try (PreparedStatement ps = conn.prepareStatement(insertCredSql)) {
+                        ps.setString(1, seed.userId());
+                        ps.setString(2, hash);
+                        ps.setString(3, salt);
+                        ps.setString(4, pinHash);
+                        ps.setString(5, pinSalt);
+                        ps.setString(6, now);
+                        ps.executeUpdate();
+                    }
+
+                    String insertWalletSql = "INSERT OR IGNORE INTO wallets " +
+                            "(wallet_id, user_id, balance, currency, status, created_at, updated_at) " +
+                            "VALUES (?, ?, ?, ?, 'ACTIVE', ?, ?)";
+                    try (PreparedStatement ps = conn.prepareStatement(insertWalletSql)) {
+                        ps.setString(1, seed.walletId());
+                        ps.setString(2, seed.userId());
+                        ps.setString(3, seed.initialBalance().toPlainString());
+                        ps.setString(4, currency);
+                        ps.setString(5, now);
+                        ps.setString(6, now);
+                        ps.executeUpdate();
+                    }
+                }
+            }
+        } catch (SQLException e) {
+            if (e.getMessage() == null || !e.getMessage().toUpperCase().contains("CONSTRAINT")) {
+                throw new OtogException("Failed to seed default merchant account", e);
             }
         }
     }

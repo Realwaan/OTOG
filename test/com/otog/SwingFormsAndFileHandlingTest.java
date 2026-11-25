@@ -16,6 +16,7 @@ import com.otog.ui.AdminControlsPanel;
 import com.otog.ui.CashInOutPanel;
 import com.otog.ui.InvestmentPanel;
 import com.otog.ui.Main;
+import com.otog.ui.MerchantQrPanel;
 import com.otog.ui.NotificationInboxDialog;
 import com.otog.ui.OverviewPanel;
 import com.otog.ui.PinSettingsDialog;
@@ -82,6 +83,7 @@ public class SwingFormsAndFileHandlingTest {
                 Map.entry("com/otog/ui/SendMoneyPanel.form", "com.otog.ui.SendMoneyPanel"),
                 Map.entry("com/otog/ui/PayBillsPanel.form", "com.otog.ui.PayBillsPanel"),
                 Map.entry("com/otog/ui/InvestmentPanel.form", "com.otog.ui.InvestmentPanel"),
+                Map.entry("com/otog/ui/MerchantQrPanel.form", "com.otog.ui.MerchantQrPanel"),
                 Map.entry("com/otog/ui/AdminControlsPanel.form", "com.otog.ui.AdminControlsPanel"),
                 Map.entry("com/otog/ui/NotificationInboxDialog.form", "com.otog.ui.NotificationInboxDialog")
         );
@@ -165,6 +167,18 @@ public class SwingFormsAndFileHandlingTest {
         AdminControlsPanel adminPanel = new AdminControlsPanel(null, null, null, null);
         assertNotNull(adminPanel.$$$getRootComponent$$$());
         assertInstanceOf(GridLayoutManager.class, adminPanel.getRootPanel().getLayout());
+
+        MerchantQrPanel merchantQrPanel = new MerchantQrPanel();
+        assertNotNull(merchantQrPanel.$$$getRootComponent$$$());
+        assertInstanceOf(GridLayoutManager.class, merchantQrPanel.getRootPanel().getLayout());
+        assertNotNull(merchantQrPanel.getImportQrButton());
+        assertNotNull(merchantQrPanel.getConfirmPayButton());
+        assertNotNull(merchantQrPanel.getGenerateQrButton());
+        assertNotNull(merchantQrPanel.getSaveQrButton());
+        assertNotNull(merchantQrPanel.getSalesTableModel(),
+                "MerchantQrPanel salesTableModel must be initialized outside $$$setupUI$$$()");
+        assertSame(merchantQrPanel.getSalesTableModel(), merchantQrPanel.getMerchantSalesTable().getModel(),
+                "tblMerchantSales must be wired to salesTableModel outside $$$setupUI$$$()");
 
         NotificationInboxDialog notifDialog = new NotificationInboxDialog(null, null, null, null, null);
         try {

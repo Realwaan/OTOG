@@ -97,11 +97,54 @@ public class ReceiptBuilder {
         return builder;
     }
 
+    /**
+     * Builds a pre-populated {@link ReceiptBuilder} for Merchant QR payments.
+     */
+    public static ReceiptBuilder forMerchantPayment(Transaction txn,
+                                                    String merchantName,
+                                                    String qrReference,
+                                                    boolean isMerchantView) {
+        if (txn == null) {
+            throw new IllegalArgumentException("Transaction cannot be null");
+        }
+        ReceiptBuilder builder = new ReceiptBuilder()
+                .banner(isMerchantView ? "OTOG MERCHANT PAYMENT RECEIPT" : "OTOG MERCHANT PURCHASE RECEIPT")
+                .line("Txn ID", txn.getTransactionId())
+                .line("Reference", txn.getReferenceNumber())
+                .optionalLine("QR Ref", qrReference)
+                .line("Merchant", merchantName != null && !merchantName.trim().isEmpty() ? merchantName.trim() : "OTOG Merchant")
+                .line("Type", txn.getType())
+                .line("Status", txn.getStatus())
+                .timestampLine("Date", txn.getCreatedAt())
+                .optionalTimestampLine("Completed", txn.getCompletedAt())
+                .maskedLine(isMerchantView ? "Customer" : "Source", txn.getSourceWalletId())
+                .maskedLine(isMerchantView ? "Terminal" : "Merchant Wlt", txn.getTargetWalletId())
+                .moneyLine("Amount", txn.getAmount(), txn.getCurrency())
+                .moneyLine("Fee", txn.getFee(), txn.getCurrency())
+                .divider()
+                .moneyLine(isMerchantView ? "Net Credited" : "Total Paid",
+                        isMerchantView ? txn.getAmount() : txn.getTotalAmount(),
+                        txn.getCurrency())
+                .optionalLine("Note", txn.getDescription());
+        return builder;
+    }
+
     private static String resolveCounterpartyDisplay(Transaction txn,
                                                      String viewingWalletId,
                                                      String explicitCounterparty) {
         if (explicitCounterparty != null && !explicitCounterparty.trim().isEmpty()) {
             return explicitCounterparty.trim();
+        }
+        if (txn.getDescription() != null && txn.getDescription().startsWith("QR Pay:")) {
+            if (viewingWalletId != null && viewingWalletId.equals(txn.getTargetWalletId())) {
+                return "Customer " + maskIdentifier(txn.getSourceWalletId());
+            }
+            int colonIdx = txn.getDescription().indexOf(':');
+            int dashIdx = txn.getDescription().indexOf(" - ", colonIdx);
+            String name = dashIdx > colonIdx
+                    ? txn.getDescription().substring(colonIdx + 1, dashIdx).trim()
+                    : txn.getDescription().substring(colonIdx + 1).trim();
+            return !name.isEmpty() ? name : "Merchant " + maskIdentifier(txn.getTargetWalletId());
         }
         if (txn instanceof CashInOutTransaction cio) {
             if (cio.getChannel() != null && !cio.getChannel().trim().isEmpty()) {

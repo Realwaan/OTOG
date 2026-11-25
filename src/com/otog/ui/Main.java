@@ -30,6 +30,7 @@ import com.otog.service.SessionManager;
 import com.otog.service.StatementFileService;
 import com.otog.service.WalletOperations;
 import com.otog.service.WalletService;
+import com.otog.service.MerchantQrService;
 import com.otog.util.IdGenerator;
 import com.otog.util.MoneyUtil;
 import com.otog.util.OtogConfig;
@@ -110,6 +111,7 @@ public class Main extends JFrame {
     private OverviewPanel overviewPanel;
     private CashInOutPanel cashInOutPanel;
     private SendMoneyPanel sendMoneyPanel;
+    private MerchantQrPanel merchantQrPanel;
     private InvestmentPanel investmentPanel;
     private AdminControlsPanel adminControlsPanel;
     private final StatementFileService statementFileService = new StatementFileService();
@@ -288,6 +290,11 @@ public class Main extends JFrame {
         cashInOutPanel = new CashInOutPanel(walletService.getCurrentProviderMode());
         sendMoneyPanel = new SendMoneyPanel();
         payBillsPanel = new PayBillsPanel(walletService, authService);
+        MerchantQrService merchantQrService = walletService.createMerchantQrService(authService);
+        merchantQrPanel = new MerchantQrPanel(merchantQrService, walletService, authService,
+                () -> navigateToTab("Overview"),
+                this::refreshDashboardAsync);
+        wireMerchantQrPanel();
 
         wireOverviewPanel();
         wireCashInOutPanel();
@@ -298,6 +305,7 @@ public class Main extends JFrame {
         registerTab("Cash In / Out", cashInOutPanel);
         registerTab("Send Money", sendMoneyPanel);
         registerTab("Pay Bills", payBillsPanel);
+        registerTab("Merchant QR", merchantQrPanel);
 
         // Hide unfinished modules unless an implementation is explicitly provided
         if (loanService != null) {
@@ -326,6 +334,22 @@ public class Main extends JFrame {
         // Record every tab switch (manual click or programmatic) on the LIFO back-stack.
         tabs.addChangeListener(e -> onTabSelectionChanged());
         return tabs;
+    }
+
+    private void wireMerchantQrPanel() {
+        if (merchantQrPanel == null) {
+            return;
+        }
+        merchantQrPanel.setBeforeInteractiveSubmit(this::ensureActiveSessionForInteraction);
+        merchantQrPanel.setPinConfiguredSupplier(() -> cachedHasPin);
+        merchantQrPanel.setOnPinNotSet(() ->
+                promptPinSetupIfMissing("A Transaction PIN is required before paying via Merchant QR."));
+        merchantQrPanel.setOffEdtObserver(offEdt -> lastPaymentExecutedOffEdt = offEdt);
+        merchantQrPanel.setOnPaymentError(err -> {
+            String msg = extractErrorMessage(err);
+            lblStatus.setText("Merchant QR error: " + msg);
+            checkSessionTerminatedOnError(msg);
+        });
     }
 
     private void wireOverviewPanel() {
@@ -392,6 +416,11 @@ public class Main extends JFrame {
                     txtInvestUnits.requestFocusInWindow();
                 }
             });
+        }
+
+        JButton btnNavMerchantQr = overviewPanel.getNavMerchantQrButton();
+        if (btnNavMerchantQr != null) {
+            btnNavMerchantQr.addActionListener(e -> navigateToTab("Merchant QR"));
         }
 
         btnNavPinSettings.setEnabled(authService != null);
@@ -714,7 +743,7 @@ public class Main extends JFrame {
         }
         boolean pinVerified = SessionManager.getInstance().isPinVerified();
         if (!hasPin) {
-            lblPinStatus.setText("Transaction PIN: Not Set (required for Cash Out, Send Money, Pay Bills & Investments)");
+            lblPinStatus.setText("Transaction PIN: Not Set (required for Cash Out, Send Money, Pay Bills, Merchant QR & Investments)");
             lblPinStatus.setForeground(UiTheme.color(UiTheme.ColorRole.WARNING));
             if (btnPinSettings != null) {
                 btnPinSettings.setText("Set PIN");
@@ -796,6 +825,10 @@ public class Main extends JFrame {
                     if (investmentPanel != null) {
                         investmentPanel.updateProductAndHoldings(snapshot.investProduct, snapshot.investHolding);
                         investmentPanel.updateActivityTable(snapshot.investActivities);
+                    }
+                    if (merchantQrPanel != null) {
+                        merchantQrPanel.applyRoleAccessControl();
+                        merchantQrPanel.refreshMerchantSalesIfAuthorized();
                     }
                     boolean filtered = activeHistoryFilter != null && !activeHistoryFilter.isEmpty();
                     if (snapshot.transactions.isEmpty()) {
@@ -2787,6 +2820,10 @@ public class Main extends JFrame {
 
     public AdminControlsPanel getAdminControlsPanel() {
         return adminControlsPanel;
+    }
+
+    public MerchantQrPanel getMerchantQrPanel() {
+        return merchantQrPanel;
     }
 
     public JButton getExportStatementButton() {

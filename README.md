@@ -85,9 +85,26 @@ New standard user accounts can also be created directly from the login screen vi
 - **Suspension & Accountability**: Suspending an account requires a written reason, freezes the user's wallet, invalidates active sessions, and blocks outgoing payments. Every admin action is logged in `admin_actions` with sensitive values (passwords, PINs, salts, tokens) automatically redacted.
 - **No Direct Balance Editing**: Arbitrary balance edits are explicitly prohibited (`UnsupportedOperationException`); all balance changes must occur through ledger-backed transactions.
 
+### Merchant QR Payments
+- **Seeded Merchant Demo Account**: Automatically seeds `OTOG Merchant Store` (`USR-MERCHANT-01` / `WLT-MERCHANT-01`, mobile `09178888888`, password `password`, PIN `8888`, role `MERCHANT`) alongside the default administrator account.
+- **Role-Gated Merchant Terminal & Sales**: Accounts with `MERCHANT` or `ADMIN` role can generate fixed-amount or open-amount project QR PNGs (`MerchantQrPanel`), export them off the EDT, and inspect received QR payments with merchant-perspective receipts. Standard `USER` accounts see only the **Pay Merchant (QR Import)** flow.
+- **Validated Pre-PIN Confirmation & Atomic Settlement**: Importing a QR validates the checksum, merchant account & wallet status, currency, customer account & wallet currency, self-payment rules, and duplicate single-use reference (`REQ-QR-<ref>`), renders DB-verified merchant details and a confirmation preview (`MerchantPaymentPreview`), and settles atomically via `WalletOperations.transferWithPin`.
+- **Documented Project QR Format (`OTOG-MERCHANT-QR-v1` + `OTOGQR` PNG Raster)**:
+  - **Wire Grammar** (UTF-8, max `8192` bytes):
+    ```text
+    OTOG-MERCHANT-QR-v1|mid=<merchantId>|mwid=<merchantWalletId>|name=<escapedName>|amt=<positiveDecimalOrEmpty>|curr=<ISO4217>|ref=<uniqueRef>|note=<escapedNote>|crc=<HEX_CRC32>
+    ```
+    Delimiter/control characters (`%`, `|`, `=`, `\r`, `\n`) inside `name` and `note` are percent-escaped (`%25`, `%7C`, `%3D`, `%0D`, `%0A`). Unknown keys, duplicate keys, missing required fields (`mid`, `mwid`, `name`, `curr`, `ref`), and amounts with scale > 2 are rejected. `crc` is the uppercase hex IEEE CRC-32 computed over the exact raw canonical segment between `OTOG-MERCHANT-QR-v1|` and `|crc=`.
+  - **PNG Raster Encoding (`OTOGQR`)**: The UTF-8 payload is embedded losslessly into the bottom pixel rows of the `300x300` PNG starting at `(0, height - 1)` moving left-to-right and bottom-to-top (one byte per grayscale pixel, `R = G = B = byte`):
+    ```text
+    [6B ASCII "OTOGQR"][4B big-endian length N][N bytes UTF-8 payload][4B big-endian IEEE CRC-32]
+    ```
+    Import verifies image pixel capacity and CRC-32 integrity before decoding.
+
 ### In-Progress & Planned Modules
-- **Pay Bills** *(in review — [PR #14](https://github.com/Realwaan/OTOG/pull/14))*: Adds `BillPaymentTransaction`, `PayBillsPanel`, and `WalletService.payBill*` supporting 5 utility billers (Meralco, Manila Water, Maynilad, PLDT, Globe Telecom) with live fee preview and atomic fund reservation/release.
-- **Simulated Loans & Investments** *(planned)*: Domain models (`LoanTransaction`, `InvestMoneyTransaction`) and service contracts (`LoanService`, `InvestmentService`) are implemented; service logic and UI tabs are planned next.
+- **Pay Bills**: Implemented (`BillPaymentTransaction`, `PayBillsPanel`, `WalletService.payBill*`) supporting 5 utility billers (Meralco, Manila Water, Maynilad, PLDT, Globe Telecom) with live fee preview and atomic fund reservation/release.
+- **Simulated Investments**: Implemented (`InvestMoneyTransaction`, `InvestmentPanel`, `InvestmentService`) with buy/redeem previews, holdings tracking, and PIN authorization.
+- **Simulated Loans** *(planned)*: Domain model (`LoanTransaction`) and service contract (`LoanService`) are implemented; service logic and UI tab are planned next.
 
 ---
 
@@ -180,7 +197,9 @@ Every window, tab panel, and modal dialog is built with a bound **IntelliJ IDEA 
 | `src/com/otog/ui/SendMoneyPanel.form` | `SendMoneyPanel` | Wallet-to-wallet transfer form with recipient preview confirmation and PIN entry |
 | `src/com/otog/ui/AdminControlsPanel.form` | `AdminControlsPanel` | Admin-only panel for managing users/wallets, suspending/reactivating accounts, and viewing audit logs |
 | `src/com/otog/ui/NotificationInboxDialog.form` | `NotificationInboxDialog` | Modal inbox for reading, filtering unread, and marking notifications as read |
-| `src/com/otog/ui/PayBillsPanel.form` *(PR #14)* | `PayBillsPanel` | Bill payment form with 5 utility billers, live fee/total preview, reference validation, and PIN entry |
+| `src/com/otog/ui/PayBillsPanel.form` | `PayBillsPanel` | Bill payment form with 5 utility billers, live fee/total preview, reference validation, and PIN entry |
+| `src/com/otog/ui/MerchantQrPanel.form` | `MerchantQrPanel` | Merchant QR import/pay confirmation flow and role-gated Merchant Terminal & Sales view |
+| `src/com/otog/ui/InvestmentPanel.form` | `InvestmentPanel` | Simulated investment buy/redeem preview, holdings summary, and activity table |
 
 ---
 

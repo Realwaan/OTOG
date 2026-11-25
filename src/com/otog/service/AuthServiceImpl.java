@@ -293,7 +293,9 @@ public class AuthServiceImpl implements AuthService {
                 && !rawPin.isEmpty()
                 && PasswordUtil.verifyPassword(rawPin, cred.getPinSalt(), cred.getPinHash());
         if (matches) {
-            credentialRepository.resetPinFailedAttempts(cleanUserId);
+            if (cred.getPinFailedAttempts() > 0) {
+                credentialRepository.resetPinFailedAttempts(cleanUserId);
+            }
             session.markPinVerified();
             return true;
         }
