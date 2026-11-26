@@ -234,6 +234,8 @@ Managed automatically on startup by `DatabaseManager` with foreign keys enabled 
 | `ledger_entries` | Double-entry `DEBIT` and `CREDIT` rows recording balances before and after every movement of funds |
 | `investment_products` | Seeded simulated investment product catalog and simulated unit prices |
 | `investment_holdings` | Per-wallet simulated investment unit holdings and total invested principal |
+| `loan_products` | Single configured simulated loan product catalog with principal bounds, interest rate, term, and fees |
+| `loans` | Persisted simulated loan applications, admin approval/rejection decisions, single-disbursement flags, and full-repayment state |
 | `admin_actions` | Traceable log of administrative actions with reasons and secret-redacted details |
 | `notifications` | Post-commit user alerts with read status and unique deduplication keys |
 
@@ -254,7 +256,7 @@ See [CAP-14 Feature Freeze & Demo Guide](docs/CAP-14-FEATURE-FREEZE.md) for the 
 
 ## Automated Testing
 
-The repository includes **19 JUnit 5 test suites** covering core domain rules, security, concurrency, design patterns, file I/O, Pay Bills, Merchant QR, Simulated Investments, UI behavior, and cross-feature integration (`IntegrationCheckpointTest`).
+The repository includes **20 JUnit 5 test suites** covering core domain rules, security, concurrency, design patterns, file I/O, Pay Bills, Merchant QR, Simulated Loans, Simulated Investments, UI behavior, and cross-feature integration (`IntegrationCheckpointTest`).
 
 ---
 

@@ -1092,281 +1092,75 @@ public class Main extends JFrame {
         super.dispose();
     }
 
-    public DashboardState getCurrentState() {
-        return currentState;
-    }
-
-    public CompletableFuture<Void> getInitialLoadFuture() {
-        return initialLoadFuture;
-    }
-
-    public JLabel getWelcomeLabel() {
-        return lblWelcome;
-    }
-
-    public JLabel getBalanceLabel() {
-        return lblBalance;
-    }
-
-    public JLabel getWalletIdLabel() {
-        return lblWalletId;
-    }
-
-    public JLabel getPinStatusLabel() {
-        return lblPinStatus;
-    }
-
-    public JLabel getStatusLabel() {
-        return lblStatus;
-    }
-
-    public JLabel getLoadingStateLabel() {
-        return overviewPanel != null ? overviewPanel.getLoadingStateLabel() : null;
-    }
-
-    public JLabel getEmptyStateLabel() {
-        return overviewPanel != null ? overviewPanel.getEmptyStateLabel() : null;
-    }
-
-    public JLabel getErrorStateLabel() {
-        return overviewPanel != null ? overviewPanel.getErrorStateLabel() : null;
-    }
-
-    public JLabel getCashFeedbackLabel() {
-        return cashInOutPanel != null ? cashInOutPanel.getCashFeedbackLabel() : null;
-    }
-
-    public JLabel getActivityFeedbackLabel() {
-        return overviewPanel != null ? overviewPanel.getActivityFeedbackLabel() : null;
-    }
-
-    public JLabel getSendFeedbackLabel() {
-        return sendMoneyPanel != null ? sendMoneyPanel.getSendFeedbackLabel() : null;
-    }
-
-    public JTable getRecentTransactionsTable() {
-        return overviewPanel != null ? overviewPanel.getTransactionsTable() : null;
-    }
-
-    public JTabbedPane getTabs() {
-        return tabs;
-    }
-
-    public boolean isLastLoadExecutedOffEdt() {
-        return lastLoadExecutedOffEdt;
-    }
-
-    public boolean isLastPaymentExecutedOffEdt() {
-        return lastPaymentExecutedOffEdt;
-    }
-
-    public boolean isLastAdminLoadExecutedOffEdt() {
-        return lastAdminLoadExecutedOffEdt;
-    }
-
-    public JButton getCashInQuickNavButton() {
-        return overviewPanel != null ? overviewPanel.getNavCashInButton() : null;
-    }
-
-    public JButton getCashOutQuickNavButton() {
-        return overviewPanel != null ? overviewPanel.getNavCashOutButton() : null;
-    }
-
-    public JButton getSendMoneyQuickNavButton() {
-        return overviewPanel != null ? overviewPanel.getNavSendMoneyButton() : null;
-    }
-
-    public JButton getInvestQuickNavButton() {
-        return overviewPanel != null ? overviewPanel.getNavInvestButton() : null;
-    }
-
-    public JButton getLoansQuickNavButton() {
-        return overviewPanel != null ? overviewPanel.getNavLoansButton() : null;
-    }
-
-    public JButton getPinSettingsButton() {
-        return btnPinSettings;
-    }
-
-    public JButton getRetryLoadButton() {
-        return overviewPanel != null ? overviewPanel.getRetryLoadButton() : null;
-    }
-
-    public JButton getBackButton() {
-        return btnBack;
-    }
-
-    public JButton getRefreshButton() {
-        return btnRefresh;
-    }
-
-    public JButton getNotificationsButton() {
-        return btnNotifications;
-    }
-
-    public int getCachedUnreadNotifications() {
-        return cachedUnreadNotifications;
-    }
-
-    public TransactionFilter getActiveHistoryFilter() {
-        return overviewPanel != null ? overviewPanel.getActiveHistoryFilter() : TransactionFilter.empty();
-    }
-
-    public JComboBox<String> getFilterTypeComboBox() {
-        return overviewPanel != null ? overviewPanel.getFilterTypeComboBox() : null;
-    }
-
-    public JComboBox<String> getFilterStatusComboBox() {
-        return overviewPanel != null ? overviewPanel.getFilterStatusComboBox() : null;
-    }
-
-    public JTextField getFilterFromDateField() {
-        return overviewPanel != null ? overviewPanel.getFilterFromDateField() : null;
-    }
-
-    public JTextField getFilterToDateField() {
-        return overviewPanel != null ? overviewPanel.getFilterToDateField() : null;
-    }
-
-    public JTextField getFilterKeywordField() {
-        return overviewPanel != null ? overviewPanel.getFilterKeywordField() : null;
-    }
-
-    public JButton getApplyFiltersButton() {
-        return overviewPanel != null ? overviewPanel.getApplyFiltersButton() : null;
-    }
-
-    public JButton getClearFiltersButton() {
-        return overviewPanel != null ? overviewPanel.getClearFiltersButton() : null;
-    }
-
-    public JButton getRepeatDraftButton() {
-        return overviewPanel != null ? overviewPanel.getRepeatDraftButton() : null;
-    }
-
-    public JComboBox<String> getCashOperationComboBox() {
-        return cashInOutPanel != null ? cashInOutPanel.getCashOperationComboBox() : null;
-    }
-
-    public JComboBox<String> getPaymentMethodComboBox() {
-        return cashInOutPanel != null ? cashInOutPanel.getPaymentMethodComboBox() : null;
-    }
-
-    public JComboBox<String> getProviderModeComboBox() {
-        return cashInOutPanel != null ? cashInOutPanel.getProviderModeComboBox() : null;
-    }
-
-    public JButton getCheckStatusButton() {
-        return overviewPanel != null ? overviewPanel.getCheckStatusButton() : null;
-    }
-
-    public JPasswordField getCashPinField() {
-        return cashInOutPanel != null ? cashInOutPanel.getCashPinField() : null;
-    }
-
-    public JPasswordField getSendPinField() {
-        return sendMoneyPanel != null ? sendMoneyPanel.getSendPinField() : null;
-    }
-
-    public JButton getSubmitCashButton() {
-        return cashInOutPanel != null ? cashInOutPanel.getSubmitCashOpButton() : null;
-    }
-
-    public JButton getCashBackToOverviewButton() {
-        return cashInOutPanel != null ? cashInOutPanel.getCashBackToOverviewButton() : null;
-    }
-
-    public JButton getSubmitSendMoneyButton() {
-        return sendMoneyPanel != null ? sendMoneyPanel.getSubmitSendMoneyButton() : null;
-    }
-
-    public JButton getSendBackToOverviewButton() {
-        return sendMoneyPanel != null ? sendMoneyPanel.getSendBackToOverviewButton() : null;
-    }
-
-    public JTextField getCashAmountField() {
-        return cashInOutPanel != null ? cashInOutPanel.getCashAmountField() : null;
-    }
-
-    public JTextField getRecipientField() {
-        return sendMoneyPanel != null ? sendMoneyPanel.getRecipientField() : null;
-    }
-
-    public JTextField getSendAmountField() {
-        return sendMoneyPanel != null ? sendMoneyPanel.getSendAmountField() : null;
-    }
-
-    public JPanel getRootPanel() {
-        return pnlRoot;
-    }
-
-    public OverviewPanel getOverviewPanel() {
-        return overviewPanel;
-    }
-
-    public CashInOutPanel getCashInOutPanel() {
-        return cashInOutPanel;
-    }
-
-    public SendMoneyPanel getSendMoneyPanel() {
-        return sendMoneyPanel;
-    }
-
-    public InvestmentPanel getInvestmentPanel() {
-        return investmentPanel;
-    }
-
-    public LoanPanel getLoanPanel() {
-        return loanPanel;
-    }
-
-    public JComboBox<String> getInvestOperationComboBox() {
-        return investmentPanel != null ? investmentPanel.getOperationComboBox() : null;
-    }
-
-    public JTextField getInvestUnitsField() {
-        return investmentPanel != null ? investmentPanel.getUnitsField() : null;
-    }
-
-    public JTextField getInvestAmountField() {
-        return investmentPanel != null ? investmentPanel.getAmountField() : null;
-    }
-
-    public JPasswordField getInvestPinField() {
-        return investmentPanel != null ? investmentPanel.getPinField() : null;
-    }
-
-    public JLabel getInvestPreviewSummaryLabel() {
-        return investmentPanel != null ? investmentPanel.getPreviewSummaryLabel() : null;
-    }
-
-    public JButton getPreviewInvestButton() {
-        return investmentPanel != null ? investmentPanel.getPreviewButton() : null;
-    }
-
-    public JButton getSubmitInvestButton() {
-        return investmentPanel != null ? investmentPanel.getSubmitButton() : null;
-    }
-
-    public JLabel getInvestFeedbackLabel() {
-        return investmentPanel != null ? investmentPanel.getFeedbackLabel() : null;
-    }
-
-    public AdminControlsPanel getAdminControlsPanel() {
-        return adminControlsPanel;
-    }
-
-    public MerchantQrPanel getMerchantQrPanel() {
-        return merchantQrPanel;
-    }
-
-    public JButton getExportStatementButton() {
-        return overviewPanel != null ? overviewPanel.getExportStatementButton() : null;
-    }
-
-    public JButton getLoadStatementButton() {
-        return overviewPanel != null ? overviewPanel.getLoadStatementButton() : null;
-    }
+    public DashboardState getCurrentState() { return currentState; }
+    public CompletableFuture<Void> getInitialLoadFuture() { return initialLoadFuture; }
+    public JLabel getWelcomeLabel() { return lblWelcome; }
+    public JLabel getBalanceLabel() { return lblBalance; }
+    public JLabel getWalletIdLabel() { return lblWalletId; }
+    public JLabel getPinStatusLabel() { return lblPinStatus; }
+    public JLabel getStatusLabel() { return lblStatus; }
+    public JLabel getLoadingStateLabel() { return overviewPanel != null ? overviewPanel.getLoadingStateLabel() : null; }
+    public JLabel getEmptyStateLabel() { return overviewPanel != null ? overviewPanel.getEmptyStateLabel() : null; }
+    public JLabel getErrorStateLabel() { return overviewPanel != null ? overviewPanel.getErrorStateLabel() : null; }
+    public JLabel getCashFeedbackLabel() { return cashInOutPanel != null ? cashInOutPanel.getCashFeedbackLabel() : null; }
+    public JLabel getActivityFeedbackLabel() { return overviewPanel != null ? overviewPanel.getActivityFeedbackLabel() : null; }
+    public JLabel getSendFeedbackLabel() { return sendMoneyPanel != null ? sendMoneyPanel.getSendFeedbackLabel() : null; }
+    public JTable getRecentTransactionsTable() { return overviewPanel != null ? overviewPanel.getTransactionsTable() : null; }
+    public JTabbedPane getTabs() { return tabs; }
+    public boolean isLastLoadExecutedOffEdt() { return lastLoadExecutedOffEdt; }
+    public boolean isLastPaymentExecutedOffEdt() { return lastPaymentExecutedOffEdt; }
+    public boolean isLastAdminLoadExecutedOffEdt() { return lastAdminLoadExecutedOffEdt; }
+    public JButton getCashInQuickNavButton() { return overviewPanel != null ? overviewPanel.getNavCashInButton() : null; }
+    public JButton getCashOutQuickNavButton() { return overviewPanel != null ? overviewPanel.getNavCashOutButton() : null; }
+    public JButton getSendMoneyQuickNavButton() { return overviewPanel != null ? overviewPanel.getNavSendMoneyButton() : null; }
+    public JButton getInvestQuickNavButton() { return overviewPanel != null ? overviewPanel.getNavInvestButton() : null; }
+    public JButton getLoansQuickNavButton() { return overviewPanel != null ? overviewPanel.getNavLoansButton() : null; }
+    public JButton getPinSettingsButton() { return btnPinSettings; }
+    public JButton getRetryLoadButton() { return overviewPanel != null ? overviewPanel.getRetryLoadButton() : null; }
+    public JButton getBackButton() { return btnBack; }
+    public JButton getRefreshButton() { return btnRefresh; }
+    public JButton getNotificationsButton() { return btnNotifications; }
+    public int getCachedUnreadNotifications() { return cachedUnreadNotifications; }
+    public TransactionFilter getActiveHistoryFilter() { return overviewPanel != null ? overviewPanel.getActiveHistoryFilter() : TransactionFilter.empty(); }
+    public JComboBox<String> getFilterTypeComboBox() { return overviewPanel != null ? overviewPanel.getFilterTypeComboBox() : null; }
+    public JComboBox<String> getFilterStatusComboBox() { return overviewPanel != null ? overviewPanel.getFilterStatusComboBox() : null; }
+    public JTextField getFilterFromDateField() { return overviewPanel != null ? overviewPanel.getFilterFromDateField() : null; }
+    public JTextField getFilterToDateField() { return overviewPanel != null ? overviewPanel.getFilterToDateField() : null; }
+    public JTextField getFilterKeywordField() { return overviewPanel != null ? overviewPanel.getFilterKeywordField() : null; }
+    public JButton getApplyFiltersButton() { return overviewPanel != null ? overviewPanel.getApplyFiltersButton() : null; }
+    public JButton getClearFiltersButton() { return overviewPanel != null ? overviewPanel.getClearFiltersButton() : null; }
+    public JButton getRepeatDraftButton() { return overviewPanel != null ? overviewPanel.getRepeatDraftButton() : null; }
+    public JComboBox<String> getCashOperationComboBox() { return cashInOutPanel != null ? cashInOutPanel.getCashOperationComboBox() : null; }
+    public JComboBox<String> getPaymentMethodComboBox() { return cashInOutPanel != null ? cashInOutPanel.getPaymentMethodComboBox() : null; }
+    public JComboBox<String> getProviderModeComboBox() { return cashInOutPanel != null ? cashInOutPanel.getProviderModeComboBox() : null; }
+    public JButton getCheckStatusButton() { return overviewPanel != null ? overviewPanel.getCheckStatusButton() : null; }
+    public JPasswordField getCashPinField() { return cashInOutPanel != null ? cashInOutPanel.getCashPinField() : null; }
+    public JPasswordField getSendPinField() { return sendMoneyPanel != null ? sendMoneyPanel.getSendPinField() : null; }
+    public JButton getSubmitCashButton() { return cashInOutPanel != null ? cashInOutPanel.getSubmitCashOpButton() : null; }
+    public JButton getCashBackToOverviewButton() { return cashInOutPanel != null ? cashInOutPanel.getCashBackToOverviewButton() : null; }
+    public JButton getSubmitSendMoneyButton() { return sendMoneyPanel != null ? sendMoneyPanel.getSubmitSendMoneyButton() : null; }
+    public JButton getSendBackToOverviewButton() { return sendMoneyPanel != null ? sendMoneyPanel.getSendBackToOverviewButton() : null; }
+    public JTextField getCashAmountField() { return cashInOutPanel != null ? cashInOutPanel.getCashAmountField() : null; }
+    public JTextField getRecipientField() { return sendMoneyPanel != null ? sendMoneyPanel.getRecipientField() : null; }
+    public JTextField getSendAmountField() { return sendMoneyPanel != null ? sendMoneyPanel.getSendAmountField() : null; }
+    public JPanel getRootPanel() { return pnlRoot; }
+    public OverviewPanel getOverviewPanel() { return overviewPanel; }
+    public CashInOutPanel getCashInOutPanel() { return cashInOutPanel; }
+    public SendMoneyPanel getSendMoneyPanel() { return sendMoneyPanel; }
+    public InvestmentPanel getInvestmentPanel() { return investmentPanel; }
+    public LoanPanel getLoanPanel() { return loanPanel; }
+    public JComboBox<String> getInvestOperationComboBox() { return investmentPanel != null ? investmentPanel.getOperationComboBox() : null; }
+    public JTextField getInvestUnitsField() { return investmentPanel != null ? investmentPanel.getUnitsField() : null; }
+    public JTextField getInvestAmountField() { return investmentPanel != null ? investmentPanel.getAmountField() : null; }
+    public JPasswordField getInvestPinField() { return investmentPanel != null ? investmentPanel.getPinField() : null; }
+    public JLabel getInvestPreviewSummaryLabel() { return investmentPanel != null ? investmentPanel.getPreviewSummaryLabel() : null; }
+    public JButton getPreviewInvestButton() { return investmentPanel != null ? investmentPanel.getPreviewButton() : null; }
+    public JButton getSubmitInvestButton() { return investmentPanel != null ? investmentPanel.getSubmitButton() : null; }
+    public JLabel getInvestFeedbackLabel() { return investmentPanel != null ? investmentPanel.getFeedbackLabel() : null; }
+    public AdminControlsPanel getAdminControlsPanel() { return adminControlsPanel; }
+    public MerchantQrPanel getMerchantQrPanel() { return merchantQrPanel; }
+    public JButton getExportStatementButton() { return overviewPanel != null ? overviewPanel.getExportStatementButton() : null; }
+    public JButton getLoadStatementButton() { return overviewPanel != null ? overviewPanel.getLoadStatementButton() : null; }
 
     public WalletOperations getWalletService() {
         return walletService;

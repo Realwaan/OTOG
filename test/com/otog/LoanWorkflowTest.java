@@ -613,4 +613,59 @@ public class LoanWorkflowTest {
             }
         }
     }
+
+    @Test
+    void testInteractiveLoanApplicationPreservesPreviewRefAndSuspendedUsersAreBlocked() throws Exception {
+        User borrower = authService.registerUser("Iris Tan", "09173000022", "iris.loan@otog.ph", "Secret123");
+        Wallet borrowerWallet = walletService.getWalletByUserId(borrower.getUserId());
+        User admin = walletService.getUserRepository().findById("USR-ADMIN-01").orElseThrow();
+
+        SessionManager.getInstance().login(borrower, borrowerWallet);
+        authService.setPin(borrower.getUserId(), "Secret123", "1234");
+
+        AtomicReference<String> previewRef = new AtomicReference<>();
+        CountDownLatch submitDone = new CountDownLatch(1);
+        ProtectedWalletOperationsProxy proxy =
+                (ProtectedWalletOperationsProxy) ProtectedWalletOperationsProxy.wrap(walletService);
+        activeDashboard = new Main(proxy, authService, proxy, proxy) {
+            @Override
+            protected int showConfirmDialog(java.awt.Component parent, String title, Object message, int optionType, int messageType) {
+                if (message instanceof JScrollPane sp && sp.getViewport().getView() instanceof JTextArea area) {
+                    java.util.regex.Matcher m = java.util.regex.Pattern.compile("Application Reference:\\s*(\\S+)")
+                            .matcher(area.getText());
+                    if (m.find()) {
+                        previewRef.set(m.group(1));
+                    }
+                }
+                return JOptionPane.OK_OPTION;
+            }
+
+            @Override
+            protected void showDialogMessage(java.awt.Component parent, String title, String message, int messageType) {
+                if ("Loan Application Submitted".equals(title)) {
+                    submitDone.countDown();
+                }
+            }
+        };
+        activeDashboard.getInitialLoadFuture().get(5, TimeUnit.SECONDS);
+
+        SwingUtilities.invokeAndWait(() -> {
+            activeDashboard.navigateToTab("Loans");
+            activeDashboard.getLoanPanel().getPrincipalField().setText("1,500.00");
+            activeDashboard.getLoanPanel().getApplyLoanButton().doClick();
+        });
+
+        assertTrue(submitDone.await(5, TimeUnit.SECONDS), "Interactive loan submit should complete");
+        assertNotNull(previewRef.get());
+        List<LoanTransaction> loans = walletService.getLoansByWalletId(borrowerWallet.getWalletId());
+        assertEquals(1, loans.size());
+        assertEquals(previewRef.get(), loans.get(0).getReferenceNumber());
+
+        // Suspending borrower blocks admin disbursement of pending loan
+        SessionManager.getInstance().login(admin, walletService.getWalletByUserId(admin.getUserId()));
+        walletService.suspendUser(admin.getUserId(), borrower.getUserId(), "Compliance hold");
+        assertThrows(WalletException.class, () ->
+                walletService.approveLoan(admin.getUserId(), loans.get(0).getLoanId(), "Should fail while suspended"));
+        assertEquals(new BigDecimal("0.00"), walletService.getBalance(borrowerWallet.getWalletId()));
+    }
 }
