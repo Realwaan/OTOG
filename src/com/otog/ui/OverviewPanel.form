@@ -173,6 +173,27 @@
                   </component>
                 </children>
               </grid>
+              <grid id="filterKeywordGroup" layout-manager="FlowLayout" hgap="4" vgap="0" flow-align="0">
+                <constraints/>
+                <properties/>
+                <border type="none"/>
+                <children>
+                  <component id="lblFilterKeywordId" class="javax.swing.JLabel">
+                    <constraints/>
+                    <properties>
+                      <font name="SansSerif" size="12" style="0"/>
+                      <text value="Search:"/>
+                    </properties>
+                  </component>
+                  <component id="txtFilterKeywordId" class="javax.swing.JTextField" binding="txtFilterKeyword">
+                    <constraints/>
+                    <properties>
+                      <columns value="14"/>
+                      <toolTipText value="Search by reference, provider ref, biller ref, channel, product, or description"/>
+                    </properties>
+                  </component>
+                </children>
+              </grid>
               <grid id="filterButtonsGroup" layout-manager="FlowLayout" hgap="6" vgap="0" flow-align="0">
                 <constraints/>
                 <properties/>

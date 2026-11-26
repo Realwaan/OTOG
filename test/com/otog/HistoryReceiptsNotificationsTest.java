@@ -5,6 +5,7 @@ import com.otog.exception.DuplicateTransactionException;
 import com.otog.exception.InsufficientFundsException;
 import com.otog.exception.OtogException;
 import com.otog.model.CashInOutTransaction;
+import com.otog.model.InvestMoneyTransaction;
 import com.otog.model.Notification;
 import com.otog.model.NotificationType;
 import com.otog.model.ReceiptBuilder;
@@ -464,6 +465,34 @@ public class HistoryReceiptsNotificationsTest {
         activeDashboard.clearHistoryFiltersAsync().get(5, TimeUnit.SECONDS);
         assertEquals(2, activeDashboard.getRecentTransactionsTable().getRowCount());
 
+        // Interactive keyword search via OverviewPanel Search field + Filter button & Enter key
+        assertNotNull(activeDashboard.getFilterKeywordField());
+        SwingUtilities.invokeAndWait(() -> {
+            activeDashboard.getFilterKeywordField().setText("  coffee  ");
+            activeDashboard.getApplyFiltersButton().doClick();
+        });
+        activeDashboard.getOverviewPanel().getLastFilterRefreshFuture().get(5, TimeUnit.SECONDS);
+        assertEquals("coffee", activeDashboard.getActiveHistoryFilter().getKeyword());
+        assertEquals(1, activeDashboard.getRecentTransactionsTable().getRowCount());
+        assertEquals("REQ-UI-SEND", activeDashboard.getRecentTransactionsTable().getValueAt(0, 1));
+
+        // Enter key in keyword field filters by reference number
+        SwingUtilities.invokeAndWait(() -> {
+            activeDashboard.getFilterKeywordField().setText("REQ-UI-FUND");
+            activeDashboard.getFilterKeywordField().postActionEvent();
+        });
+        activeDashboard.getOverviewPanel().getLastFilterRefreshFuture().get(5, TimeUnit.SECONDS);
+        assertEquals("REQ-UI-FUND", activeDashboard.getActiveHistoryFilter().getKeyword());
+        assertEquals(1, activeDashboard.getRecentTransactionsTable().getRowCount());
+        assertEquals("REQ-UI-FUND", activeDashboard.getRecentTransactionsTable().getValueAt(0, 1));
+
+        // Reset button clears keyword field and restores all rows
+        SwingUtilities.invokeAndWait(() -> activeDashboard.getClearFiltersButton().doClick());
+        activeDashboard.getOverviewPanel().getLastFilterRefreshFuture().get(5, TimeUnit.SECONDS);
+        assertEquals("", activeDashboard.getFilterKeywordField().getText());
+        assertNull(activeDashboard.getActiveHistoryFilter().getKeyword());
+        assertEquals(2, activeDashboard.getRecentTransactionsTable().getRowCount());
+
         // NotificationInboxDialog loads off-EDT and marks all read, updating dashboard badge
         AtomicInteger badgeUpdates = new AtomicInteger(-1);
         NotificationInboxDialog inbox = new NotificationInboxDialog(
@@ -486,6 +515,62 @@ public class HistoryReceiptsNotificationsTest {
         } finally {
             SwingUtilities.invokeAndWait(inbox::dispose);
         }
+    }
+
+    @Test
+    @DisplayName("Keyword filtering escapes SQL wildcards and matches consistently across SQLite and in-memory TransactionFilter")
+    void testKeywordFilteringWildcardEscapingAndSubtypeParity() {
+        walletService.cashIn("REQ_WILD_1", aliceWallet.getWalletId(), null,
+                new BigDecimal("1000.00"), "50% bonus via GCash");
+        walletService.cashIn("REQ-WILD-2", aliceWallet.getWalletId(), null,
+                new BigDecimal("500.00"), "Regular topup");
+        walletService.payBill("REQ-BILL-KW", aliceWallet.getWalletId(),
+                "Meralco (Electricity)", "MERALCO-99887766",
+                new BigDecimal("200.00"), BigDecimal.ZERO, "Utility bill");
+        walletService.buyInvestment("REQ-INV-KW", aliceWallet.getWalletId(),
+                new BigDecimal("1.0000"), null);
+
+        List<Transaction> allAlice = walletService.getTransactionsByWalletId(aliceWallet.getWalletId());
+        assertEquals(4, allAlice.size());
+
+        // Literal '_' and '%' must NOT act as SQL LIKE wildcards
+        TransactionFilter underscoreFilter = TransactionFilter.builder().keyword("REQ_WILD").build();
+        List<Transaction> underscoreSql = walletService.getTransactionHistory(aliceWallet.getWalletId(), underscoreFilter);
+        assertEquals(1, underscoreSql.size());
+        assertEquals("REQ_WILD_1", underscoreSql.get(0).getReferenceNumber());
+        assertEquals(1, allAlice.stream().filter(underscoreFilter::matches).count());
+
+        TransactionFilter percentFilter = TransactionFilter.builder().keyword("50%").build();
+        List<Transaction> percentSql = walletService.getTransactionHistory(aliceWallet.getWalletId(), percentFilter);
+        assertEquals(1, percentSql.size());
+        assertEquals("REQ_WILD_1", percentSql.get(0).getReferenceNumber());
+        assertEquals(1, allAlice.stream().filter(percentFilter::matches).count());
+
+        // Biller reference and investment product match consistently in SQL and in-memory filter
+        TransactionFilter billerRefFilter = TransactionFilter.builder().keyword("99887766").build();
+        List<Transaction> billerSql = walletService.getTransactionHistory(aliceWallet.getWalletId(), billerRefFilter);
+        assertEquals(1, billerSql.size());
+        assertEquals("REQ-BILL-KW", billerSql.get(0).getReferenceNumber());
+        assertEquals(1, allAlice.stream().filter(billerRefFilter::matches).count());
+
+        TransactionFilter productFilter = TransactionFilter.builder().keyword("Balanced Fund").build();
+        List<Transaction> productSql = walletService.getTransactionHistory(aliceWallet.getWalletId(), productFilter);
+        assertEquals(1, productSql.size());
+        assertEquals("REQ-INV-KW", productSql.get(0).getReferenceNumber());
+        assertEquals(1, allAlice.stream().filter(productFilter::matches).count());
+
+        // Subtype-only fields match even when description does not repeat them
+        InvestMoneyTransaction customProductTxn = new InvestMoneyTransaction(
+                "TXN-MEM-1", "REQ-MEM-1", aliceWallet.getWalletId(),
+                new BigDecimal("100.00"), BigDecimal.ZERO, "Unique-Bond-Series", new BigDecimal("1.0000"));
+        customProductTxn.setDescription("Manual subscription");
+        assertTrue(TransactionFilter.builder().keyword("bond-series").build().matches(customProductTxn));
+
+        CashInOutTransaction customChannelTxn = new CashInOutTransaction(
+                "TXN-MEM-2", "REQ-MEM-2", aliceWallet.getWalletId(),
+                new BigDecimal("100.00"), BigDecimal.ZERO, "CASH_IN", "7-Eleven OTC");
+        customChannelTxn.setDescription("Manual deposit");
+        assertTrue(TransactionFilter.builder().keyword("7-eleven").build().matches(customChannelTxn));
     }
 
     private void updateTransactionCreatedAt(String transactionId, LocalDateTime createdAt) throws SQLException {

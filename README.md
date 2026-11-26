@@ -36,16 +36,17 @@ java --enable-native-access=ALL-UNNAMED \
 java --enable-native-access=ALL-UNNAMED -cp "out/production/OTOG:lib/*" UserLogin
 ```
 
-### Default Demo Account
-On first launch, the database (`data/otog.db`) automatically seeds a ready-to-use administrator account and three sample linked bank accounts (**BDO**, **BPI**, and **Metrobank**):
+### Default Demo Accounts
+On first launch, the database (`data/otog.db`) automatically seeds four deterministic demo accounts and three linked bank accounts (**BDO**, **BPI**, and **Metrobank**) per seeded user, configured in [`config/otog.properties`](config/otog.properties):
 
-| Field | Value |
-| :--- | :--- |
-| **Username / Mobile** | `admin` / `09000000000` |
-| **Password** | `password` |
-| **Transaction PIN** | `123456` |
-| **Starting Balance** | `PHP 1,000.00` |
-| **2FA OTP Code** | Printed to the terminal/console as `[SIMULATED SMS] OTP for ...` |
+| Role | Name / Username | Mobile | Password | Transaction PIN | Starting Balance |
+| :--- | :--- | :--- | :--- | :--- | :--- |
+| `ADMIN` | `admin` | `09000000000` | `password` | `123456` | `PHP 1,000.00` |
+| `MERCHANT` | `OTOG Merchant Store` | `09178888888` | `Merchant123!` | `8888` | `PHP 0.00` |
+| `USER` | `Demo Sender` | `09000000101` | `DemoPass123!` | `1234` | `PHP 5,000.00` |
+| `USER` | `Demo Recipient` | `09000000102` | `DemoPass123!` | `5678` | `PHP 1,500.00` |
+
+> **2FA OTP Code:** Printed to the terminal/console as `[SIMULATED SMS] OTP for ...` and displayed in the simulated SMS prompt on the login screen.
 
 New standard user accounts can also be created directly from the login screen via **Register** (each new account automatically receives a `PHP 0.00` wallet and demo bank links).
 
@@ -86,7 +87,7 @@ New standard user accounts can also be created directly from the login screen vi
 - **No Direct Balance Editing**: Arbitrary balance edits are explicitly prohibited (`UnsupportedOperationException`); all balance changes must occur through ledger-backed transactions.
 
 ### Merchant QR Payments
-- **Seeded Merchant Demo Account**: Automatically seeds `OTOG Merchant Store` (`USR-MERCHANT-01` / `WLT-MERCHANT-01`, mobile `09178888888`, password `password`, PIN `8888`, role `MERCHANT`) alongside the default administrator account.
+- **Seeded Merchant Demo Account**: Automatically seeds `OTOG Merchant Store` (`USR-MERCHANT-01` / `WLT-MERCHANT-01`, mobile `09178888888`, password `Merchant123!`, PIN `8888`, role `MERCHANT`) alongside the default administrator and demo user accounts.
 - **Role-Gated Merchant Terminal & Sales**: Accounts with `MERCHANT` or `ADMIN` role can generate fixed-amount or open-amount project QR PNGs (`MerchantQrPanel`), export them off the EDT, and inspect received QR payments with merchant-perspective receipts. Standard `USER` accounts see only the **Pay Merchant (QR Import)** flow.
 - **Validated Pre-PIN Confirmation & Atomic Settlement**: Importing a QR validates the checksum, merchant account & wallet status, currency, customer account & wallet currency, self-payment rules, and duplicate single-use reference (`REQ-QR-<ref>`), renders DB-verified merchant details and a confirmation preview (`MerchantPaymentPreview`), and settles atomically via `WalletOperations.transferWithPin`.
 - **Documented Project QR Format (`OTOG-MERCHANT-QR-v1` + `OTOGQR` PNG Raster)**:
@@ -101,10 +102,16 @@ New standard user accounts can also be created directly from the login screen vi
     ```
     Import verifies image pixel capacity and CRC-32 integrity before decoding.
 
-### In-Progress & Planned Modules
-- **Pay Bills**: Implemented (`BillPaymentTransaction`, `PayBillsPanel`, `WalletService.payBill*`) supporting 5 utility billers (Meralco, Manila Water, Maynilad, PLDT, Globe Telecom) with live fee preview and atomic fund reservation/release.
-- **Simulated Investments**: Implemented (`InvestMoneyTransaction`, `InvestmentPanel`, `InvestmentService`) with buy/redeem previews, holdings tracking, and PIN authorization.
-- **Simulated Loans** *(planned)*: Domain model (`LoanTransaction`) and service contract (`LoanService`) are implemented; service logic and UI tab are planned next.
+### Pay Bills
+- Supports 5 seeded utility billers (**Meralco**, **Manila Water**, **Maynilad**, **PLDT**, **Globe Telecom**) via `BillPaymentTransaction`, `PayBillsPanel`, and `WalletService.payBill*`.
+- Provides live fee/total calculation, biller reference validation and receipt masking, PIN authorization, atomic fund reservation/release, and post-commit notifications.
+
+### Simulated Investments
+- Supports buying and redeeming units in the seeded simulated fund (`OTOG-SIM-FUND` — *OTOG Simulated Balanced Fund*) via `InvestMoneyTransaction`, `InvestmentPanel`, and `InvestmentService`.
+- Includes pre-trade buy/redeem previews, persistent per-wallet holdings tracking (`investment_holdings`), and Transaction PIN authorization.
+
+### Deferred Scope
+- **Simulated Loans (CAP-12)** *(explicitly deferred)*: Domain model (`LoanTransaction`) and service contract (`LoanService`) are defined in the codebase, while the service implementation and `Loans` tab remain hidden per the [CAP-14 Feature Freeze Policy](docs/CAP-14-FEATURE-FREEZE.md).
 
 ---
 
@@ -114,10 +121,10 @@ The codebase follows a four-layer architecture where the UI communicates only th
 
 ```mermaid
 flowchart TB
-    UI["Presentation Layer: Swing .form Windows, Panels & Dialogs (UserLogin, Main, Overview, CashInOut, SendMoney, AdminControls, Notifications)"]
-    SVC["Service Layer: Business Logic, Security Proxies & Integrations (WalletService, AuthService, OtpService, SessionManager, AdminService, NotificationService, BankApiClient, StatementFileService)"]
+    UI["Presentation Layer: Swing .form Windows, Panels & Dialogs (UserLogin, Main, Overview, CashInOut, SendMoney, PayBills, MerchantQr, Investment, AdminControls, Notifications)"]
+    SVC["Service Layer: Business Logic, Security Proxies & Integrations (WalletService, AuthService, OtpService, SessionManager, AdminService, MerchantQrService, NotificationService, BankApiClient, StatementFileService)"]
     MDL["Domain Model Layer: Entities, Polymorphic Transactions & Rules (User, Wallet, Credential, Transaction Subtypes, LedgerEntry, Notification, Composite Fees & Receipts)"]
-    DATA["Persistence & Utilities: SQLite Database, Repositories & Config (DatabaseManager, 8 JDBC Repositories, OtogConfig, UiTheme, MoneyUtil, PasswordUtil)"]
+    DATA["Persistence & Utilities: SQLite Database, Repositories & Config (DatabaseManager, 9 JDBC Repositories, OtogConfig, UiTheme, MoneyUtil, PasswordUtil)"]
 
     UI --> SVC
     SVC --> MDL
@@ -218,6 +225,7 @@ Managed automatically on startup by `DatabaseManager` with foreign keys enabled 
 | `payment_methods` | Linked bank accounts, e-wallets, and cards per user |
 | `transactions` | Full transaction records, unique reference numbers, amounts, fees, types, statuses, and provider details |
 | `ledger_entries` | Double-entry `DEBIT` and `CREDIT` rows recording balances before and after every movement of funds |
+| `investment_products` | Seeded simulated investment product catalog and simulated unit prices |
 | `investment_holdings` | Per-wallet simulated investment unit holdings and total invested principal |
 | `admin_actions` | Traceable log of administrative actions with reasons and secret-redacted details |
 | `notifications` | Post-commit user alerts with read status and unique deduplication keys |

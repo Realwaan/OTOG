@@ -268,10 +268,19 @@ public class TransactionRepository {
             params.add(effective.getToDate().plusDays(1).atStartOfDay().toString());
         }
         if (effective.getKeyword() != null) {
-            sql.append(" AND (LOWER(reference_number) LIKE ? OR LOWER(COALESCE(provider_reference, '')) LIKE ? " +
-                    "OR LOWER(COALESCE(description, '')) LIKE ? OR LOWER(COALESCE(biller_reference, '')) LIKE ? " +
-                    "OR LOWER(COALESCE(channel, '')) LIKE ?)");
-            String likePattern = "%" + effective.getKeyword().toLowerCase(java.util.Locale.ROOT) + "%";
+            sql.append(" AND (LOWER(reference_number) LIKE ? ESCAPE '\\' " +
+                    "OR LOWER(COALESCE(provider_reference, '')) LIKE ? ESCAPE '\\' " +
+                    "OR LOWER(COALESCE(description, '')) LIKE ? ESCAPE '\\' " +
+                    "OR LOWER(COALESCE(biller_reference, '')) LIKE ? ESCAPE '\\' " +
+                    "OR LOWER(COALESCE(channel, '')) LIKE ? ESCAPE '\\' " +
+                    "OR LOWER(COALESCE(product, '')) LIKE ? ESCAPE '\\')");
+            String escapedKeyword = effective.getKeyword()
+                    .toLowerCase(java.util.Locale.ROOT)
+                    .replace("\\", "\\\\")
+                    .replace("%", "\\%")
+                    .replace("_", "\\_");
+            String likePattern = "%" + escapedKeyword + "%";
+            params.add(likePattern);
             params.add(likePattern);
             params.add(likePattern);
             params.add(likePattern);
