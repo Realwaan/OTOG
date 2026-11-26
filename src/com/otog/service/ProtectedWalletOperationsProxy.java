@@ -3,6 +3,7 @@ package com.otog.service;
 import com.otog.exception.EntityNotFoundException;
 import com.otog.exception.WalletException;
 import com.otog.model.InvestMoneyTransaction;
+import com.otog.model.LoanTransaction;
 import com.otog.model.Notification;
 import com.otog.model.PaymentMethod;
 import com.otog.model.Transaction;
@@ -20,7 +21,7 @@ import java.util.Objects;
  * callers by enforcing an active, non-suspended session and wallet ownership verification
  * before delegating to the underlying {@link WalletService} facade.
  */
-public class ProtectedWalletOperationsProxy implements WalletOperations, InvestmentService {
+public class ProtectedWalletOperationsProxy implements WalletOperations, InvestmentService, LoanService {
 
     private final WalletOperations delegate;
 
@@ -55,6 +56,24 @@ public class ProtectedWalletOperationsProxy implements WalletOperations, Investm
             return proxy.supportsInvestments() ? proxy : null;
         }
         return ops instanceof InvestmentService inv ? inv : null;
+    }
+
+    public boolean supportsLoans() {
+        WalletOperations current = delegate;
+        while (current instanceof ProtectedWalletOperationsProxy nested) {
+            current = nested.getDelegate();
+        }
+        return current instanceof LoanService;
+    }
+
+    public static LoanService asLoanServiceOrNull(WalletOperations ops) {
+        if (ops == null) {
+            return null;
+        }
+        if (ops instanceof ProtectedWalletOperationsProxy proxy) {
+            return proxy.supportsLoans() ? proxy : null;
+        }
+        return ops instanceof LoanService loan ? loan : null;
     }
 
     @Override
@@ -417,6 +436,130 @@ public class ProtectedWalletOperationsProxy implements WalletOperations, Investm
             return investmentDelegate;
         }
         throw new UnsupportedOperationException("Delegate does not implement InvestmentService");
+    }
+
+    // --- CAP-12 LoanService Protection Proxy ---
+
+    @Override
+    public LoanProduct getConfiguredLoanProduct() {
+        return requireLoanDelegate().getConfiguredLoanProduct();
+    }
+
+    @Override
+    public LoanPreview previewLoanApplication(String walletId, BigDecimal principal) {
+        User caller = requireActiveUser();
+        requireWalletOwnershipOrAdmin(caller, walletId);
+        return requireLoanDelegate().previewLoanApplication(walletId, principal);
+    }
+
+    @Override
+    public LoanTransaction applyForLoan(String referenceNumber, String walletId, BigDecimal principal) {
+        User caller = requireActiveUser();
+        requireWalletOwnershipOrAdmin(caller, walletId);
+        return requireLoanDelegate().applyForLoan(referenceNumber, walletId, principal);
+    }
+
+    @Override
+    public LoanTransaction applyLoan(String referenceNumber, String walletId, BigDecimal principal,
+                                     BigDecimal interestRate, int termMonths) {
+        User caller = requireActiveUser();
+        requireWalletOwnershipOrAdmin(caller, walletId);
+        return requireLoanDelegate().applyLoan(referenceNumber, walletId, principal, interestRate, termMonths);
+    }
+
+    @Override
+    public LoanTransaction approveLoan(String loanTransactionId) {
+        User caller = requireActiveUser();
+        requireAdminRole(caller, "approve loan applications");
+        return requireLoanDelegate().approveLoan(loanTransactionId);
+    }
+
+    @Override
+    public LoanTransaction approveLoan(String adminUserId, String loanIdOrTxnId, String reason) {
+        User caller = requireActiveUser();
+        requireAdminRole(caller, "approve loan applications");
+        if (adminUserId != null && !adminUserId.trim().isEmpty() && !caller.getUserId().equals(adminUserId.trim())) {
+            throw new SecurityException("Access denied: Admin identity mismatch.");
+        }
+        return requireLoanDelegate().approveLoan(caller.getUserId(), loanIdOrTxnId, reason);
+    }
+
+    @Override
+    public LoanTransaction rejectLoan(String adminUserId, String loanIdOrTxnId, String reason) {
+        User caller = requireActiveUser();
+        requireAdminRole(caller, "reject loan applications");
+        if (adminUserId != null && !adminUserId.trim().isEmpty() && !caller.getUserId().equals(adminUserId.trim())) {
+            throw new SecurityException("Access denied: Admin identity mismatch.");
+        }
+        return requireLoanDelegate().rejectLoan(caller.getUserId(), loanIdOrTxnId, reason);
+    }
+
+    @Override
+    public Transaction repayLoan(String referenceNumber, String walletId, String loanTransactionId, BigDecimal amount) {
+        User caller = requireActiveUser();
+        requireWalletOwnershipOrAdmin(caller, walletId);
+        return requireLoanDelegate().repayLoan(referenceNumber, walletId, loanTransactionId, amount);
+    }
+
+    @Override
+    public LoanTransaction repayLoanWithPin(String referenceNumber, String walletId, String loanIdOrTxnId,
+                                            BigDecimal amount, String rawPin) {
+        User caller = requireActiveUser();
+        requireWalletOwnershipOrAdmin(caller, walletId);
+        return requireLoanDelegate().repayLoanWithPin(referenceNumber, walletId, loanIdOrTxnId, amount, rawPin);
+    }
+
+    @Override
+    public LoanTransaction repayLoanFull(String referenceNumber, String walletId, String loanIdOrTxnId) {
+        User caller = requireActiveUser();
+        requireWalletOwnershipOrAdmin(caller, walletId);
+        return requireLoanDelegate().repayLoanFull(referenceNumber, walletId, loanIdOrTxnId);
+    }
+
+    @Override
+    public LoanTransaction repayLoanFullWithPin(String referenceNumber, String walletId, String loanIdOrTxnId,
+                                                String rawPin) {
+        User caller = requireActiveUser();
+        requireWalletOwnershipOrAdmin(caller, walletId);
+        return requireLoanDelegate().repayLoanFullWithPin(referenceNumber, walletId, loanIdOrTxnId, rawPin);
+    }
+
+    @Override
+    public List<LoanTransaction> getLoansByWalletId(String walletId) {
+        User caller = requireActiveUser();
+        requireWalletOwnershipOrAdmin(caller, walletId);
+        return requireLoanDelegate().getLoansByWalletId(walletId);
+    }
+
+    @Override
+    public List<LoanTransaction> getAllLoanApplications(String adminUserId) {
+        User caller = requireActiveUser();
+        requireAdminRole(caller, "review all loan applications");
+        if (adminUserId != null && !adminUserId.trim().isEmpty() && !caller.getUserId().equals(adminUserId.trim())) {
+            throw new SecurityException("Access denied: Admin identity mismatch.");
+        }
+        return requireLoanDelegate().getAllLoanApplications(caller.getUserId());
+    }
+
+    @Override
+    public BigDecimal getOutstandingAmountDue(String walletId) {
+        User caller = requireActiveUser();
+        requireWalletOwnershipOrAdmin(caller, walletId);
+        return requireLoanDelegate().getOutstandingAmountDue(walletId);
+    }
+
+    private LoanService requireLoanDelegate() {
+        if (delegate instanceof LoanService loanDelegate) {
+            return loanDelegate;
+        }
+        throw new UnsupportedOperationException("Delegate does not implement LoanService");
+    }
+
+    private static void requireAdminRole(User caller, String operationDescription) {
+        if (!caller.isAdmin()) {
+            throw new SecurityException("Access denied: Administrator privileges required to "
+                    + operationDescription + ". Current role: " + caller.getRole());
+        }
     }
 
     private static User requireActiveUser() {

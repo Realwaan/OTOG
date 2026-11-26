@@ -7,6 +7,7 @@ import com.otog.model.BillPaymentTransaction;
 import com.otog.model.CashInOutTransaction;
 import com.otog.model.CompositeFeePolicy;
 import com.otog.model.InvestMoneyTransaction;
+import com.otog.model.LoanTransaction;
 import com.otog.model.PaymentMethod;
 import com.otog.model.SendMoneyTransaction;
 import com.otog.model.Transaction;
@@ -33,6 +34,7 @@ import com.otog.util.UiTheme;
 
 import javax.swing.*;
 import java.awt.*;
+import java.math.BigDecimal;
 import java.nio.file.Path;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
@@ -96,6 +98,7 @@ public class Main extends JFrame {
     private SendMoneyPanel sendMoneyPanel;
     private PayBillsPanel payBillsPanel;
     private MerchantQrPanel merchantQrPanel;
+    private LoanPanel loanPanel;
     private InvestmentPanel investmentPanel;
     private AdminControlsPanel adminControlsPanel;
 
@@ -128,8 +131,9 @@ public class Main extends JFrame {
                 : new AuthServiceImpl(initializedDatabaseManager);
         WalletOperations guardedWalletOps = ProtectedWalletOperationsProxy.wrap(
                 new WalletService(initializedDatabaseManager, effectiveAuth));
+        LoanService loanSvc = ProtectedWalletOperationsProxy.asLoanServiceOrNull(guardedWalletOps);
         InvestmentService invService = ProtectedWalletOperationsProxy.asInvestmentServiceOrNull(guardedWalletOps);
-        return new Main(guardedWalletOps, effectiveAuth, null, invService, initializedDatabaseManager);
+        return new Main(guardedWalletOps, effectiveAuth, loanSvc, invService, initializedDatabaseManager);
     }
 
     public Main(WalletOperations walletService) {
@@ -280,7 +284,9 @@ public class Main extends JFrame {
 
         // Hide unfinished modules unless an implementation is explicitly provided
         if (loanService != null) {
-            registerTab("Loans", buildServiceReadyNotice("Loans module active"));
+            loanPanel = new LoanPanel(walletService, loanService, authService);
+            wireLoanPanel();
+            registerTab("Loans", loanPanel);
         }
         if (investmentService != null) {
             investmentPanel = new InvestmentPanel(walletService, investmentService, authService);
@@ -326,6 +332,7 @@ public class Main extends JFrame {
     private void wireOverviewPanel() {
         overviewPanel.setPinSettingsEnabled(authService != null);
         overviewPanel.setInvestmentsEnabled(investmentService != null);
+        overviewPanel.setLoansEnabled(loanService != null);
         overviewPanel.setOnQuickNavCashIn(() -> {
             navigateToTab("Cash In / Out");
             cashInOutPanel.prepareForOperation("CASH_IN");
@@ -347,6 +354,11 @@ public class Main extends JFrame {
         overviewPanel.setOnQuickNavInvest(() -> {
             if (navigateToTab("Investments") && investmentPanel != null) {
                 investmentPanel.focusUnits();
+            }
+        });
+        overviewPanel.setOnQuickNavLoans(() -> {
+            if (navigateToTab("Loans") && loanPanel != null) {
+                loanPanel.focusPrincipal();
             }
         });
         overviewPanel.setOnQuickNavMerchantQr(() -> navigateToTab("Merchant QR"));
@@ -408,6 +420,23 @@ public class Main extends JFrame {
         investmentPanel.setOffEdtObserver(offEdt -> lastPaymentExecutedOffEdt = offEdt);
         investmentPanel.setOnRefreshRequested(this::refreshDashboardAsync);
         investmentPanel.setOnOperationError(this::checkSessionTerminatedOnError);
+    }
+
+    private void wireLoanPanel() {
+        if (loanPanel == null) {
+            return;
+        }
+        loanPanel.setOnBackToOverview(() -> navigateToTab("Overview"));
+        loanPanel.setBeforeInteractiveSubmit(this::ensureActiveSessionForInteraction);
+        loanPanel.setPinConfiguredSupplier(() -> cachedHasPin);
+        loanPanel.setOnPinNotSet(() -> promptPinSetupIfMissing("A Transaction PIN is required before repaying a loan."));
+        loanPanel.setIsLogoutHandledSupplier(() -> logoutHandled);
+        loanPanel.setDialogMessageCallback(this::showDialogMessage);
+        loanPanel.setConfirmDialogCallback(this::showConfirmDialog);
+        loanPanel.setOnStatusMessage(lblStatus::setText);
+        loanPanel.setOffEdtObserver(offEdt -> lastPaymentExecutedOffEdt = offEdt);
+        loanPanel.setOnRefreshRequested(this::refreshDashboardAsync);
+        loanPanel.setOnOperationError(this::checkSessionTerminatedOnError);
     }
 
     private void wirePayBillsPanel() {
@@ -482,12 +511,6 @@ public class Main extends JFrame {
         int index = tabs.getTabCount();
         tabs.addTab(title, content);
         tabIndexByTitle.put(title.toLowerCase(Locale.ROOT), index);
-    }
-
-    private JPanel buildServiceReadyNotice(String text) {
-        JPanel panel = new JPanel(new BorderLayout());
-        panel.add(new JLabel(text, SwingConstants.CENTER), BorderLayout.CENTER);
-        return panel;
     }
 
     private void applyInitialSessionSnapshot() {
@@ -601,8 +624,21 @@ public class Main extends JFrame {
                     investHolding = investmentService.getHolding(wallet.getWalletId());
                     investActivities = investmentService.getInvestmentsByWalletId(wallet.getWalletId());
                 }
+                LoanService.LoanProduct loanProduct = null;
+                List<LoanTransaction> userLoans = Collections.emptyList();
+                BigDecimal loanOutstandingDue = MoneyUtil.ZERO;
+                List<LoanTransaction> adminLoans = null;
+                if (loanService != null && wallet != null) {
+                    loanProduct = loanService.getConfiguredLoanProduct();
+                    userLoans = loanService.getLoansByWalletId(wallet.getWalletId());
+                    loanOutstandingDue = loanService.getOutstandingAmountDue(wallet.getWalletId());
+                    if (user != null && user.isAdmin()) {
+                        adminLoans = loanService.getAllLoanApplications(user.getUserId());
+                    }
+                }
                 return new DashboardSnapshot(user, wallet, transactions, paymentMethods, hasPin,
-                        unreadNotifications, investProduct, investHolding, investActivities);
+                        unreadNotifications, investProduct, investHolding, investActivities,
+                        loanProduct, userLoans, loanOutstandingDue, adminLoans);
             }
 
             @Override
@@ -620,6 +656,10 @@ public class Main extends JFrame {
                     if (investmentPanel != null) {
                         investmentPanel.updateProductAndHoldings(snapshot.investProduct, snapshot.investHolding);
                         investmentPanel.updateActivityTable(snapshot.investActivities);
+                    }
+                    if (loanPanel != null) {
+                        loanPanel.updateProductAndLoans(snapshot.loanProduct, snapshot.userLoans,
+                                snapshot.loanOutstandingDue, snapshot.adminLoans);
                     }
                     if (merchantQrPanel != null) {
                         merchantQrPanel.applyRoleAccessControl();
@@ -1140,6 +1180,10 @@ public class Main extends JFrame {
         return overviewPanel != null ? overviewPanel.getNavInvestButton() : null;
     }
 
+    public JButton getLoansQuickNavButton() {
+        return overviewPanel != null ? overviewPanel.getNavLoansButton() : null;
+    }
+
     public JButton getPinSettingsButton() {
         return btnPinSettings;
     }
@@ -1270,6 +1314,10 @@ public class Main extends JFrame {
 
     public InvestmentPanel getInvestmentPanel() {
         return investmentPanel;
+    }
+
+    public LoanPanel getLoanPanel() {
+        return loanPanel;
     }
 
     public JComboBox<String> getInvestOperationComboBox() {
@@ -1443,32 +1491,15 @@ public class Main extends JFrame {
         return pnlRoot;
     }
 
-    private static final class DashboardSnapshot {
-        private final User user;
-        private final Wallet wallet;
-        private final List<Transaction> transactions;
-        private final List<PaymentMethod> paymentMethods;
-        private final boolean hasPin;
-        private final int unreadNotifications;
-        private final InvestmentService.SimulatedProduct investProduct;
-        private final InvestmentService.InvestmentHolding investHolding;
-        private final List<InvestMoneyTransaction> investActivities;
-
-        private DashboardSnapshot(User user, Wallet wallet, List<Transaction> transactions,
-                                  List<PaymentMethod> paymentMethods, boolean hasPin,
-                                  int unreadNotifications,
-                                  InvestmentService.SimulatedProduct investProduct,
-                                  InvestmentService.InvestmentHolding investHolding,
-                                  List<InvestMoneyTransaction> investActivities) {
-            this.user = user;
-            this.wallet = wallet;
-            this.transactions = transactions;
-            this.paymentMethods = paymentMethods;
-            this.hasPin = hasPin;
-            this.unreadNotifications = unreadNotifications;
-            this.investProduct = investProduct;
-            this.investHolding = investHolding;
-            this.investActivities = investActivities;
-        }
+    private record DashboardSnapshot(User user, Wallet wallet, List<Transaction> transactions,
+                                     List<PaymentMethod> paymentMethods, boolean hasPin,
+                                     int unreadNotifications,
+                                     InvestmentService.SimulatedProduct investProduct,
+                                     InvestmentService.InvestmentHolding investHolding,
+                                     List<InvestMoneyTransaction> investActivities,
+                                     LoanService.LoanProduct loanProduct,
+                                     List<LoanTransaction> userLoans,
+                                     BigDecimal loanOutstandingDue,
+                                     List<LoanTransaction> adminLoans) {
     }
 }

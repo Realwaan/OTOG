@@ -11,6 +11,7 @@ import com.otog.util.OtogConfig;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.sql.Connection;
+import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -23,7 +24,7 @@ import java.util.concurrent.locks.ReentrantLock;
  * Service orchestrating wallet domain logic, transaction correctness, atomic commits,
  * and concurrency protection against double-spending.
  */
-public class WalletService implements WalletOperations, InvestmentService {
+public class WalletService implements WalletOperations, InvestmentService, LoanService {
     private final DatabaseManager databaseManager;
     private final UserRepository userRepository;
     private final WalletRepository walletRepository;
@@ -31,6 +32,7 @@ public class WalletService implements WalletOperations, InvestmentService {
     private final TransactionRepository transactionRepository;
     private final LedgerRepository ledgerRepository;
     private final InvestmentRepository investmentRepository;
+    private final LoanRepository loanRepository;
 
     private final ConcurrentHashMap<String, ReentrantLock> walletLocks = new ConcurrentHashMap<>();
     private final AuthService authService;
@@ -107,6 +109,7 @@ public class WalletService implements WalletOperations, InvestmentService {
         this.transactionRepository = transactionRepository;
         this.ledgerRepository = ledgerRepository;
         this.investmentRepository = new InvestmentRepository(databaseManager);
+        this.loanRepository = new LoanRepository(databaseManager);
         this.authService = authService;
         this.requirePinAuthorization = requirePinAuthorization;
         this.bankApiClient = new BankApiClient();
@@ -247,6 +250,10 @@ public class WalletService implements WalletOperations, InvestmentService {
         return investmentRepository;
     }
 
+    public LoanRepository getLoanRepository() {
+        return loanRepository;
+    }
+
     private ReentrantLock getLock(String walletId) {
         return walletLocks.computeIfAbsent(walletId, k -> new ReentrantLock(true));
     }
@@ -378,6 +385,32 @@ public class WalletService implements WalletOperations, InvestmentService {
             return ReceiptBuilder.forMerchantPayment(txn, merchantName, qrRef, isMerchantView).build();
         }
 
+        if (txn instanceof LoanTransaction lt) {
+            String loanKey = (lt.getLoanId() != null && !lt.getLoanId().isBlank())
+                    ? lt.getLoanId()
+                    : lt.getTransactionId();
+            loanRepository.findByKey(loanKey).ifPresent(record -> {
+                lt.setLoanId(record.getLoanId());
+                lt.setProductCode(record.getProductCode());
+                lt.setProductName(record.getProductName());
+                lt.setInterestAmount(record.getInterestAmount());
+                lt.setProcessingFee(record.getProcessingFee());
+                lt.setTotalRepaymentDue(record.getTotalRepaymentDue());
+                if (lt.getType() == TransactionType.LOAN_REPAYMENT) {
+                    lt.setLoanStatus(LoanStatus.PAID);
+                    lt.setAmountDue(MoneyUtil.ZERO);
+                    lt.setLinkedLoanTransactionId(record.getTransactionId());
+                } else {
+                    lt.setLoanStatus(record.getLoanStatus());
+                    lt.setAmountDue(record.getAmountDue());
+                    lt.setDecisionReason(record.getDecisionReason());
+                    if (record.getDueDate() != null) {
+                        lt.setDueDate(record.getDueDate());
+                    }
+                }
+            });
+        }
+
         String counterpartyDisplay = resolveMaskedCounterpartyForReceipt(cleanWalletId, txn);
         return txn.getReceipt(cleanWalletId, counterpartyDisplay);
     }
@@ -483,6 +516,9 @@ public class WalletService implements WalletOperations, InvestmentService {
             return (bpt.getBillerName() != null && !bpt.getBillerName().trim().isEmpty())
                     ? bpt.getBillerName().trim()
                     : "Biller";
+        }
+        if (txn instanceof LoanTransaction) {
+            return "OTOG Lending";
         }
         String counterpartyWalletId = null;
         if (viewingWalletId.equals(txn.getSourceWalletId())) {
@@ -2076,5 +2112,624 @@ public class WalletService implements WalletOperations, InvestmentService {
     }
 
     private record CommittedInvestmentOp(InvestMoneyTransaction txn, String ownerUserId) {
+    }
+
+    // --- CAP-12: Basic Simulated Loan Workflow ---
+
+    @Override
+    public LoanProduct getConfiguredLoanProduct() {
+        return loanRepository.findConfiguredProduct();
+    }
+
+    @Override
+    public LoanPreview previewLoanApplication(String walletId, BigDecimal principal) {
+        if (walletId == null || walletId.trim().isEmpty()) {
+            throw new IllegalArgumentException("Wallet ID must not be null or empty");
+        }
+        String cleanWalletId = walletId.trim();
+        Wallet wallet = getWallet(cleanWalletId);
+        validateUserStatusActive(wallet.getUserId());
+        if (wallet.getStatus() != WalletStatus.ACTIVE) {
+            throw new WalletException("Wallet is not active: " + wallet.getStatus());
+        }
+        LoanProduct product = getConfiguredLoanProduct();
+        BigDecimal validPrincipal = validateLoanPrincipalForProduct(principal, product, wallet.getCurrency());
+        LoanCharges charges = calculateLoanCharges(validPrincipal, product);
+        LocalDate estimatedDueDate = LocalDate.now().plusMonths(product.getTermMonths());
+        return new LoanPreview(
+                cleanWalletId,
+                product.getProductCode(),
+                product.getProductName(),
+                validPrincipal,
+                product.getMonthlyInterestRate(),
+                product.getTermMonths(),
+                charges.interestAmount(),
+                charges.processingFee(),
+                charges.totalRepaymentDue(),
+                estimatedDueDate,
+                wallet.getCurrency(),
+                IdGenerator.nextReferenceNumber(),
+                product.getCalculationFormula()
+        );
+    }
+
+    @Override
+    public LoanTransaction applyForLoan(String referenceNumber, String walletId, BigDecimal principal) {
+        LoanProduct product = getConfiguredLoanProduct();
+        return applyLoan(referenceNumber, walletId, principal,
+                product.getMonthlyInterestRate(), product.getTermMonths());
+    }
+
+    @Override
+    public LoanTransaction applyLoan(String referenceNumber, String walletId, BigDecimal principal,
+                                     BigDecimal interestRate, int termMonths) {
+        validateReferenceNumber(referenceNumber);
+        String cleanRef = referenceNumber.trim();
+        if (walletId == null || walletId.trim().isEmpty()) {
+            throw new IllegalArgumentException("Wallet ID must not be null or empty");
+        }
+        String cleanWalletId = walletId.trim();
+
+        LoanProduct product = getConfiguredLoanProduct();
+        BigDecimal effectiveRate = interestRate != null ? interestRate : product.getMonthlyInterestRate();
+        if (effectiveRate.compareTo(product.getMonthlyInterestRate()) != 0) {
+            throw new WalletException("Unsupported interest rate '" + effectiveRate.toPlainString()
+                    + "'. Only the single configured loan product (" + product.getProductName()
+                    + " @ " + product.getMonthlyInterestRate().toPlainString() + "/mo) is supported.");
+        }
+        int effectiveTerm = termMonths == 0 ? product.getTermMonths() : termMonths;
+        if (effectiveTerm < 0) {
+            throw new IllegalArgumentException("Loan term months must be greater than zero.");
+        }
+        if (effectiveTerm != product.getTermMonths()) {
+            throw new WalletException("Unsupported loan term '" + effectiveTerm
+                    + " months'. Only the single configured loan product term (" + product.getTermMonths()
+                    + " months) is supported; installment scheduling is deferred.");
+        }
+
+        ReentrantLock lock = getLock(cleanWalletId);
+        CommittedLoanOp committed;
+        lock.lock();
+        try {
+            committed = databaseManager.executeInTransaction(conn -> {
+                if (transactionRepository.existsByReferenceNumber(cleanRef, conn)) {
+                    throw new DuplicateTransactionException(cleanRef,
+                            "Duplicate transaction request reference: " + cleanRef);
+                }
+
+                Wallet wallet = walletRepository.findById(cleanWalletId, conn)
+                        .orElseThrow(() -> new EntityNotFoundException("Wallet", cleanWalletId));
+                User borrower = validateAccountNotSuspended(wallet.getUserId(), conn);
+                if (wallet.getStatus() != WalletStatus.ACTIVE) {
+                    throw new WalletException("Wallet is not active: " + wallet.getStatus());
+                }
+
+                BigDecimal validPrincipal = validateLoanPrincipalForProduct(principal, product, wallet.getCurrency());
+                LoanCharges charges = calculateLoanCharges(validPrincipal, product);
+                LocalDate estimatedDueDate = LocalDate.now().plusMonths(effectiveTerm);
+
+                String loanId = IdGenerator.nextLoanId();
+                String txnId = IdGenerator.nextTransactionId();
+                String desc = "Loan Application " + loanId + " (" + product.getProductName()
+                        + ") — Principal " + MoneyUtil.format(validPrincipal, wallet.getCurrency())
+                        + ", Total Due " + MoneyUtil.format(charges.totalRepaymentDue(), wallet.getCurrency())
+                        + " [SIMULATED]";
+
+                LoanTransaction txn = new TransactionBuilder()
+                        .transactionId(txnId)
+                        .referenceNumber(cleanRef)
+                        .to(cleanWalletId)
+                        .principal(validPrincipal)
+                        .interestRate(effectiveRate)
+                        .termMonths(effectiveTerm)
+                        .dueDate(estimatedDueDate)
+                        .currency(wallet.getCurrency())
+                        .product(product.getProductName())
+                        .providerReference(loanId)
+                        .providerStatus(LoanStatus.PENDING_APPROVAL.name())
+                        .type(TransactionType.LOAN_DISBURSEMENT)
+                        .status(TransactionStatus.PENDING)
+                        .description(desc)
+                        .buildLoan();
+                txn.setLoanId(loanId);
+                txn.setBorrowerUserId(wallet.getUserId());
+                txn.setBorrowerName(borrower != null ? borrower.getName() : null);
+                txn.setProductCode(product.getProductCode());
+                txn.setProductName(product.getProductName());
+                txn.setInterestAmount(charges.interestAmount());
+                txn.setProcessingFee(charges.processingFee());
+                txn.setTotalRepaymentDue(charges.totalRepaymentDue());
+                txn.setAmountDue(MoneyUtil.ZERO);
+                txn.apply();
+
+                transactionRepository.save(txn, conn);
+                loanRepository.save(txn, conn);
+
+                return new CommittedLoanOp(txn, wallet.getUserId(), NotificationType.LOAN_APPLIED);
+            });
+            dispatchLoanNotificationPostCommit(committed);
+            return committed.txn();
+        } finally {
+            lock.unlock();
+        }
+    }
+
+    @Override
+    public LoanTransaction approveLoan(String loanTransactionId) {
+        User admin = requireAdminCallerForLoans(null, "approve loan applications");
+        return approveLoan(admin.getUserId(), loanTransactionId, "Approved by administrator");
+    }
+
+    @Override
+    public LoanTransaction approveLoan(String adminUserId, String loanIdOrTxnId, String reason) {
+        User admin = requireAdminCallerForLoans(adminUserId, "approve loan applications");
+        if (loanIdOrTxnId == null || loanIdOrTxnId.trim().isEmpty()) {
+            throw new IllegalArgumentException("Loan ID or transaction ID must not be null or empty");
+        }
+        String cleanKey = loanIdOrTxnId.trim();
+        String safeReason = (reason != null && !reason.trim().isEmpty())
+                ? AdminAction.sanitizeWithoutSecrets(reason.trim())
+                : "Approved by administrator";
+
+        LoanTransaction lookup = loanRepository.findByKey(cleanKey)
+                .orElseThrow(() -> new EntityNotFoundException("Loan application", cleanKey));
+        String targetWalletId = lookup.getBorrowerWalletId();
+
+        ReentrantLock lock = getLock(targetWalletId);
+        CommittedLoanOp committed;
+        lock.lock();
+        try {
+            committed = databaseManager.executeInTransaction(conn -> {
+                LoanTransaction loan = loanRepository.findByKey(cleanKey, conn)
+                        .orElseThrow(() -> new EntityNotFoundException("Loan application", cleanKey));
+                if (loan.getLoanStatus() == LoanStatus.DISBURSED) {
+                    throw new WalletException("Duplicate disbursement rejected: Loan " + loan.getLoanId()
+                            + " has already been approved and disbursed.");
+                }
+                if (loan.getLoanStatus() == LoanStatus.PAID) {
+                    throw new WalletException("Duplicate disbursement rejected: Loan " + loan.getLoanId()
+                            + " has already been disbursed and repaid.");
+                }
+                if (loan.getLoanStatus() == LoanStatus.REJECTED) {
+                    throw new WalletException("Cannot approve rejected loan application " + loan.getLoanId() + ".");
+                }
+
+                Wallet borrowerWallet = walletRepository.findById(loan.getBorrowerWalletId(), conn)
+                        .orElseThrow(() -> new EntityNotFoundException("Wallet", loan.getBorrowerWalletId()));
+                validateAccountNotSuspended(borrowerWallet.getUserId(), conn);
+                if (borrowerWallet.getStatus() != WalletStatus.ACTIVE) {
+                    throw new WalletException("Borrower wallet is not active: " + borrowerWallet.getStatus());
+                }
+
+                LocalDateTime now = LocalDateTime.now();
+                LocalDate finalDueDate = now.toLocalDate().plusMonths(Math.max(1, loan.getTermMonths()));
+                int updated = loanRepository.markDisbursedIfPending(
+                        loan.getLoanId(),
+                        loan.getTotalRepaymentDue(),
+                        finalDueDate,
+                        admin.getUserId(),
+                        safeReason,
+                        now,
+                        conn
+                );
+                if (updated != 1) {
+                    throw new WalletException("Duplicate disbursement rejected: Loan " + loan.getLoanId()
+                            + " has already been processed.");
+                }
+
+                transactionRepository.updateLoanTransactionOutcome(
+                        loan.getTransactionId(),
+                        TransactionStatus.COMPLETED,
+                        LoanStatus.DISBURSED.name(),
+                        finalDueDate,
+                        now,
+                        conn
+                );
+
+                BigDecimal balanceBefore = borrowerWallet.getBalance();
+                BigDecimal balanceAfter = balanceBefore.add(loan.getPrincipal())
+                        .setScale(MoneyUtil.DEFAULT_SCALE, MoneyUtil.DEFAULT_ROUNDING);
+                walletRepository.updateBalance(borrowerWallet.getWalletId(), balanceAfter, conn);
+                borrowerWallet.setBalance(balanceAfter);
+
+                LedgerEntry creditEntry = new LedgerEntry(
+                        IdGenerator.nextLedgerEntryId(),
+                        loan.getTransactionId(),
+                        borrowerWallet.getWalletId(),
+                        LedgerEntryType.CREDIT,
+                        loan.getPrincipal(),
+                        balanceBefore,
+                        balanceAfter,
+                        borrowerWallet.getCurrency(),
+                        "Loan disbursement " + loan.getLoanId() + " (" + loan.getProductName() + ")"
+                );
+                ledgerRepository.save(creditEntry, conn);
+
+                String details = AdminAction.sanitizeWithoutSecrets(
+                        "Approved and disbursed loan " + loan.getLoanId()
+                                + " (principal=" + MoneyUtil.format(loan.getPrincipal(), loan.getCurrency())
+                                + ", totalDue=" + MoneyUtil.format(loan.getTotalRepaymentDue(), loan.getCurrency())
+                                + ") to wallet " + borrowerWallet.getWalletId()
+                                + ". Reason: " + safeReason);
+                AdminAction audit = new AdminAction(
+                        IdGenerator.nextAdminActionId(),
+                        admin.getUserId(),
+                        "APPROVE_LOAN",
+                        borrowerWallet.getUserId(),
+                        safeReason,
+                        details
+                );
+                adminActionRepository.save(audit, conn);
+
+                loan.setDueDate(finalDueDate);
+                loan.setStatus(TransactionStatus.COMPLETED);
+                loan.setCompletedAt(now);
+                loan.setProviderStatus(LoanStatus.DISBURSED.name());
+                loan.setLoanStatus(LoanStatus.DISBURSED);
+                loan.setAmountDue(loan.getTotalRepaymentDue());
+                loan.setReviewedByAdminId(admin.getUserId());
+                loan.setDecisionReason(safeReason);
+                loan.setDisbursedAt(now);
+
+                return new CommittedLoanOp(loan, borrowerWallet.getUserId(), NotificationType.LOAN_APPROVED);
+            });
+            dispatchLoanNotificationPostCommit(committed);
+            return committed.txn();
+        } finally {
+            lock.unlock();
+        }
+    }
+
+    @Override
+    public LoanTransaction rejectLoan(String adminUserId, String loanIdOrTxnId, String reason) {
+        User admin = requireAdminCallerForLoans(adminUserId, "reject loan applications");
+        if (loanIdOrTxnId == null || loanIdOrTxnId.trim().isEmpty()) {
+            throw new IllegalArgumentException("Loan ID or transaction ID must not be null or empty");
+        }
+        if (reason == null || reason.trim().isEmpty()) {
+            throw new IllegalArgumentException("A recorded reason is mandatory to reject a loan application.");
+        }
+        String cleanKey = loanIdOrTxnId.trim();
+        String safeReason = AdminAction.sanitizeWithoutSecrets(reason.trim());
+
+        LoanTransaction lookup = loanRepository.findByKey(cleanKey)
+                .orElseThrow(() -> new EntityNotFoundException("Loan application", cleanKey));
+        String targetWalletId = lookup.getBorrowerWalletId();
+
+        ReentrantLock lock = getLock(targetWalletId);
+        CommittedLoanOp committed;
+        lock.lock();
+        try {
+            committed = databaseManager.executeInTransaction(conn -> {
+                LoanTransaction loan = loanRepository.findByKey(cleanKey, conn)
+                        .orElseThrow(() -> new EntityNotFoundException("Loan application", cleanKey));
+                if (loan.getLoanStatus() != LoanStatus.PENDING_APPROVAL) {
+                    throw new WalletException("Cannot reject loan " + loan.getLoanId()
+                            + " in status " + loan.getLoanStatus() + ".");
+                }
+
+                LocalDateTime now = LocalDateTime.now();
+                int updated = loanRepository.markRejectedIfPending(
+                        loan.getLoanId(),
+                        admin.getUserId(),
+                        safeReason,
+                        now,
+                        conn
+                );
+                if (updated != 1) {
+                    throw new WalletException("Loan " + loan.getLoanId() + " has already been processed.");
+                }
+
+                transactionRepository.updateLoanTransactionOutcome(
+                        loan.getTransactionId(),
+                        TransactionStatus.FAILED,
+                        LoanStatus.REJECTED.name(),
+                        loan.getDueDate(),
+                        now,
+                        conn
+                );
+
+                String details = AdminAction.sanitizeWithoutSecrets(
+                        "Rejected loan application " + loan.getLoanId()
+                                + " (principal=" + MoneyUtil.format(loan.getPrincipal(), loan.getCurrency())
+                                + ") for wallet " + loan.getBorrowerWalletId()
+                                + ". Reason: " + safeReason);
+                AdminAction audit = new AdminAction(
+                        IdGenerator.nextAdminActionId(),
+                        admin.getUserId(),
+                        "REJECT_LOAN",
+                        loan.getBorrowerUserId(),
+                        safeReason,
+                        details
+                );
+                adminActionRepository.save(audit, conn);
+
+                loan.setStatus(TransactionStatus.FAILED);
+                loan.setCompletedAt(now);
+                loan.setProviderStatus(LoanStatus.REJECTED.name());
+                loan.setLoanStatus(LoanStatus.REJECTED);
+                loan.setAmountDue(MoneyUtil.ZERO);
+                loan.setReviewedByAdminId(admin.getUserId());
+                loan.setDecisionReason(safeReason);
+
+                return new CommittedLoanOp(loan, loan.getBorrowerUserId(), NotificationType.LOAN_REJECTED);
+            });
+            dispatchLoanNotificationPostCommit(committed);
+            return committed.txn();
+        } finally {
+            lock.unlock();
+        }
+    }
+
+    @Override
+    public Transaction repayLoan(String referenceNumber, String walletId, String loanTransactionId, BigDecimal amount) {
+        return executeFullLoanRepayment(referenceNumber, walletId, loanTransactionId, amount);
+    }
+
+    @Override
+    public LoanTransaction repayLoanWithPin(String referenceNumber, String walletId, String loanIdOrTxnId,
+                                            BigDecimal amount, String rawPin) {
+        String cleanWalletId = walletId != null ? walletId.trim() : null;
+        authorizeWithPin(cleanWalletId, rawPin);
+        return executeFullLoanRepayment(referenceNumber, cleanWalletId, loanIdOrTxnId, amount);
+    }
+
+    @Override
+    public LoanTransaction repayLoanFull(String referenceNumber, String walletId, String loanIdOrTxnId) {
+        return executeFullLoanRepayment(referenceNumber, walletId, loanIdOrTxnId, null);
+    }
+
+    @Override
+    public LoanTransaction repayLoanFullWithPin(String referenceNumber, String walletId, String loanIdOrTxnId,
+                                                String rawPin) {
+        String cleanWalletId = walletId != null ? walletId.trim() : null;
+        authorizeWithPin(cleanWalletId, rawPin);
+        return executeFullLoanRepayment(referenceNumber, cleanWalletId, loanIdOrTxnId, null);
+    }
+
+    private LoanTransaction executeFullLoanRepayment(String referenceNumber, String walletId,
+                                                     String loanIdOrTxnId, BigDecimal suppliedAmount) {
+        validateReferenceNumber(referenceNumber);
+        String cleanRef = referenceNumber.trim();
+        if (walletId == null || walletId.trim().isEmpty()) {
+            throw new IllegalArgumentException("Wallet ID must not be null or empty");
+        }
+        String cleanWalletId = walletId.trim();
+        if (loanIdOrTxnId == null || loanIdOrTxnId.trim().isEmpty()) {
+            throw new IllegalArgumentException("Loan ID or transaction ID must not be null or empty");
+        }
+        String cleanKey = loanIdOrTxnId.trim();
+        BigDecimal validatedSuppliedAmount = suppliedAmount != null
+                ? MoneyUtil.validatePositiveAmount(suppliedAmount)
+                : null;
+
+        if (requirePinAuthorization) {
+            SessionManager.getInstance().requirePinAuthorization(null);
+        }
+
+        ReentrantLock lock = getLock(cleanWalletId);
+        CommittedLoanOp committed;
+        lock.lock();
+        try {
+            committed = databaseManager.executeInTransaction(conn -> {
+                if (transactionRepository.existsByReferenceNumber(cleanRef, conn)) {
+                    throw new DuplicateTransactionException(cleanRef,
+                            "Duplicate transaction request reference: " + cleanRef);
+                }
+
+                Wallet wallet = walletRepository.findById(cleanWalletId, conn)
+                        .orElseThrow(() -> new EntityNotFoundException("Wallet", cleanWalletId));
+                User borrower = validateAccountNotSuspended(wallet.getUserId(), conn);
+                authorizeOutgoingPayment(wallet.getUserId());
+                if (wallet.getStatus() != WalletStatus.ACTIVE) {
+                    throw new WalletException("Wallet is not active: " + wallet.getStatus());
+                }
+
+                LoanTransaction loan = loanRepository.findByKey(cleanKey, conn)
+                        .orElseThrow(() -> new EntityNotFoundException("Loan", cleanKey));
+                if (!cleanWalletId.equals(loan.getBorrowerWalletId())) {
+                    throw new SecurityException("Access denied: Loan " + cleanKey
+                            + " does not belong to wallet " + cleanWalletId);
+                }
+
+                if (loan.getLoanStatus() == LoanStatus.PAID) {
+                    throw new WalletException("Repeat repayment rejected: Loan " + loan.getLoanId()
+                            + " has already been paid in full.");
+                }
+                if (loan.getLoanStatus() == LoanStatus.PENDING_APPROVAL) {
+                    throw new WalletException("Loan " + loan.getLoanId()
+                            + " is pending admin approval and has not been disbursed yet.");
+                }
+                if (loan.getLoanStatus() == LoanStatus.REJECTED) {
+                    throw new WalletException("Loan " + loan.getLoanId()
+                            + " was rejected and has no balance due.");
+                }
+                if (loan.getLoanStatus() != LoanStatus.DISBURSED) {
+                    throw new WalletException("Loan " + loan.getLoanId()
+                            + " is not eligible for repayment (status: " + loan.getLoanStatus() + ").");
+                }
+
+                BigDecimal fullAmountDue = loan.getAmountDue()
+                        .setScale(MoneyUtil.DEFAULT_SCALE, MoneyUtil.DEFAULT_ROUNDING);
+                if (validatedSuppliedAmount != null && validatedSuppliedAmount.compareTo(fullAmountDue) != 0) {
+                    if (validatedSuppliedAmount.compareTo(fullAmountDue) < 0) {
+                        throw new WalletException("Partial repayment is deferred. Full lump-sum repayment of "
+                                + MoneyUtil.format(fullAmountDue, wallet.getCurrency())
+                                + " is required (provided: "
+                                + MoneyUtil.format(validatedSuppliedAmount, wallet.getCurrency()) + ").");
+                    }
+                    throw new WalletException("Exact full repayment of "
+                            + MoneyUtil.format(fullAmountDue, wallet.getCurrency())
+                            + " is required; overpayment is not supported (provided: "
+                            + MoneyUtil.format(validatedSuppliedAmount, wallet.getCurrency()) + ").");
+                }
+
+                BigDecimal balanceBefore = wallet.getBalance();
+                if (balanceBefore.compareTo(fullAmountDue) < 0) {
+                    throw new InsufficientFundsException(cleanWalletId, balanceBefore, fullAmountDue);
+                }
+
+                String repayTxnId = IdGenerator.nextTransactionId();
+                LocalDateTime now = LocalDateTime.now();
+                BigDecimal interestAndFee = loan.getInterestAmount().add(loan.getProcessingFee())
+                        .setScale(MoneyUtil.DEFAULT_SCALE, MoneyUtil.DEFAULT_ROUNDING);
+                String desc = "Full Loan Repayment for " + loan.getLoanId()
+                        + " (" + loan.getProductName() + ") [SIMULATED]";
+
+                LoanTransaction repayTxn = new TransactionBuilder()
+                        .transactionId(repayTxnId)
+                        .referenceNumber(cleanRef)
+                        .from(cleanWalletId)
+                        .amount(loan.getPrincipal())
+                        .fee(interestAndFee)
+                        .principal(loan.getPrincipal())
+                        .interestRate(loan.getInterestRate())
+                        .termMonths(loan.getTermMonths())
+                        .dueDate(loan.getDueDate())
+                        .currency(wallet.getCurrency())
+                        .product(loan.getProductName())
+                        .providerReference(loan.getLoanId())
+                        .providerStatus(LoanStatus.PAID.name())
+                        .type(TransactionType.LOAN_REPAYMENT)
+                        .status(TransactionStatus.COMPLETED)
+                        .description(desc)
+                        .buildLoan();
+                repayTxn.setLoanId(loan.getLoanId());
+                repayTxn.setBorrowerUserId(wallet.getUserId());
+                repayTxn.setBorrowerName(borrower != null ? borrower.getName() : loan.getBorrowerName());
+                repayTxn.setProductCode(loan.getProductCode());
+                repayTxn.setProductName(loan.getProductName());
+                repayTxn.setInterestAmount(loan.getInterestAmount());
+                repayTxn.setProcessingFee(loan.getProcessingFee());
+                repayTxn.setTotalRepaymentDue(fullAmountDue);
+                repayTxn.setAmountDue(MoneyUtil.ZERO);
+                repayTxn.setLinkedLoanTransactionId(loan.getTransactionId());
+                repayTxn.setLoanStatus(LoanStatus.PAID);
+                repayTxn.setCompletedAt(now);
+                repayTxn.setRepaidAt(now);
+
+                transactionRepository.save(repayTxn, conn);
+
+                int updated = loanRepository.markPaidIfDisbursed(loan.getLoanId(), repayTxnId, now, conn);
+                if (updated != 1) {
+                    throw new WalletException("Repeat repayment rejected: Loan " + loan.getLoanId()
+                            + " has already been paid in full.");
+                }
+
+                BigDecimal balanceAfter = balanceBefore.subtract(fullAmountDue)
+                        .setScale(MoneyUtil.DEFAULT_SCALE, MoneyUtil.DEFAULT_ROUNDING);
+                walletRepository.updateBalance(cleanWalletId, balanceAfter, conn);
+                wallet.setBalance(balanceAfter);
+
+                LedgerEntry debitEntry = new LedgerEntry(
+                        IdGenerator.nextLedgerEntryId(),
+                        repayTxnId,
+                        cleanWalletId,
+                        LedgerEntryType.DEBIT,
+                        fullAmountDue,
+                        balanceBefore,
+                        balanceAfter,
+                        wallet.getCurrency(),
+                        desc
+                );
+                ledgerRepository.save(debitEntry, conn);
+
+                return new CommittedLoanOp(repayTxn, wallet.getUserId(), NotificationType.LOAN_REPAID);
+            });
+            dispatchLoanNotificationPostCommit(committed);
+            return committed.txn();
+        } finally {
+            lock.unlock();
+        }
+    }
+
+    @Override
+    public List<LoanTransaction> getLoansByWalletId(String walletId) {
+        if (walletId == null || walletId.trim().isEmpty()) {
+            throw new IllegalArgumentException("Wallet ID must not be null or empty");
+        }
+        String cleanWalletId = walletId.trim();
+        getWallet(cleanWalletId);
+        return Collections.unmodifiableList(loanRepository.findByWalletId(cleanWalletId));
+    }
+
+    @Override
+    public List<LoanTransaction> getAllLoanApplications(String adminUserId) {
+        requireAdminCallerForLoans(adminUserId, "review all loan applications");
+        return Collections.unmodifiableList(loanRepository.findAll());
+    }
+
+    @Override
+    public BigDecimal getOutstandingAmountDue(String walletId) {
+        BigDecimal total = MoneyUtil.ZERO;
+        for (LoanTransaction loan : getLoansByWalletId(walletId)) {
+            if (loan.getLoanStatus() == LoanStatus.DISBURSED && loan.getAmountDue() != null) {
+                total = total.add(loan.getAmountDue());
+            }
+        }
+        return total.setScale(MoneyUtil.DEFAULT_SCALE, MoneyUtil.DEFAULT_ROUNDING);
+    }
+
+    private BigDecimal validateLoanPrincipalForProduct(BigDecimal rawPrincipal, LoanProduct product, String currency) {
+        BigDecimal validPrincipal = MoneyUtil.validatePositiveAmount(rawPrincipal);
+        String curr = (currency != null && !currency.isBlank()) ? currency : product.getCurrency();
+        if (validPrincipal.compareTo(product.getMinPrincipal()) < 0
+                || validPrincipal.compareTo(product.getMaxPrincipal()) > 0) {
+            throw new InvalidAmountException("Loan principal must be between "
+                    + MoneyUtil.format(product.getMinPrincipal(), curr) + " and "
+                    + MoneyUtil.format(product.getMaxPrincipal(), curr) + ".");
+        }
+        return validPrincipal;
+    }
+
+    private LoanCharges calculateLoanCharges(BigDecimal validPrincipal, LoanProduct product) {
+        BigDecimal interestAmount = LoanTransaction.calculateInterestAmount(
+                validPrincipal, product.getMonthlyInterestRate(), product.getTermMonths());
+        BigDecimal processingFee = CompositeFeePolicy.forLoan(
+                product.getProcessingFeeFlat(), product.getProcessingFeePercent())
+                .calculate(validPrincipal);
+        BigDecimal totalRepaymentDue = validPrincipal.add(interestAmount).add(processingFee)
+                .setScale(MoneyUtil.DEFAULT_SCALE, MoneyUtil.DEFAULT_ROUNDING);
+        return new LoanCharges(interestAmount, processingFee, totalRepaymentDue);
+    }
+
+    private User requireAdminCallerForLoans(String suppliedAdminId, String operationDescription) {
+        SessionManager session = SessionManager.getInstance();
+        session.requireAuthentication();
+        if (suppliedAdminId != null && !suppliedAdminId.trim().isEmpty()) {
+            session.requireActiveSessionFor(suppliedAdminId.trim());
+        }
+        User sessionUser = session.getCurrentUser();
+        if (sessionUser == null) {
+            throw new SecurityException("Access denied: Active authenticated session required.");
+        }
+        User caller = userRepository.findById(sessionUser.getUserId())
+                .orElseThrow(() -> new SecurityException("Access denied: Unknown user identity: " + sessionUser.getUserId()));
+        if (caller.getStatus() != UserStatus.ACTIVE) {
+            throw new SecurityException("Access denied: Administrator account is " + caller.getStatus() + ".");
+        }
+        if (caller.getRole() != UserRole.ADMIN) {
+            throw new SecurityException("Access denied: Administrator role required to "
+                    + operationDescription + ". Current role: " + caller.getRole());
+        }
+        return caller;
+    }
+
+    private void dispatchLoanNotificationPostCommit(CommittedLoanOp committed) {
+        if (committed == null || committed.txn() == null || notificationService == null) {
+            return;
+        }
+        try {
+            notificationService.notifyLoanCommitted(committed.txn(), committed.ownerUserId(), committed.type());
+        } catch (RuntimeException ex) {
+            System.err.println("[WARN] Post-commit loan notification dispatch encountered an error for ref "
+                    + committed.txn().getReferenceNumber() + ": " + ex.getMessage());
+        }
+    }
+
+    private record LoanCharges(BigDecimal interestAmount, BigDecimal processingFee, BigDecimal totalRepaymentDue) {
+    }
+
+    private record CommittedLoanOp(LoanTransaction txn, String ownerUserId, NotificationType type) {
     }
 }

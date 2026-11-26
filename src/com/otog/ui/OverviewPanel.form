@@ -50,6 +50,13 @@
               <text value="Investments"/>
             </properties>
           </component>
+          <component id="btnLoansId" class="javax.swing.JButton" binding="btnNavLoans">
+            <constraints/>
+            <properties>
+              <font name="SansSerif" size="12" style="0"/>
+              <text value="Loans"/>
+            </properties>
+          </component>
           <component id="btnMerchantQrId" class="javax.swing.JButton" binding="btnNavMerchantQr">
             <constraints/>
             <properties>

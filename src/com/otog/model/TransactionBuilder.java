@@ -275,12 +275,25 @@ public class TransactionBuilder {
                 termMonths,
                 dueDate
         );
-        if (note != null) {
-            txn.setDescription(note);
-        }
         TransactionType loanType = (type == TransactionType.LOAN_REPAYMENT)
                 ? TransactionType.LOAN_REPAYMENT
                 : TransactionType.LOAN_DISBURSEMENT;
+        if (loanType == TransactionType.LOAN_REPAYMENT) {
+            txn.setSourceWalletId(walletId.trim());
+            txn.setTargetWalletId(null);
+            if (amount != null) {
+                txn.setAmount(amount);
+            }
+            if (fee != null) {
+                txn.setFee(fee);
+            }
+        }
+        if (product != null && !product.trim().isEmpty()) {
+            txn.setProductName(product.trim());
+        }
+        if (note != null) {
+            txn.setDescription(note);
+        }
         applyCommonOptionalFields(txn, loanType);
         return txn;
     }

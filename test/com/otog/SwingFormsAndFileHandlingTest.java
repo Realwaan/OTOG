@@ -15,6 +15,7 @@ import com.otog.service.WalletService;
 import com.otog.ui.AdminControlsPanel;
 import com.otog.ui.CashInOutPanel;
 import com.otog.ui.InvestmentPanel;
+import com.otog.ui.LoanPanel;
 import com.otog.ui.Main;
 import com.otog.ui.MerchantQrPanel;
 import com.otog.ui.NotificationInboxDialog;
@@ -90,6 +91,7 @@ public class SwingFormsAndFileHandlingTest {
                 Map.entry("com/otog/ui/CashInOutPanel.form", "com.otog.ui.CashInOutPanel"),
                 Map.entry("com/otog/ui/SendMoneyPanel.form", "com.otog.ui.SendMoneyPanel"),
                 Map.entry("com/otog/ui/PayBillsPanel.form", "com.otog.ui.PayBillsPanel"),
+                Map.entry("com/otog/ui/LoanPanel.form", "com.otog.ui.LoanPanel"),
                 Map.entry("com/otog/ui/InvestmentPanel.form", "com.otog.ui.InvestmentPanel"),
                 Map.entry("com/otog/ui/MerchantQrPanel.form", "com.otog.ui.MerchantQrPanel"),
                 Map.entry("com/otog/ui/AdminControlsPanel.form", "com.otog.ui.AdminControlsPanel"),
@@ -161,6 +163,18 @@ public class SwingFormsAndFileHandlingTest {
         assertNotNull(investmentPanel.getPreviewButton());
         assertNotNull(investmentPanel.getSubmitButton());
         assertNotNull(investmentPanel.getActivityTable());
+
+        LoanPanel loanPanel = new LoanPanel();
+        assertNotNull(loanPanel.getRootPanel());
+        assertInstanceOf(GridLayoutManager.class, loanPanel.getRootPanel().getLayout());
+        assertNotNull(loanPanel.getPrincipalField());
+        assertNotNull(loanPanel.getPreviewLoanButton());
+        assertNotNull(loanPanel.getApplyLoanButton());
+        assertNotNull(loanPanel.getRepayLoanButton());
+        assertNotNull(loanPanel.getUserLoansTable());
+        assertNotNull(loanPanel.getAdminLoansTable());
+        assertNotNull(loanPanel.getAdminApproveButton());
+        assertNotNull(loanPanel.getAdminRejectButton());
 
         com.otog.ui.PayBillsPanel payBillsPanel = new com.otog.ui.PayBillsPanel();
         assertNotNull(payBillsPanel.getRootPanel());
@@ -506,6 +520,7 @@ public class SwingFormsAndFileHandlingTest {
                 Paths.get("src/com/otog/ui/CashInOutPanel.form"),
                 Paths.get("src/com/otog/ui/SendMoneyPanel.form"),
                 Paths.get("src/com/otog/ui/PayBillsPanel.form"),
+                Paths.get("src/com/otog/ui/LoanPanel.form"),
                 Paths.get("src/com/otog/ui/InvestmentPanel.form"),
                 Paths.get("src/com/otog/ui/MerchantQrPanel.form"),
                 Paths.get("src/com/otog/ui/AdminControlsPanel.form"),
@@ -568,6 +583,15 @@ public class SwingFormsAndFileHandlingTest {
         assertSame(getField(adminPanel, "userModel"), adminPanel.getUserTable().getModel());
         assertSame(getField(adminPanel, "auditModel"), adminPanel.getAuditTable().getModel());
 
+        LoanPanel loanPanel = new LoanPanel();
+        setField(loanPanel, "userLoansTableModel", null);
+        setField(loanPanel, "adminLoansTableModel", null);
+        invokePrivate(loanPanel, "ensureComponentsInitialized");
+        assertNotNull(loanPanel.getUserLoansTableModel(), "LoanPanel must recreate userLoansTableModel");
+        assertNotNull(loanPanel.getAdminLoansTableModel(), "LoanPanel must recreate adminLoansTableModel");
+        assertSame(loanPanel.getUserLoansTableModel(), loanPanel.getUserLoansTable().getModel());
+        assertSame(loanPanel.getAdminLoansTableModel(), loanPanel.getAdminLoansTable().getModel());
+
         NotificationInboxDialog notifDialog = new NotificationInboxDialog(null, null, null, null, null);
         try {
             setField(notifDialog, "notificationsTableModel", null);
@@ -587,7 +611,7 @@ public class SwingFormsAndFileHandlingTest {
         walletService.cashIn("REQ-UI-LAYOUT-01", adminWallet.getWalletId(), null, new BigDecimal("250.00"), "Layout check");
         SessionManager.getInstance().login(admin, walletService.getWalletByUserId(admin.getUserId()));
 
-        activeDashboard = new Main(walletService, authService, null, walletService);
+        activeDashboard = new Main(walletService, authService, walletService, walletService);
         activeDashboard.getInitialLoadFuture().get(5, TimeUnit.SECONDS);
 
         Dimension[] testSizes = new Dimension[]{
@@ -653,6 +677,13 @@ public class SwingFormsAndFileHandlingTest {
                         assertAllVisibleControlsFitHorizontally(
                                 tabComp, contentPane, tabTitle + " (Merchant Subtab) @" + size.width + "x" + size.height);
                         qrPanel.getTabs().setSelectedIndex(0);
+                    }
+                    if (tabComp instanceof LoanPanel lp && lp.getTabs().getTabCount() > 1) {
+                        lp.getTabs().setSelectedIndex(1);
+                        activeDashboard.validate();
+                        assertAllVisibleControlsFitHorizontally(
+                                tabComp, contentPane, tabTitle + " (Admin Loan Approvals Subtab) @" + size.width + "x" + size.height);
+                        lp.getTabs().setSelectedIndex(0);
                     }
                 });
             }
