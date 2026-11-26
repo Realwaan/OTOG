@@ -1184,6 +1184,10 @@ public class Main extends JFrame {
         return overviewPanel != null ? overviewPanel.getFilterToDateField() : null;
     }
 
+    public JTextField getFilterKeywordField() {
+        return overviewPanel != null ? overviewPanel.getFilterKeywordField() : null;
+    }
+
     public JButton getApplyFiltersButton() {
         return overviewPanel != null ? overviewPanel.getApplyFiltersButton() : null;
     }

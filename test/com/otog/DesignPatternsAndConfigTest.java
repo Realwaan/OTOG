@@ -417,7 +417,7 @@ public class DesignPatternsAndConfigTest {
             assertTrue(overviewXml.contains("<card name=\"" + cardName + "\"/>"),
                     "OverviewPanel.form must define card " + cardName);
         }
-        for (String binding : List.of("tblTransactions", "btnCheckStatus", "btnViewReceipt", "btnExportReceipt", "lblActivityFeedback")) {
+        for (String binding : List.of("txtFilterKeyword", "tblTransactions", "btnCheckStatus", "btnViewReceipt", "btnExportReceipt", "lblActivityFeedback")) {
             assertTrue(overviewXml.contains("binding=\"" + binding + "\""),
                     "OverviewPanel.form must bind component " + binding);
         }

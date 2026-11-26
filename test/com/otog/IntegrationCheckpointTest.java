@@ -615,6 +615,21 @@ public class IntegrationCheckpointTest {
         assertTrue(freezeText.contains("CAP-13"), "Freeze doc must explicitly record CAP-13 disposition");
         assertTrue(freezeText.contains("USR-DEMO-01") && freezeText.contains("USR-MERCHANT-01")
                 && freezeText.contains("USR-ADMIN-01"), "Freeze doc must catalog deterministic demo accounts");
+
+        // 4. Verify README stays aligned with configured demo credentials and completed modules
+        Path readme = Paths.get("README.md");
+        assertTrue(Files.isRegularFile(readme), "README.md must exist at repository root");
+        String readmeText = Files.readString(readme, StandardCharsets.UTF_8);
+        String configuredMerchantPassword = OtogConfig.getInstance().getMerchantSeedConfig().password();
+        assertTrue(readmeText.contains(configuredMerchantPassword),
+                "README.md must document the configured merchant demo password (" + configuredMerchantPassword + ")");
+        assertFalse(readmeText.contains("mobile `09178888888`, password `password`"),
+                "README.md must not list stale merchant password");
+        assertTrue(readmeText.contains("Demo Sender") && readmeText.contains("Demo Recipient")
+                && readmeText.contains("OTOG Merchant Store"),
+                "README.md must document all seeded demo accounts");
+        assertFalse(readmeText.contains("### In-Progress & Planned Modules"),
+                "README.md must not classify completed Pay Bills and Investments under In-Progress");
     }
 
     // =========================================================================

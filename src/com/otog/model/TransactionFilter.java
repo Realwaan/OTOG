@@ -117,17 +117,26 @@ public final class TransactionFilter {
         }
         if (keyword != null) {
             String lower = keyword.toLowerCase(Locale.ROOT);
-            boolean refMatch = txn.getReferenceNumber() != null
-                    && txn.getReferenceNumber().toLowerCase(Locale.ROOT).contains(lower);
-            boolean provMatch = txn.getProviderReference() != null
-                    && txn.getProviderReference().toLowerCase(Locale.ROOT).contains(lower);
-            boolean descMatch = txn.getDescription() != null
-                    && txn.getDescription().toLowerCase(Locale.ROOT).contains(lower);
-            if (!refMatch && !provMatch && !descMatch) {
+            boolean matched = containsIgnoreCase(txn.getReferenceNumber(), lower)
+                    || containsIgnoreCase(txn.getProviderReference(), lower)
+                    || containsIgnoreCase(txn.getDescription(), lower);
+            if (!matched && txn instanceof CashInOutTransaction cio) {
+                matched = containsIgnoreCase(cio.getChannel(), lower);
+            } else if (!matched && txn instanceof BillPaymentTransaction bpt) {
+                matched = containsIgnoreCase(bpt.getBillerName(), lower)
+                        || containsIgnoreCase(bpt.getBillerReference(), lower);
+            } else if (!matched && txn instanceof InvestMoneyTransaction imt) {
+                matched = containsIgnoreCase(imt.getProduct(), lower);
+            }
+            if (!matched) {
                 return false;
             }
         }
         return true;
+    }
+
+    private static boolean containsIgnoreCase(String value, String lowerNeedle) {
+        return value != null && value.toLowerCase(Locale.ROOT).contains(lowerNeedle);
     }
 
     public static final class Builder {

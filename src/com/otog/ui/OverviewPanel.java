@@ -78,6 +78,7 @@ public class OverviewPanel extends JPanel {
     private JComboBox<String> cmbFilterStatus;
     private JTextField txtFilterFromDate;
     private JTextField txtFilterToDate;
+    private JTextField txtFilterKeyword;
     private JButton btnApplyFilters;
     private JButton btnClearFilters;
 
@@ -105,6 +106,7 @@ public class OverviewPanel extends JPanel {
 
     private List<Transaction> loadedTransactions = Collections.emptyList();
     private volatile TransactionFilter activeHistoryFilter = TransactionFilter.empty();
+    private volatile CompletableFuture<Void> lastFilterRefreshFuture = CompletableFuture.completedFuture(null);
     private boolean investmentsEnabled;
 
     private Runnable onQuickNavCashIn;
@@ -213,6 +215,11 @@ public class OverviewPanel extends JPanel {
             txtFilterToDate.setToolTipText("End date (YYYY-MM-DD)");
             UiTheme.styleInputField(txtFilterToDate);
         }
+        if (txtFilterKeyword != null) {
+            txtFilterKeyword.setColumns(14);
+            txtFilterKeyword.setToolTipText("Search by reference, provider ref, biller ref, channel, product, or description");
+            UiTheme.styleInputField(txtFilterKeyword);
+        }
         if (transactionsTableModel == null) {
             transactionsTableModel = new DefaultTableModel(TRANSACTION_COLUMNS, 0) {
                 @Override
@@ -252,7 +259,7 @@ public class OverviewPanel extends JPanel {
             UiTheme.styleSecondaryButton(btnLoadStatement);
         }
         if (btnApplyFilters != null) {
-            btnApplyFilters.setToolTipText("Filter owned transaction history by date, type, and status");
+            btnApplyFilters.setToolTipText("Filter owned transaction history by type, status, date, and keyword");
             UiTheme.stylePrimaryButton(btnApplyFilters);
         }
         if (btnClearFilters != null) {
@@ -449,6 +456,9 @@ public class OverviewPanel extends JPanel {
         btnClearFilters.addActionListener(e -> handleClearHistoryFilters());
         txtFilterFromDate.addActionListener(e -> handleApplyHistoryFilters());
         txtFilterToDate.addActionListener(e -> handleApplyHistoryFilters());
+        if (txtFilterKeyword != null) {
+            txtFilterKeyword.addActionListener(e -> handleApplyHistoryFilters());
+        }
     }
 
     public TransactionFilter getActiveHistoryFilter() {
@@ -473,6 +483,9 @@ public class OverviewPanel extends JPanel {
             }
             if (txtFilterToDate != null) {
                 txtFilterToDate.setText("");
+            }
+            if (txtFilterKeyword != null) {
+                txtFilterKeyword.setText("");
             }
         });
     }
@@ -634,6 +647,11 @@ public class OverviewPanel extends JPanel {
             if (!toRaw.isEmpty()) {
                 builder.toDate(LocalDate.parse(toRaw));
             }
+            String keywordRaw = txtFilterKeyword != null && txtFilterKeyword.getText() != null
+                    ? txtFilterKeyword.getText().trim() : "";
+            if (!keywordRaw.isEmpty()) {
+                builder.keyword(keywordRaw);
+            }
             applyHistoryFiltersAsync(builder.build());
         } catch (DateTimeParseException ex) {
             String msg = "Invalid date format. Please use YYYY-MM-DD (e.g., 2026-11-19).";
@@ -648,12 +666,20 @@ public class OverviewPanel extends JPanel {
 
     public CompletableFuture<Void> applyHistoryFiltersAsync(TransactionFilter filter) {
         setActiveHistoryFilter(filter);
-        return triggerRefresh();
+        CompletableFuture<Void> refresh = triggerRefresh();
+        this.lastFilterRefreshFuture = refresh;
+        return refresh;
     }
 
     public CompletableFuture<Void> clearHistoryFiltersAsync() {
         resetFilterControls();
-        return triggerRefresh();
+        CompletableFuture<Void> refresh = triggerRefresh();
+        this.lastFilterRefreshFuture = refresh;
+        return refresh;
+    }
+
+    public CompletableFuture<Void> getLastFilterRefreshFuture() {
+        return lastFilterRefreshFuture;
     }
 
     public CompletableFuture<Transaction> submitStatusLookupAsync(String referenceNumber) {
@@ -1121,6 +1147,10 @@ public class OverviewPanel extends JPanel {
         return txtFilterToDate;
     }
 
+    public JTextField getFilterKeywordField() {
+        return txtFilterKeyword;
+    }
+
     public JButton getApplyFiltersButton() {
         return btnApplyFilters;
     }
@@ -1250,6 +1280,9 @@ public class OverviewPanel extends JPanel {
 
         txtFilterToDate = new JTextField(9);
         pnlHistoryFilters.add(createInlineFilterGroup("To:", txtFilterToDate));
+
+        txtFilterKeyword = new JTextField(14);
+        pnlHistoryFilters.add(createInlineFilterGroup("Search:", txtFilterKeyword));
 
         JPanel pnlFilterButtonsGroup = new JPanel(new FlowLayout(FlowLayout.LEFT, 6, 0));
         pnlFilterButtonsGroup.setOpaque(false);

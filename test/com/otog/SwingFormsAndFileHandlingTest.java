@@ -322,6 +322,8 @@ public class SwingFormsAndFileHandlingTest {
 
         assertSame(overview.getTransactionsTable(), activeDashboard.getRecentTransactionsTable());
         assertSame(overview.getFilterTypeComboBox(), activeDashboard.getFilterTypeComboBox());
+        assertNotNull(overview.getFilterKeywordField());
+        assertSame(overview.getFilterKeywordField(), activeDashboard.getFilterKeywordField());
         assertSame(overview.getActivityFeedbackLabel(), activeDashboard.getActivityFeedbackLabel());
         assertSame(cash.getCashOperationComboBox(), activeDashboard.getCashOperationComboBox());
         assertSame(cash.getCashFeedbackLabel(), activeDashboard.getCashFeedbackLabel());
