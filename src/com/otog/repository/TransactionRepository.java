@@ -5,6 +5,7 @@ import com.otog.exception.OtogException;
 import com.otog.model.BillPaymentTransaction;
 import com.otog.model.CashInOutTransaction;
 import com.otog.model.InvestMoneyTransaction;
+import com.otog.model.LoanTransaction;
 import com.otog.model.SendMoneyTransaction;
 import com.otog.model.Transaction;
 import com.otog.model.TransactionFactory;
@@ -15,6 +16,7 @@ import com.otog.util.MoneyUtil;
 
 import java.math.BigDecimal;
 import java.sql.*;
+import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.List;
@@ -49,14 +51,27 @@ public class TransactionRepository {
         }
         String product = null;
         String units = null;
+        String loanId = null;
+        String principal = null;
+        String interestRate = null;
+        Integer termMonths = null;
+        String dueDate = null;
         if (txn instanceof InvestMoneyTransaction imt) {
             product = imt.getProduct();
             units = imt.getUnits() != null ? imt.getUnits().toPlainString() : null;
+        } else if (txn instanceof LoanTransaction lt) {
+            product = lt.getProductName();
+            loanId = lt.getLoanId();
+            principal = lt.getPrincipal() != null ? lt.getPrincipal().toPlainString() : null;
+            interestRate = lt.getInterestRate() != null ? lt.getInterestRate().toPlainString() : null;
+            termMonths = lt.getTermMonths() > 0 ? lt.getTermMonths() : null;
+            dueDate = lt.getDueDate() != null ? lt.getDueDate().toString() : null;
         }
         String sql = "INSERT INTO transactions (transaction_id, reference_number, source_wallet_id, " +
                 "target_wallet_id, amount, fee, total_amount, currency, type, status, description, " +
-                "created_at, completed_at, provider_reference, provider_status, channel, biller_reference, product, units) " +
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
+                "created_at, completed_at, provider_reference, provider_status, channel, biller_reference, " +
+                "product, units, loan_id, principal, interest_rate, term_months, due_date) " +
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
         try (PreparedStatement ps = conn.prepareStatement(sql)) {
             ps.setString(1, txn.getTransactionId());
             ps.setString(2, txn.getReferenceNumber());
@@ -77,8 +92,37 @@ public class TransactionRepository {
             ps.setString(17, billerReference);
             ps.setString(18, product);
             ps.setString(19, units);
+            ps.setString(20, loanId);
+            ps.setString(21, principal);
+            ps.setString(22, interestRate);
+            if (termMonths != null) {
+                ps.setInt(23, termMonths);
+            } else {
+                ps.setNull(23, Types.INTEGER);
+            }
+            ps.setString(24, dueDate);
             ps.executeUpdate();
             return txn;
+        }
+    }
+
+    public void updateLoanTransactionOutcome(String transactionId,
+                                             TransactionStatus status,
+                                             String providerStatus,
+                                             LocalDate dueDate,
+                                             LocalDateTime completedAt,
+                                             Connection conn) throws SQLException {
+        String sql = "UPDATE transactions SET status = ?, " +
+                "provider_status = COALESCE(?, provider_status), " +
+                "due_date = COALESCE(?, due_date), " +
+                "completed_at = ? WHERE transaction_id = ?";
+        try (PreparedStatement ps = conn.prepareStatement(sql)) {
+            ps.setString(1, status.name());
+            ps.setString(2, providerStatus);
+            ps.setString(3, dueDate != null ? dueDate.toString() : null);
+            ps.setString(4, completedAt != null ? completedAt.toString() : null);
+            ps.setString(5, transactionId);
+            ps.executeUpdate();
         }
     }
 
@@ -112,7 +156,8 @@ public class TransactionRepository {
     public Optional<Transaction> findById(String transactionId, Connection conn) throws SQLException {
         String sql = "SELECT transaction_id, reference_number, source_wallet_id, target_wallet_id, " +
                 "amount, fee, total_amount, currency, type, status, description, created_at, completed_at, " +
-                "provider_reference, provider_status, channel, biller_reference, product, units " +
+                "provider_reference, provider_status, channel, biller_reference, product, units, " +
+                "loan_id, principal, interest_rate, term_months, due_date " +
                 "FROM transactions WHERE transaction_id = ?";
         try (PreparedStatement ps = conn.prepareStatement(sql)) {
             ps.setString(1, transactionId);
@@ -136,7 +181,8 @@ public class TransactionRepository {
     public Optional<Transaction> findByReferenceNumber(String refNum, Connection conn) throws SQLException {
         String sql = "SELECT transaction_id, reference_number, source_wallet_id, target_wallet_id, " +
                 "amount, fee, total_amount, currency, type, status, description, created_at, completed_at, " +
-                "provider_reference, provider_status, channel, biller_reference, product, units " +
+                "provider_reference, provider_status, channel, biller_reference, product, units, " +
+                "loan_id, principal, interest_rate, term_months, due_date " +
                 "FROM transactions WHERE reference_number = ?";
         try (PreparedStatement ps = conn.prepareStatement(sql)) {
             ps.setString(1, refNum);
@@ -178,7 +224,8 @@ public class TransactionRepository {
     public List<Transaction> findByWalletId(String walletId, Connection conn) throws SQLException {
         String sql = "SELECT transaction_id, reference_number, source_wallet_id, target_wallet_id, " +
                 "amount, fee, total_amount, currency, type, status, description, created_at, completed_at, " +
-                "provider_reference, provider_status, channel, biller_reference, product, units " +
+                "provider_reference, provider_status, channel, biller_reference, product, units, " +
+                "loan_id, principal, interest_rate, term_months, due_date " +
                 "FROM transactions WHERE source_wallet_id = ? OR target_wallet_id = ? " +
                 "ORDER BY created_at DESC, transaction_id DESC, reference_number ASC";
         List<Transaction> list = new ArrayList<>();
@@ -209,7 +256,8 @@ public class TransactionRepository {
     public List<Transaction> findRecentByWalletId(String walletId, int limit, Connection conn) throws SQLException {
         String sql = "SELECT transaction_id, reference_number, source_wallet_id, target_wallet_id, " +
                 "amount, fee, total_amount, currency, type, status, description, created_at, completed_at, " +
-                "provider_reference, provider_status, channel, biller_reference, product, units " +
+                "provider_reference, provider_status, channel, biller_reference, product, units, " +
+                "loan_id, principal, interest_rate, term_months, due_date " +
                 "FROM transactions WHERE source_wallet_id = ? OR target_wallet_id = ? " +
                 "ORDER BY created_at DESC, transaction_id DESC, reference_number ASC LIMIT ?";
         List<Transaction> list = new ArrayList<>();
@@ -244,7 +292,8 @@ public class TransactionRepository {
         StringBuilder sql = new StringBuilder(
                 "SELECT transaction_id, reference_number, source_wallet_id, target_wallet_id, " +
                         "amount, fee, total_amount, currency, type, status, description, created_at, completed_at, " +
-                        "provider_reference, provider_status, channel, biller_reference, product, units " +
+                        "provider_reference, provider_status, channel, biller_reference, product, units, " +
+                "loan_id, principal, interest_rate, term_months, due_date " +
                         "FROM transactions WHERE (source_wallet_id = ? OR target_wallet_id = ?)"
         );
         List<Object> params = new ArrayList<>();
@@ -324,7 +373,8 @@ public class TransactionRepository {
     public List<Transaction> findAll(Connection conn) throws SQLException {
         String sql = "SELECT transaction_id, reference_number, source_wallet_id, target_wallet_id, " +
                 "amount, fee, total_amount, currency, type, status, description, created_at, completed_at, " +
-                "provider_reference, provider_status, channel, biller_reference, product, units " +
+                "provider_reference, provider_status, channel, biller_reference, product, units, " +
+                "loan_id, principal, interest_rate, term_months, due_date " +
                 "FROM transactions ORDER BY created_at DESC";
         List<Transaction> list = new ArrayList<>();
         try (Statement st = conn.createStatement();
@@ -361,6 +411,30 @@ public class TransactionRepository {
                 billerRef = extractBillerReference(rs.getString("description"));
             }
             bpt.setBillerReference(billerRef != null ? billerRef.trim() : null);
+        } else if (t instanceof LoanTransaction lt) {
+            String product = rs.getString("product");
+            if (product != null && !product.isBlank()) {
+                lt.setProductName(product);
+            }
+            lt.setLoanId(rs.getString("loan_id"));
+            String principalStr = rs.getString("principal");
+            if (principalStr != null && !principalStr.isBlank()) {
+                lt.setPrincipal(new BigDecimal(principalStr).setScale(MoneyUtil.DEFAULT_SCALE, MoneyUtil.DEFAULT_ROUNDING));
+            } else {
+                lt.setPrincipal(new BigDecimal(rs.getString("amount")).setScale(MoneyUtil.DEFAULT_SCALE, MoneyUtil.DEFAULT_ROUNDING));
+            }
+            String rateStr = rs.getString("interest_rate");
+            if (rateStr != null && !rateStr.isBlank()) {
+                lt.setInterestRate(new BigDecimal(rateStr));
+            }
+            int term = rs.getInt("term_months");
+            if (!rs.wasNull()) {
+                lt.setTermMonths(term);
+            }
+            String dueStr = rs.getString("due_date");
+            if (dueStr != null && !dueStr.isBlank()) {
+                lt.setDueDate(LocalDate.parse(dueStr));
+            }
         }
         t.setTransactionId(rs.getString("transaction_id"));
         t.setReferenceNumber(rs.getString("reference_number"));

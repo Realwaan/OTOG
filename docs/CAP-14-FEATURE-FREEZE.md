@@ -30,12 +30,12 @@ All financial integrations (banks, OTP SMS delivery, biller settlements, and mer
 | CAP-11 | Merchant QR PNG generation/import, validation, PIN payment, merchant terminal | Integrated & Verified (PR #16 merged in CAP-14) | **Included** |
 | CAP-13 | Basic simulated investment workflow (PR #15) | Integrated & Verified (PR #15 merged to `main`) | **Included** |
 | CAP-19..21 | Bound IntelliJ `.form` panels, `StatementFileService` file I/O, GoF design patterns & externalized config | Integrated & Verified | **Included** |
-| CAP-12 | Simulated loans workflow (`LoanService` contract only) | No PR / unimplemented | **Explicitly Deferred** (`Loans` tab remains hidden) |
+| CAP-12 | Basic simulated loan workflow (`LoanPanel.form`, single product, admin approve/reject, single disbursement, full repayment) | Integrated & Verified | **Included** (installments, partial repayment, penalties & advanced eligibility scoring deferred) |
 
 ### Post-Freeze Change Control (After November 29, 2026)
 1. **No new features, tabs, or schema expansions** may be merged after November 29, 2026.
-2. Any defect discovered in CAP-01 through CAP-11, CAP-13, or CAP-19 through CAP-21 is tracked and fixed strictly as a **bug** with regression test coverage.
-3. Unfinished optional modules (**CAP-12 Loans**) remain **explicitly deferred** and hidden from the dashboard UI.
+2. Any defect discovered in CAP-01 through CAP-13 or CAP-19 through CAP-21 is tracked and fixed strictly as a **bug** with regression test coverage.
+3. Explicitly deferred loan sub-features (installment scheduling, partial repayment, penalties, and advanced eligibility scoring) remain **explicitly deferred** beyond CAP-12 reduced scope.
 
 ---
 

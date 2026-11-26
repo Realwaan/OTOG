@@ -4,6 +4,7 @@ import com.otog.database.DatabaseManager;
 import com.otog.exception.EntityNotFoundException;
 import com.otog.model.BillPaymentTransaction;
 import com.otog.model.InvestMoneyTransaction;
+import com.otog.model.LoanTransaction;
 import com.otog.model.Notification;
 import com.otog.model.NotificationType;
 import com.otog.model.ReceiptBuilder;
@@ -285,6 +286,52 @@ public class NotificationServiceImpl implements NotificationService {
         }
 
         notifyTransactionEvent(txn, ownerUserId, notifType, title, message);
+    }
+
+    @Override
+    public void notifyLoanCommitted(LoanTransaction txn, String ownerUserId, NotificationType type) {
+        if (txn == null || ownerUserId == null || ownerUserId.trim().isEmpty()) {
+            return;
+        }
+        NotificationType effectiveType = type != null ? type : NotificationType.PAYMENT_UPDATE;
+        String loanRef = txn.getLoanId() != null && !txn.getLoanId().isBlank()
+                ? txn.getLoanId()
+                : txn.getReferenceNumber();
+        String ref = txn.getReferenceNumber() != null ? txn.getReferenceNumber() : txn.getTransactionId();
+        String principalText = MoneyUtil.format(
+                txn.getPrincipal() != null ? txn.getPrincipal() : txn.getAmount(), txn.getCurrency());
+        String dueText = MoneyUtil.format(
+                txn.getTotalRepaymentDue() != null && txn.getTotalRepaymentDue().compareTo(BigDecimal.ZERO) > 0
+                        ? txn.getTotalRepaymentDue() : txn.getTotalAmount(),
+                txn.getCurrency());
+
+        String title;
+        String message;
+        if (effectiveType == NotificationType.LOAN_APPLIED) {
+            title = "Loan Application Submitted";
+            message = "Loan application " + loanRef + " for " + principalText
+                    + " (Total repayment: " + dueText + ") is pending admin review. Ref: " + ref;
+        } else if (effectiveType == NotificationType.LOAN_APPROVED) {
+            title = "Loan Approved & Disbursed";
+            message = "Loan " + loanRef + " was approved and " + principalText
+                    + " has been credited to your wallet. Full amount due: " + dueText
+                    + (txn.getDueDate() != null ? " by " + txn.getDueDate() : "") + ". Ref: " + ref;
+        } else if (effectiveType == NotificationType.LOAN_REJECTED) {
+            title = "Loan Application Rejected";
+            String reasonSuffix = (txn.getDecisionReason() != null && !txn.getDecisionReason().isBlank())
+                    ? " Reason: " + txn.getDecisionReason() + "."
+                    : "";
+            message = "Loan application " + loanRef + " for " + principalText
+                    + " was rejected." + reasonSuffix + " Ref: " + ref;
+        } else if (effectiveType == NotificationType.LOAN_REPAID) {
+            title = "Loan Repaid in Full";
+            message = "Loan " + loanRef + " has been repaid in full (" + dueText
+                    + "). Amount due is now " + MoneyUtil.format(BigDecimal.ZERO, txn.getCurrency()) + ". Ref: " + ref;
+        } else {
+            title = "Loan Update";
+            message = "Loan " + loanRef + " updated. Ref: " + ref;
+        }
+        notifyTransactionEvent(txn, ownerUserId, effectiveType, title, message);
     }
 
     @Override

@@ -29,6 +29,14 @@ public final class OtogConfig {
     public static final String DEFAULT_INVESTMENT_PRODUCT_CODE = "OTOG-SIM-FUND";
     public static final String DEFAULT_INVESTMENT_PRODUCT_NAME = "OTOG Simulated Balanced Fund";
     public static final BigDecimal DEFAULT_INVESTMENT_SIMULATED_UNIT_PRICE = new BigDecimal("100.00");
+    public static final String DEFAULT_LOAN_PRODUCT_CODE = "OTOG-SIM-LOAN";
+    public static final String DEFAULT_LOAN_PRODUCT_NAME = "OTOG Simulated Quick Cash Loan";
+    public static final BigDecimal DEFAULT_LOAN_MIN_PRINCIPAL = new BigDecimal("500.00");
+    public static final BigDecimal DEFAULT_LOAN_MAX_PRINCIPAL = new BigDecimal("10000.00");
+    public static final BigDecimal DEFAULT_LOAN_MONTHLY_INTEREST_RATE = new BigDecimal("0.03");
+    public static final int DEFAULT_LOAN_TERM_MONTHS = 3;
+    public static final BigDecimal DEFAULT_LOAN_PROCESSING_FEE_FLAT = new BigDecimal("25.00");
+    public static final BigDecimal DEFAULT_LOAN_PROCESSING_FEE_PERCENT = new BigDecimal("0.01");
     private static final String SYSPROP_PREFIX = "otog.";
 
     private static volatile OtogConfig instance;
@@ -378,6 +386,61 @@ public final class OtogConfig {
             price = DEFAULT_INVESTMENT_SIMULATED_UNIT_PRICE;
         }
         return price.setScale(MoneyUtil.DEFAULT_SCALE, MoneyUtil.DEFAULT_ROUNDING);
+    }
+
+    public String getLoanProductCode() {
+        String code = getString("loan.product.code", DEFAULT_LOAN_PRODUCT_CODE);
+        return (code == null || code.isBlank()) ? DEFAULT_LOAN_PRODUCT_CODE : code.trim();
+    }
+
+    public String getLoanProductName() {
+        String name = getString("loan.product.name", DEFAULT_LOAN_PRODUCT_NAME);
+        return (name == null || name.isBlank()) ? DEFAULT_LOAN_PRODUCT_NAME : name.trim();
+    }
+
+    public BigDecimal getLoanMinPrincipal() {
+        BigDecimal min = getBigDecimal("loan.min.principal", DEFAULT_LOAN_MIN_PRINCIPAL.toPlainString());
+        if (min.compareTo(BigDecimal.ZERO) <= 0) {
+            min = DEFAULT_LOAN_MIN_PRINCIPAL;
+        }
+        return min.setScale(MoneyUtil.DEFAULT_SCALE, MoneyUtil.DEFAULT_ROUNDING);
+    }
+
+    public BigDecimal getLoanMaxPrincipal() {
+        BigDecimal min = getLoanMinPrincipal();
+        BigDecimal max = getBigDecimal("loan.max.principal", DEFAULT_LOAN_MAX_PRINCIPAL.toPlainString());
+        if (max.compareTo(min) < 0) {
+            max = DEFAULT_LOAN_MAX_PRINCIPAL.max(min);
+        }
+        return max.setScale(MoneyUtil.DEFAULT_SCALE, MoneyUtil.DEFAULT_ROUNDING);
+    }
+
+    public BigDecimal getLoanMonthlyInterestRate() {
+        BigDecimal rate = getBigDecimal("loan.monthly.interest.rate", DEFAULT_LOAN_MONTHLY_INTEREST_RATE.toPlainString());
+        if (rate.compareTo(BigDecimal.ZERO) < 0) {
+            rate = DEFAULT_LOAN_MONTHLY_INTEREST_RATE;
+        }
+        return rate;
+    }
+
+    public int getLoanTermMonths() {
+        return Math.max(1, getInt("loan.term.months", DEFAULT_LOAN_TERM_MONTHS));
+    }
+
+    public BigDecimal getLoanProcessingFeeFlat() {
+        BigDecimal flat = getBigDecimal("loan.processing.fee.flat", DEFAULT_LOAN_PROCESSING_FEE_FLAT.toPlainString());
+        if (flat.compareTo(BigDecimal.ZERO) < 0) {
+            flat = BigDecimal.ZERO;
+        }
+        return flat.setScale(MoneyUtil.DEFAULT_SCALE, MoneyUtil.DEFAULT_ROUNDING);
+    }
+
+    public BigDecimal getLoanProcessingFeePercent() {
+        BigDecimal pct = getBigDecimal("loan.processing.fee.percent", DEFAULT_LOAN_PROCESSING_FEE_PERCENT.toPlainString());
+        if (pct.compareTo(BigDecimal.ZERO) < 0) {
+            pct = BigDecimal.ZERO;
+        }
+        return pct;
     }
 
     public int getRecentTransactionLimit() {

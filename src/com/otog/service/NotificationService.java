@@ -1,6 +1,7 @@
 package com.otog.service;
 
 import com.otog.model.InvestMoneyTransaction;
+import com.otog.model.LoanTransaction;
 import com.otog.model.Notification;
 import com.otog.model.NotificationType;
 import com.otog.model.Transaction;
@@ -50,6 +51,14 @@ public interface NotificationService {
     void notifyInvestmentCommitted(InvestMoneyTransaction txn, String ownerUserId);
 
     void notifyBillPaymentCommitted(Transaction txn, String ownerUserId, String billerName, String billerReference);
+
+    default void notifyLoanCommitted(LoanTransaction txn, String ownerUserId, NotificationType type) {
+        if (txn == null || ownerUserId == null || ownerUserId.trim().isEmpty()) {
+            return;
+        }
+        notifyTransactionEvent(txn, ownerUserId, type != null ? type : NotificationType.PAYMENT_UPDATE,
+                "Loan Update", "Loan " + (txn.getLoanId() != null ? txn.getLoanId() : txn.getReferenceNumber()) + " updated.");
+    }
 
     void notifyTransactionEvent(Transaction txn, String ownerUserId, NotificationType type,
                                 String title, String message);

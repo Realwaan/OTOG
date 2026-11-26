@@ -110,8 +110,14 @@ New standard user accounts can also be created directly from the login screen vi
 - Supports buying and redeeming units in the seeded simulated fund (`OTOG-SIM-FUND` — *OTOG Simulated Balanced Fund*) via `InvestMoneyTransaction`, `InvestmentPanel`, and `InvestmentService`.
 - Includes pre-trade buy/redeem previews, persistent per-wallet holdings tracking (`investment_holdings`), and Transaction PIN authorization.
 
-### Deferred Scope
-- **Simulated Loans (CAP-12)** *(explicitly deferred)*: Domain model (`LoanTransaction`) and service contract (`LoanService`) are defined in the codebase, while the service implementation and `Loans` tab remain hidden per the [CAP-14 Feature Freeze Policy](docs/CAP-14-FEATURE-FREEZE.md).
+### Simulated Loans (CAP-12)
+- **Single Configured Simulated Product**: `OTOG-SIM-LOAN` — *OTOG Simulated Quick Cash Loan* (`PHP 500.00` – `PHP 10,000.00`, `3.00%` monthly flat interest, `3`-month term, processing fee `PHP 25.00 + 1.00%` via `CompositeFeePolicy.forLoan()`), configured in [`config/otog.properties`](config/otog.properties) and persisted in `loan_products` and `loans`.
+- **Documented Interest & Fee Calculation**:
+  - `interest = round_HALF_EVEN_2(principal × monthlyInterestRate × termMonths)`
+  - `processingFee = flatFee + round_HALF_EVEN_2(principal × percentFee)`
+  - `totalRepaymentDue = principal + interest + processingFee` (single full lump-sum repayment)
+- **Lifecycle & Safety Guards**: Users preview total repayment and apply in the bound Swing panel (`LoanPanel.form`); administrators approve (single atomic disbursement crediting the wallet exactly once with audit log) or reject (with mandatory reason and zero disbursement) in the role-gated **Admin Loan Approvals** sub-tab; borrowers view `Amount Due` and execute atomic full repayment with Transaction PIN authorization. Duplicate disbursement, partial repayment, insufficient-funds repayment, and repeat repayment of a paid loan are rejected.
+- **Explicitly Deferred Scope**: Installment scheduling, partial repayment, late penalties, and advanced eligibility scoring remain explicitly deferred.
 
 ---
 
@@ -208,6 +214,7 @@ Every window, tab panel, and modal dialog is built with a bound **IntelliJ IDEA 
 | `src/com/otog/ui/NotificationInboxDialog.form` | `NotificationInboxDialog` | Modal inbox for reading, filtering unread, and marking notifications as read |
 | `src/com/otog/ui/PayBillsPanel.form` | `PayBillsPanel` | Bill payment form with 5 utility billers, live fee/total preview, reference validation, and PIN entry |
 | `src/com/otog/ui/MerchantQrPanel.form` | `MerchantQrPanel` | Merchant QR import/pay confirmation flow and role-gated Merchant Terminal & Sales view |
+| `src/com/otog/ui/LoanPanel.form` | `LoanPanel` | Simulated single-product loan repayment preview, application, full repayment, and role-gated Admin Loan Approvals |
 | `src/com/otog/ui/InvestmentPanel.form` | `InvestmentPanel` | Simulated investment buy/redeem preview, holdings summary, and activity table |
 
 ---
@@ -227,6 +234,8 @@ Managed automatically on startup by `DatabaseManager` with foreign keys enabled 
 | `ledger_entries` | Double-entry `DEBIT` and `CREDIT` rows recording balances before and after every movement of funds |
 | `investment_products` | Seeded simulated investment product catalog and simulated unit prices |
 | `investment_holdings` | Per-wallet simulated investment unit holdings and total invested principal |
+| `loan_products` | Single configured simulated loan product catalog with principal bounds, interest rate, term, and fees |
+| `loans` | Persisted simulated loan applications, admin approval/rejection decisions, single-disbursement flags, and full-repayment state |
 | `admin_actions` | Traceable log of administrative actions with reasons and secret-redacted details |
 | `notifications` | Post-commit user alerts with read status and unique deduplication keys |
 
@@ -247,7 +256,7 @@ See [CAP-14 Feature Freeze & Demo Guide](docs/CAP-14-FEATURE-FREEZE.md) for the 
 
 ## Automated Testing
 
-The repository includes **19 JUnit 5 test suites** covering core domain rules, security, concurrency, design patterns, file I/O, Pay Bills, Merchant QR, Simulated Investments, UI behavior, and cross-feature integration (`IntegrationCheckpointTest`).
+The repository includes **20 JUnit 5 test suites** covering core domain rules, security, concurrency, design patterns, file I/O, Pay Bills, Merchant QR, Simulated Loans, Simulated Investments, UI behavior, and cross-feature integration (`IntegrationCheckpointTest`).
 
 ---
 

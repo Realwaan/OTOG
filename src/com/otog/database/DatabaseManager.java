@@ -136,6 +136,11 @@ public class DatabaseManager implements AutoCloseable {
                         "product TEXT, " +
                         "units TEXT, " +
                         "biller_reference TEXT, " +
+                        "loan_id TEXT, " +
+                        "principal TEXT, " +
+                        "interest_rate TEXT, " +
+                        "term_months INTEGER, " +
+                        "due_date TEXT, " +
                         "FOREIGN KEY (source_wallet_id) REFERENCES wallets(wallet_id), " +
                         "FOREIGN KEY (target_wallet_id) REFERENCES wallets(wallet_id));",
 
@@ -219,7 +224,54 @@ public class DatabaseManager implements AutoCloseable {
                         "updated_at TEXT NOT NULL, " +
                         "PRIMARY KEY (wallet_id, product_code), " +
                         "FOREIGN KEY (wallet_id) REFERENCES wallets(wallet_id) ON DELETE RESTRICT, " +
-                        "FOREIGN KEY (product_code) REFERENCES investment_products(product_code) ON DELETE RESTRICT);"
+                        "FOREIGN KEY (product_code) REFERENCES investment_products(product_code) ON DELETE RESTRICT);",
+
+                "CREATE TABLE IF NOT EXISTS loan_products (" +
+                        "product_code TEXT PRIMARY KEY, " +
+                        "product_name TEXT NOT NULL, " +
+                        "min_principal TEXT NOT NULL, " +
+                        "max_principal TEXT NOT NULL, " +
+                        "monthly_interest_rate TEXT NOT NULL, " +
+                        "term_months INTEGER NOT NULL, " +
+                        "processing_fee_flat TEXT NOT NULL DEFAULT '0.00', " +
+                        "processing_fee_percent TEXT NOT NULL DEFAULT '0.00', " +
+                        "currency TEXT NOT NULL DEFAULT 'PHP', " +
+                        "is_simulated INTEGER NOT NULL DEFAULT 1);",
+
+                "CREATE TABLE IF NOT EXISTS loans (" +
+                        "loan_id TEXT PRIMARY KEY, " +
+                        "application_transaction_id TEXT NOT NULL UNIQUE, " +
+                        "reference_number TEXT NOT NULL UNIQUE, " +
+                        "user_id TEXT NOT NULL, " +
+                        "wallet_id TEXT NOT NULL, " +
+                        "product_code TEXT NOT NULL, " +
+                        "product_name TEXT NOT NULL, " +
+                        "principal TEXT NOT NULL, " +
+                        "interest_rate TEXT NOT NULL, " +
+                        "interest_amount TEXT NOT NULL, " +
+                        "processing_fee TEXT NOT NULL, " +
+                        "total_repayment_due TEXT NOT NULL, " +
+                        "amount_due TEXT NOT NULL, " +
+                        "term_months INTEGER NOT NULL, " +
+                        "due_date TEXT, " +
+                        "currency TEXT NOT NULL DEFAULT 'PHP', " +
+                        "loan_status TEXT NOT NULL, " +
+                        "disbursed INTEGER NOT NULL DEFAULT 0, " +
+                        "reviewed_by_admin_id TEXT, " +
+                        "decision_reason TEXT, " +
+                        "disbursed_at TEXT, " +
+                        "repaid_at TEXT, " +
+                        "repayment_transaction_id TEXT UNIQUE, " +
+                        "created_at TEXT NOT NULL, " +
+                        "updated_at TEXT NOT NULL, " +
+                        "FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE RESTRICT, " +
+                        "FOREIGN KEY (wallet_id) REFERENCES wallets(wallet_id) ON DELETE RESTRICT, " +
+                        "FOREIGN KEY (product_code) REFERENCES loan_products(product_code) ON DELETE RESTRICT, " +
+                        "FOREIGN KEY (application_transaction_id) REFERENCES transactions(transaction_id) ON DELETE RESTRICT, " +
+                        "FOREIGN KEY (repayment_transaction_id) REFERENCES transactions(transaction_id) ON DELETE RESTRICT);",
+                "CREATE INDEX IF NOT EXISTS idx_loans_wallet ON loans(wallet_id);",
+                "CREATE INDEX IF NOT EXISTS idx_loans_user ON loans(user_id);",
+                "CREATE INDEX IF NOT EXISTS idx_loans_status ON loans(loan_status);"
         };
 
         try (Connection conn = getConnection();
@@ -231,6 +283,7 @@ public class DatabaseManager implements AutoCloseable {
             ensureTransactionColumns(conn);
             seedSimulatedInvestmentProduct(conn);
             ensureInvestmentHoldingsSchema(conn);
+            seedSimulatedLoanProduct(conn);
             seedDefaultAdmin(conn);
             seedDefaultMerchant(conn);
             seedDemoUsers(conn);
@@ -277,6 +330,11 @@ public class DatabaseManager implements AutoCloseable {
         boolean hasProduct = false;
         boolean hasUnits = false;
         boolean hasBillerRef = false;
+        boolean hasLoanId = false;
+        boolean hasPrincipal = false;
+        boolean hasInterestRate = false;
+        boolean hasTermMonths = false;
+        boolean hasDueDate = false;
         try (Statement stmt = conn.createStatement();
              ResultSet rs = stmt.executeQuery("PRAGMA table_info(transactions)")) {
             while (rs.next()) {
@@ -293,6 +351,16 @@ public class DatabaseManager implements AutoCloseable {
                     hasUnits = true;
                 } else if ("biller_reference".equalsIgnoreCase(col)) {
                     hasBillerRef = true;
+                } else if ("loan_id".equalsIgnoreCase(col)) {
+                    hasLoanId = true;
+                } else if ("principal".equalsIgnoreCase(col)) {
+                    hasPrincipal = true;
+                } else if ("interest_rate".equalsIgnoreCase(col)) {
+                    hasInterestRate = true;
+                } else if ("term_months".equalsIgnoreCase(col)) {
+                    hasTermMonths = true;
+                } else if ("due_date".equalsIgnoreCase(col)) {
+                    hasDueDate = true;
                 }
             }
         }
@@ -315,6 +383,41 @@ public class DatabaseManager implements AutoCloseable {
             if (!hasBillerRef) {
                 stmt.execute("ALTER TABLE transactions ADD COLUMN biller_reference TEXT");
             }
+            if (!hasLoanId) {
+                stmt.execute("ALTER TABLE transactions ADD COLUMN loan_id TEXT");
+            }
+            if (!hasPrincipal) {
+                stmt.execute("ALTER TABLE transactions ADD COLUMN principal TEXT");
+            }
+            if (!hasInterestRate) {
+                stmt.execute("ALTER TABLE transactions ADD COLUMN interest_rate TEXT");
+            }
+            if (!hasTermMonths) {
+                stmt.execute("ALTER TABLE transactions ADD COLUMN term_months INTEGER");
+            }
+            if (!hasDueDate) {
+                stmt.execute("ALTER TABLE transactions ADD COLUMN due_date TEXT");
+            }
+        }
+    }
+
+    private void seedSimulatedLoanProduct(Connection conn) throws SQLException {
+        OtogConfig config = OtogConfig.getInstance();
+        String sql = "INSERT OR IGNORE INTO loan_products " +
+                "(product_code, product_name, min_principal, max_principal, monthly_interest_rate, " +
+                "term_months, processing_fee_flat, processing_fee_percent, currency, is_simulated) " +
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1)";
+        try (PreparedStatement ps = conn.prepareStatement(sql)) {
+            ps.setString(1, config.getLoanProductCode());
+            ps.setString(2, config.getLoanProductName());
+            ps.setString(3, config.getLoanMinPrincipal().toPlainString());
+            ps.setString(4, config.getLoanMaxPrincipal().toPlainString());
+            ps.setString(5, config.getLoanMonthlyInterestRate().toPlainString());
+            ps.setInt(6, config.getLoanTermMonths());
+            ps.setString(7, config.getLoanProcessingFeeFlat().toPlainString());
+            ps.setString(8, config.getLoanProcessingFeePercent().toPlainString());
+            ps.setString(9, config.getDefaultCurrency());
+            ps.executeUpdate();
         }
     }
 

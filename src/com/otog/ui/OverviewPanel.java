@@ -69,6 +69,7 @@ public class OverviewPanel extends JPanel {
     private JButton btnNavSendMoney;
     private JButton btnNavPayBills;
     private JButton btnNavInvest;
+    private JButton btnNavLoans;
     private JButton btnNavPinSettings;
     private JButton btnExportStatement;
     private JButton btnLoadStatement;
@@ -108,12 +109,14 @@ public class OverviewPanel extends JPanel {
     private volatile TransactionFilter activeHistoryFilter = TransactionFilter.empty();
     private volatile CompletableFuture<Void> lastFilterRefreshFuture = CompletableFuture.completedFuture(null);
     private boolean investmentsEnabled;
+    private boolean loansEnabled;
 
     private Runnable onQuickNavCashIn;
     private Runnable onQuickNavCashOut;
     private Runnable onQuickNavSendMoney;
     private Runnable onQuickNavPayBills;
     private Runnable onQuickNavInvest;
+    private Runnable onQuickNavLoans;
     private Runnable onQuickNavPinSettings;
     private BooleanSupplier beforeInteractiveAction;
     private Runnable onRetryLoad;
@@ -245,6 +248,10 @@ public class OverviewPanel extends JPanel {
             btnNavInvest.setVisible(investmentsEnabled);
             UiTheme.styleSecondaryButton(btnNavInvest);
         }
+        if (btnNavLoans != null) {
+            btnNavLoans.setVisible(loansEnabled);
+            UiTheme.styleSecondaryButton(btnNavLoans);
+        }
         if (btnNavMerchantQr != null) {
             btnNavMerchantQr.setToolTipText("Pay merchants via QR image or open merchant QR terminal");
             UiTheme.styleSecondaryButton(btnNavMerchantQr);
@@ -316,6 +323,21 @@ public class OverviewPanel extends JPanel {
 
     public void setOnQuickNavInvest(Runnable onQuickNavInvest) {
         this.onQuickNavInvest = onQuickNavInvest;
+    }
+
+    public void setOnQuickNavLoans(Runnable onQuickNavLoans) {
+        this.onQuickNavLoans = onQuickNavLoans;
+    }
+
+    public void setLoansEnabled(boolean enabled) {
+        this.loansEnabled = enabled;
+        if (btnNavLoans != null) {
+            btnNavLoans.setVisible(enabled);
+        }
+        if (pnlQuickActions != null) {
+            pnlQuickActions.revalidate();
+            pnlQuickActions.repaint();
+        }
     }
 
     public void setOnQuickNavMerchantQr(Runnable onQuickNavMerchantQr) {
@@ -411,6 +433,13 @@ public class OverviewPanel extends JPanel {
             btnNavInvest.addActionListener(e -> {
                 if (onQuickNavInvest != null) {
                     onQuickNavInvest.run();
+                }
+            });
+        }
+        if (btnNavLoans != null) {
+            btnNavLoans.addActionListener(e -> {
+                if (onQuickNavLoans != null) {
+                    onQuickNavLoans.run();
                 }
             });
         }
@@ -1115,6 +1144,10 @@ public class OverviewPanel extends JPanel {
         return btnNavInvest;
     }
 
+    public JButton getNavLoansButton() {
+        return btnNavLoans;
+    }
+
     public JButton getNavPinSettingsButton() {
         return btnNavPinSettings;
     }
@@ -1238,6 +1271,9 @@ public class OverviewPanel extends JPanel {
 
         btnNavInvest = new JButton("Investments");
         pnlQuickActions.add(btnNavInvest);
+
+        btnNavLoans = new JButton("Loans");
+        pnlQuickActions.add(btnNavLoans);
 
         btnNavMerchantQr = new JButton("Merchant QR");
         btnNavMerchantQr.setToolTipText("Pay merchants via QR image or open merchant QR terminal");

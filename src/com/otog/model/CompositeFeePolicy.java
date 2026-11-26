@@ -49,6 +49,22 @@ public non-sealed class CompositeFeePolicy implements FeeComponent {
         return policy;
     }
 
+    public static CompositeFeePolicy forLoan() {
+        OtogConfig config = OtogConfig.getInstance();
+        return forLoan(config.getLoanProcessingFeeFlat(), config.getLoanProcessingFeePercent());
+    }
+
+    public static CompositeFeePolicy forLoan(BigDecimal flatFee, BigDecimal percentFee) {
+        CompositeFeePolicy policy = new CompositeFeePolicy("Configured Loan Processing Fee Policy");
+        if (flatFee != null && flatFee.compareTo(BigDecimal.ZERO) > 0) {
+            policy.add(new FlatFee("Loan Origination Flat Fee", flatFee));
+        }
+        if (percentFee != null && percentFee.compareTo(BigDecimal.ZERO) > 0) {
+            policy.add(new PercentageFee("Loan Origination Percentage Fee", percentFee));
+        }
+        return policy;
+    }
+
     public CompositeFeePolicy add(FeeComponent component) {
         if (component != null) {
             components.add(component);

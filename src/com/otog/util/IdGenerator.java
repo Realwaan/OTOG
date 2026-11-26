@@ -37,6 +37,10 @@ public final class IdGenerator {
         return "NTF-" + shortUuid();
     }
 
+    public static String nextLoanId() {
+        return "LN-" + shortUuid();
+    }
+
     public static String nextReferenceNumber() {
         return "REQ-" + System.currentTimeMillis() + "-" + shortUuid().substring(0, 6);
     }
